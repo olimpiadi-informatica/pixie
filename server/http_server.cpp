@@ -131,6 +131,10 @@ void HttpServer::operator()() {
                     } else if (ret == 1)
                         continue;
                     std::string request_data = to_read[fd]->get_data();
+                    int newline_location = request_data.find("\n");
+                    request_data = request_data.substr(0, newline_location);
+                    if (request_data.back() == '\r') request_data.pop_back();
+                    std::cerr << request_data << std::endl;
                     int status_code = 200;
                     std::string status = "OK";
                     std::string content;
