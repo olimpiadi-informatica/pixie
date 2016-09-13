@@ -1,0 +1,6 @@
+{
+    // The subnet for which this files should be downloaded
+    "subnet": "192.168.0.0/16",
+    // The files to be downloaded, in filename: path pairs
+    "files": {"sh": "/bin/sh", "libstdc++.so": "/lib/libstdc++.so"}
+}
