@@ -44,7 +44,7 @@ if((CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR CMAKE_COMPILER_IS_GNUCXX)
 
     set(FLAGS ${FLAGS} -Wall -Wextra)
 
-    set(CLIENT_LIBS ${CLIENT_LIBS} -static)
+    set(CLIENT_LIBS ${CLIENT_LIBS} -static -Wl,--no-export-dynamic)
 
     set(LIBS ${LIBS} -pthread)
 endif()
