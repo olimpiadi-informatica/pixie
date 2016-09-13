@@ -30,7 +30,7 @@ shell
 )del";
     std::string answer = R"del(#!ipxe
 
-kernel x-tftm://${next-server}//vmlinuz.img ip=)del";
+kernel tftm://${next-server}//vmlinuz.img ip=)del";
     answer += config->get_ip_method() + " ";
     if (filename.substr(0, 4) == "wipe")
         answer += "pixie_wipe=" + filename.substr(5) + " ";
@@ -40,7 +40,7 @@ kernel x-tftm://${next-server}//vmlinuz.img ip=)del";
         "pixie_swap_size=" + std::to_string(config->get_swap_size()) + " ";
     answer += "pixie_sha224=" + config->get_config_hash().to_string() + " ";
     answer += R"del(
-initrd x-tftm://${next-server}//initrd.img
+initrd tftm://${next-server}//initrd.img
 boot
 )del";
     return answer;
