@@ -9,8 +9,12 @@
 DownloadConfig::DownloadConfig(
     const std::string& subnet,
     std::vector<std::pair<std::string, std::string>> files,
-    chunk_size_t chunk_size, uint64_t swap_size, uint64_t root_size)
-    : chunk_size(chunk_size) {
+    chunk_size_t chunk_size, uint64_t swap_size, uint64_t root_size,
+    const std::string& ip_method)
+    : chunk_size(chunk_size),
+      swap_size(swap_size),
+      root_size(root_size),
+      ip_method(ip_method) {
     auto slash = subnet.begin() + subnet.find("/");
     if (slash == subnet.end())
         throw std::runtime_error("Invalid subnet given!");
@@ -51,6 +55,8 @@ std::vector<DownloadConfig> parse_config(
             throw std::runtime_error("Subnet missing in the config file!");
         chunk_size_t chunk_size =
             config_root.get("chunk_size", DEFAULT_CHUNK_SIZE).asUInt();
+        std::string ip_method =
+            config_root.get("ip_method", DEFAULT_IP_METHOD).asString();
         auto& file_list = config_root["files"];
         if (!file_list.isObject()) throw std::runtime_error("Wrong file list!");
         std::vector<std::pair<std::string, std::string>> files;
@@ -67,7 +73,7 @@ std::vector<DownloadConfig> parse_config(
         }
         configurations.emplace_back(subnet, files, chunk_size,
                                     swap_size * (1ULL << 30),
-                                    root_size * (1ULL << 30));
+                                    root_size * (1ULL << 30), ip_method);
     }
     return configurations;
 }

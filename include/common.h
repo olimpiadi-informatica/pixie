@@ -11,7 +11,13 @@
 // This value can be overridden by the chunk_size property in a JSON config.
 #define DEFAULT_CHUNK_SIZE (1 << 22)
 
-class sha224_t : public std::array<uint8_t, 28> {};
+// This value can be overridden by the ip_method property in a JSON config.
+#define DEFAULT_IP_METHOD "dhcp"
+
+class sha224_t : public std::array<uint8_t, 28> {
+  public:
+    std::string to_string() const;
+};
 
 typedef uint32_t chunk_size_t;
 typedef uint64_t chunk_off_t;

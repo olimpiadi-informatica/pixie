@@ -13,13 +13,37 @@ std::string HttpServer::generate_script(std::string uri) {
     while (uri[filename_start] == '/' && filename_start < uri.size())
         filename_start++;
     size_t qmark_pos = uri.find("?");
+    const DownloadConfig* config = nullptr;
     if (qmark_pos != std::string::npos) {
         filename = uri.substr(filename_start, qmark_pos - filename_start);
         ip = uri.substr(qmark_pos + 1);
-    } else {
-        filename = uri.substr(filename_start);
+        for (const auto& conf : configs)
+            if (conf.matches_address(inet_addr(ip.c_str()))) {
+                config = &conf;
+                break;
+            }
     }
-    return "Hello " + filename + " from " + ip + "!";
+    if (config == nullptr)
+        return R"del(#!ipxe
+echo Unknown host!
+shell
+)del";
+    std::string answer = R"del(#!ipxe
+
+kernel x-tftm://${next-server}//vmlinuz.img ip=)del";
+    answer += config->get_ip_method() + " ";
+    if (filename.substr(0, 4) == "wipe")
+        answer += "pixie_wipe=" + filename.substr(5) + " ";
+    answer +=
+        "pixie_root_size=" + std::to_string(config->get_root_size()) + " ";
+    answer +=
+        "pixie_swap_size=" + std::to_string(config->get_swap_size()) + " ";
+    answer += "pixie_sha224=" + config->get_config_hash().to_string() + " ";
+    answer += R"del(
+initrd x-tftm://${next-server}//initrd.img
+boot
+)del";
+    return answer;
 }
 
 HttpServer::HttpServer(const std::vector<DownloadConfig>& configs)
@@ -114,10 +138,15 @@ void HttpServer::operator()() {
                         status = "Method Not Allowed";
                         status_code = 405;
                     } else {
-                        std::string uri = request_data.substr(4);
-                        size_t space_pos = uri.find(" ");
-                        uri.erase(space_pos);
-                        content = generate_script(uri);
+                        try {
+                            std::string uri = request_data.substr(4);
+                            size_t space_pos = uri.find(" ");
+                            uri.erase(space_pos);
+                            content = generate_script(uri);
+                        } catch (...) {
+                            status = "Bad request";
+                            status_code = 500;
+                        }
                     }
                     std::string answer_data = "HTTP/1.0 ";
                     answer_data += std::to_string(status_code);
