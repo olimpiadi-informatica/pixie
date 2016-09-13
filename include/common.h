@@ -5,6 +5,9 @@
 // This value can be overridden by the PIXIE_HTTP_PORT environment variable.
 #define DEFAULT_HTTP_PORT 80
 
+// This value can be overridden by the PIXIE_HTTP_ADDR environment variable.
+#define DEFAULT_HTTP_ADDR "0.0.0.0"
+
 // This value can be overridden by the chunk_size property in a JSON config.
 #define DEFAULT_CHUNK_SIZE (1 << 22)
 

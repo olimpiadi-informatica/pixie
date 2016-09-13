@@ -4,5 +4,9 @@
     // The files to be downloaded, in filename: path pairs
     "files": {"ls": "/bin/ls", "libstdc++.so": "/lib/libstdc++.so"},
     // Custom chunk size
-    "chunk_size": 1048576
+    "chunk_size": 1048576,
+    // Swap partition size (in gigabytes)
+    "swap_size": 8,
+    // Root partition size (in gigabytes)
+    "root_size": 16
 }

@@ -9,7 +9,7 @@
 DownloadConfig::DownloadConfig(
     const std::string& subnet,
     std::vector<std::pair<std::string, std::string>> files,
-    chunk_size_t chunk_size)
+    chunk_size_t chunk_size, uint64_t swap_size, uint64_t root_size)
     : chunk_size(chunk_size) {
     auto slash = subnet.begin() + subnet.find("/");
     if (slash == subnet.end())
@@ -41,6 +41,11 @@ std::vector<DownloadConfig> parse_config(
                                   std::ifstream::binary | std::ifstream::in);
         Json::Value config_root;
         config_file >> config_root;
+        double swap_size = config_root.get("swap_size", 1.0).asDouble();
+        if (swap_size < 0.0) throw std::runtime_error("swap_size is negative!");
+        double root_size = config_root.get("root_size", 10.0).asDouble();
+        if (root_size <= 0.0)
+            throw std::runtime_error("root_size is not positive!");
         std::string subnet = config_root.get("subnet", "").asString();
         if (subnet == "")
             throw std::runtime_error("Subnet missing in the config file!");
@@ -60,7 +65,9 @@ std::vector<DownloadConfig> parse_config(
             if (path.front() != '/') path = canonical_path + path;
             files.push_back(make_pair(fname, path));
         }
-        configurations.emplace_back(subnet, files, chunk_size);
+        configurations.emplace_back(subnet, files, chunk_size,
+                                    swap_size * (1ULL << 30),
+                                    root_size * (1ULL << 30));
     }
     return configurations;
 }
