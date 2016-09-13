@@ -30,7 +30,7 @@ shell
 )del";
     std::string answer = R"del(#!ipxe
 
-kernel tftm://${next-server}//vmlinuz.img ip=)del";
+kernel tftm://${next-server}//vmlinuz.img quiet ip=)del";
     answer += config->get_ip_method() + " ";
     if (filename.substr(0, 4) == "wipe")
         answer += "pixie_wipe=" + filename.substr(5) + " ";
