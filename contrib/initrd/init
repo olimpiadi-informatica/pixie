@@ -2,14 +2,17 @@
 
 error() {
     echo $1
-    exec /bin/sh
+    while true
+    do
+        /bin/sh
+    done
 }
 
 dowipe() {
     wipe.sh $1 $2 $pixie_root_size $pixie_swap_size || error "Wipe failed!"
 }
 
-/bin/busybox mkdir -p /sys /proc /run /tmp /sbin
+/bin/busybox mkdir -p /sys /proc /run /tmp /sbin /mnt
 /bin/busybox --install -s
 
 mount -t devtmpfs none /dev
@@ -18,10 +21,13 @@ mount -t devpts none /dev/pts
 mount -t sysfs none /sys
 mount -t proc none /proc
 
+. /share/common.sh
 
-DRIVE=/dev/sda
-[ -e /dev/nvme0n1 ] && DRIVE=/dev/nvme0n1
+DRIVE=$(detect_drive)
+DRIVEPP=$(get_partition_prefix $DRIVE)
 
 [ -z "$pixie_wipe" ] || dowipe $pixie_wipe $DRIVE
+
+fdisk -l $DRIVE
 
 exec /bin/sh
