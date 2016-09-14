@@ -38,4 +38,6 @@ fi
 [ -f /pixie/initrd.img ] || error "The initrd is missing!"
 [ -f /pixie/commandline ] || error "The command line is missing!"
 
+sync
+
 kexec /pixie/vmlinuz.img /pixie/initrd.img "$(cat /pixie/commandline)"  || error "kexec failed!"
