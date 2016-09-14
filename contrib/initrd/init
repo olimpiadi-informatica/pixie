@@ -1,0 +1,7 @@
+#!/bin/busybox
+PATH=/bin
+/bin/busybox --install -s
+
+ls
+
+exec /bin/sh
