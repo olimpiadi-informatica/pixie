@@ -20,7 +20,7 @@ DRIVE=$(detect_drive)
 DRIVEPP=$(get_partition_prefix $DRIVE)
 
 [ -z "$pixie_wipe" ] || dowipe $pixie_wipe $DRIVE
-mount_pixie || error "Pixie is not present on this machine! You must wipe it."
+mount_pixie ${DRIVE} || error "Pixie is not present on this machine! You must wipe it."
 
 check_part_size || dowipe pixie $DRIVE
 
