@@ -14,6 +14,8 @@
 // This value can be overridden by the ip_method property in a JSON config.
 #define DEFAULT_IP_METHOD "dhcp"
 
+#define IMAGE_METHOD "tftp"
+
 class sha224_t : public std::array<uint8_t, 28> {
   public:
     std::string to_string() const;

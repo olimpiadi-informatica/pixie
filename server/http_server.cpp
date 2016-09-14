@@ -28,9 +28,9 @@ std::string HttpServer::generate_script(std::string uri) {
 echo Unknown host!
 shell
 )del";
-    std::string answer = R"del(#!ipxe
-
-kernel tftm://${next-server}//vmlinuz.img quiet ip=)del";
+    std::string answer = "#!ipxe\n\nkernel ";
+    answer += IMAGE_METHOD;
+    answer += "://${next-server}//vmlinuz.img quiet ip=";
     answer += config->get_ip_method() + " ";
     if (filename.substr(0, 4) == "wipe")
         answer += "pixie_wipe=" + filename.substr(5) + " ";
@@ -39,10 +39,9 @@ kernel tftm://${next-server}//vmlinuz.img quiet ip=)del";
     answer +=
         "pixie_swap_size=" + std::to_string(config->get_swap_size()) + " ";
     answer += "pixie_sha224=" + config->get_config_hash().to_string() + " ";
-    answer += R"del(
-initrd tftm://${next-server}//initrd.img
-boot
-)del";
+    answer += "\ninitrd ";
+    answer += IMAGE_METHOD;
+    answer += "://${next-server}//initrd.img\nboot\n";
     return answer;
 }
 

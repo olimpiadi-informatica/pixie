@@ -1,7 +1,27 @@
-#!/bin/busybox
-PATH=/bin
+#!/bin/busybox sh
+
+error() {
+    echo $1
+    exec /bin/sh
+}
+
+dowipe() {
+    wipe.sh $1 $2 $pixie_root_size $pixie_swap_size || error "Wipe failed!"
+}
+
+/bin/busybox mkdir -p /sys /proc /run /tmp /sbin
 /bin/busybox --install -s
 
-ls
+mount -t devtmpfs none /dev
+mkdir /dev/pts
+mount -t devpts none /dev/pts
+mount -t sysfs none /sys
+mount -t proc none /proc
+
+
+DRIVE=/dev/sda
+[ -e /dev/nvme0n1 ] && DRIVE=/dev/nvme0n1
+
+[ -z "$pixie_wipe" ] || dowipe $pixie_wipe $DRIVE
 
 exec /bin/sh
