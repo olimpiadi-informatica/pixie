@@ -1,25 +1,18 @@
 #!/bin/busybox sh
 
-error() {
-    echo $1
-    while true
-    do
-        /bin/sh
-    done
-}
-
 dowipe() {
     wipe.sh $1 $2 $pixie_root_size $pixie_swap_size || error "Wipe failed!"
 }
 
-/bin/busybox mkdir -p /sys /proc /run /tmp /sbin /mnt
+# Setup
+/bin/busybox mkdir -p /sys /proc /run /tmp /sbin /mnt /etc /pixie
 /bin/busybox --install -s
-
 mount -t devtmpfs none /dev
 mkdir /dev/pts
 mount -t devpts none /dev/pts
 mount -t sysfs none /sys
 mount -t proc none /proc
+ln -s /proc/self/mounts /etc/mtab
 
 . /share/common.sh
 
@@ -27,7 +20,22 @@ DRIVE=$(detect_drive)
 DRIVEPP=$(get_partition_prefix $DRIVE)
 
 [ -z "$pixie_wipe" ] || dowipe $pixie_wipe $DRIVE
+mount_pixie || error "Pixie is not present on this machine! You must wipe it."
 
-fdisk -l $DRIVE
+check_part_size || dowipe pixie $DRIVE
 
-exec /bin/sh
+echo $pixie_sha224 > /tmp/target_hash
+if ! diff /tmp/target_hash /pixie/current_hash &> /dev/null
+then
+    ln -sf ${DRIVEPP}6 /pixie/filesystem.img || error "Cannot create symlink"
+    cd /pixie
+    pixie $pixie_sha224 || error "Could not dowload the image"
+    echo $pixie_sha224 > /pixie/current_hash || error "Could not update the current hash"
+fi
+
+
+[ -f /pixie/vmlinuz.img ] || error "The kernel is missing!"
+[ -f /pixie/initrd.img ] || error "The initrd is missing!"
+[ -f /pixie/commandline ] || error "The command line is missing!"
+
+kexec /pixie/vmlinuz.img /pixie/initrd.img "$(cat /pixie/commandline)"  || error "kexec failed!"

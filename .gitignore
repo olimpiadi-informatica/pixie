@@ -3,3 +3,4 @@ contrib/vmlinuz.img
 contrib/initrd.img
 contrib/initrd/bin/busybox
 contrib/initrd/bin/mkfs.ext4
+contrib/initrd/bin/pixie

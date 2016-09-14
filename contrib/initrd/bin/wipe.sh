@@ -22,7 +22,7 @@ create_partitions() {
         exit 1
     elif [ "${UNUSED_PARTS_NUM}" == "1" ]
     then
-        fdisk $DRIVE << EOF
+        fdisk $DRIVE > /dev/null << EOF
 n
 e
 
@@ -46,7 +46,7 @@ w
 EOF
     else
         PARTITION_CHOICE=$(echo "${UNUSED_PARTS}" | head -n 1)
-        fdisk $DRIVE << EOF
+        fdisk $DRIVE > /dev/null << EOF
 n
 e
 ${PARTITION_CHOICE}
@@ -74,16 +74,16 @@ t
 w
 EOF
     fi
-    mkfs.ext4 -L pixie_data /dev/sda5
-    mkfs.ext4 -L pixie_home /dev/sda8
-    mkswap -L pixie_swap /dev/sda7
-    mount /dev/sda5 /mnt
-    echo $PIXIE_MAGIC > /mnt/pixie_magic
-    umount /mnt
+    mkfs.ext4 -F -L pixie_data ${DRIVEPP}5 > /dev/null || error "Error creating pixie_data"
+    mkfs.ext4 -F -L pixie_home ${DRIVEPP}8 > /dev/null || error "Error creating pixie_home"
+    mkswap -L pixie_swap ${DRIVEPP}7 > /dev/null || error "Error creating pixie_swap"
+    mount ${DRIVEPP}5 /mnt || error "Error mounting pixie_data"
+    echo $PIXIE_MAGIC > /mnt/pixie_magic || error "Error creating the magic file"
+    umount /mnt || error "Error umounting pixie_data"
 }
 
 wipe_all() {
-    fdisk $DRIVE << EOF
+    fdisk $DRIVE > /dev/null << EOF
 o
 w
 EOF
@@ -95,7 +95,7 @@ wipe_linux() {
     EXTENDED_PARTS="$(fdisk -l $DRIVE | tr \* \  | grep ^$DRIVEPP | sed s/\ \ */\ /g | cut -d ' ' -f 1,5 | grep 5$ | cut -f 1 -d \  | sed s_${DRIVEPP}__)"
     for i in $LINUX_PARTS $EXTENDED_PARTS
     do
-        fdisk $DRIVE << EOF
+        fdisk $DRIVE > /dev/null << EOF
 d
 $i
 w
@@ -104,8 +104,14 @@ EOF
     create_partitions
 }
 
+wipe_pixie() {
+    #TODO: make something smarter here.
+    wipe_linux
+}
+
 case $TGT in
+    pixie) wipe_pixie;;
     linux) wipe_linux;;
     all) wipe_all;;
-    *) echo "Invalid wipe type"; exit 1;;
+    *) echo "Invalid wipe type" 1>&2; exit 1;;
 esac

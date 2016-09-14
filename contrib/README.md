@@ -8,6 +8,7 @@
   it mkfs.ext4
 - Compile the client and put the resulting binary in the initrd/bin folder,
   naming it pixie
+- Compile the kexec binary and put the resulting binary in the initrd/bin folder
 - Execute the create_initrd.sh script in this folder
 - Copy the vmlinuz.img and initrd.img files in this folder in the root of your
   tftp server
