@@ -57,7 +57,7 @@ if((CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR CMAKE_COMPILER_IS_GNUCXX)
 endif()
 
 if(BUILD_KEXEC)
-    add_library(kexec STATIC ${KEXEC_SOURCES})
+    add_executable(kexec ${KEXEC_SOURCES})
     target_include_directories(kexec PRIVATE ${INCLUDES} ${KEXEC_INCLUDES})
     target_link_libraries(kexec PRIVATE ${LIBS} ${KEXEC_LIBS})
     target_compile_options(kexec PRIVATE ${FLAGS} ${KEXEC_FLAGS})
