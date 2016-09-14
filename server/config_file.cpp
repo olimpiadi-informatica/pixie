@@ -72,8 +72,8 @@ std::vector<DownloadConfig> parse_config(
             files.push_back(make_pair(fname, path));
         }
         configurations.emplace_back(subnet, files, chunk_size,
-                                    swap_size * (1ULL << 30),
-                                    root_size * (1ULL << 30), ip_method);
+                                    swap_size * (1ULL << 20),
+                                    root_size * (1ULL << 20), ip_method);
     }
     return configurations;
 }
