@@ -32,7 +32,7 @@ DownloadConfig::DownloadConfig(
     std::sort(files.begin(), files.end());
     SHA224 hasher;
     for (auto file : files)
-        file_data.emplace(file.first, File{file.second, chunk_size, hasher});
+        file_data.emplace(file.first, InFile{file.second, chunk_size, hasher});
     config_hash = hasher.get();
 }
 
@@ -76,4 +76,22 @@ std::vector<DownloadConfig> parse_config(
                                     root_size * (1ULL << 20), ip_method);
     }
     return configurations;
+}
+
+std::vector<uint8_t> DownloadConfig::get_chunk_list() const {
+    std::vector<uint8_t> ans;
+    for (const auto& file : file_data) {
+        ans.insert(ans.end(), file.first.begin(), file.first.end());
+        ans.push_back(0);
+        ans.resize(ans.size() + sizeof(uint32_t));
+        uint32_t chunk_count = file.second.get_chunks().size();
+        chunk_count = htonl(chunk_count);
+        memcpy(ans.data() + (ans.size() - sizeof(uint32_t)), &chunk_count,
+               sizeof(uint32_t));
+        for (const auto& chunk : file.second.get_chunks()) {
+            ans.resize(ans.size() + sizeof(chunk));
+            chunk.fill_buffer(ans.data() + (ans.size() - sizeof(chunk)));
+        }
+    }
+    return ans;
 }

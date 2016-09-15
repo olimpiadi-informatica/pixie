@@ -21,8 +21,8 @@ Chunk::Chunk(int fd, chunk_off_t start, chunk_off_t end,
     size = end - start;
 }
 
-File::File(const std::string& path, chunk_size_t chunk_size,
-           SHA224& global_hasher) {
+InFile::InFile(const std::string& path, chunk_size_t chunk_size,
+               SHA224& global_hasher) {
     using namespace std::string_literals;
     fd = open(path.c_str(), O_RDONLY);
     if (fd == -1) throw std::runtime_error("open: "s + strerror(errno));
@@ -51,7 +51,7 @@ File::File(const std::string& path, chunk_size_t chunk_size,
     }
 }
 
-std::vector<uint8_t> File::read_chunk(const Chunk& chunk) {
+std::vector<uint8_t> InFile::read_chunk(const Chunk& chunk) const {
     std::vector<uint8_t> data(chunk.size);
     for (ssize_t to_read = data.size(); to_read > 0;) {
         ssize_t off = data.size() - to_read;
@@ -63,4 +63,39 @@ std::vector<uint8_t> File::read_chunk(const Chunk& chunk) {
         to_read -= bytes_read;
     }
     return data;
+}
+
+sha224_t OutFile::read_chunk(const Chunk& chunk) const {
+    std::vector<uint8_t> data(chunk.size);
+    for (ssize_t to_read = data.size(); to_read > 0;) {
+        ssize_t off = data.size() - to_read;
+        ssize_t bytes_read =
+            pread(fd, data.data() + off, to_read, chunk.offset + off);
+        if (bytes_read == -1)
+            throw std::runtime_error("pread: "s + strerror(errno));
+        assert(bytes_read != 0);
+        to_read -= bytes_read;
+    }
+    SHA224 hasher;
+    hasher.update(data.data(), data.data() + data.size());
+    return hasher.get();
+}
+
+std::vector<Chunk> OutFile::get_missing_chunks() const {
+    std::vector<Chunk> ans;
+    for (const auto& chunk : chunks)
+        if (read_chunk(chunk) != chunk.hash) ans.push_back(chunk);
+    return ans;
+}
+
+void OutFile::write_chunk(const Chunk& chunk, uint8_t* data) {
+    for (ssize_t to_write = chunk.size; to_write > 0;) {
+        ssize_t off = chunk.size - to_write;
+        ssize_t bytes_written =
+            pwrite(fd, data + off, to_write, chunk.offset + off);
+        if (bytes_written == -1)
+            throw std::runtime_error("pwrite: "s + strerror(errno));
+        assert(bytes_written != 0);
+        to_write -= bytes_written;
+    }
 }

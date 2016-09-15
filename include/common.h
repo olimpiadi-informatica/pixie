@@ -1,6 +1,16 @@
 #ifndef PIXIE_COMMON_H
 #define PIXIE_COMMON_H
+#include <arpa/inet.h>
 #include <array>
+
+#define htonll(x)    \
+    ((1 == htonl(1)) \
+         ? (x)       \
+         : ((uint64_t)htonl((x)&0xFFFFFFFF) << 32) | htonl((x) >> 32))
+#define ntohll(x)    \
+    ((1 == ntohl(1)) \
+         ? (x)       \
+         : ((uint64_t)ntohl((x)&0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
 // This value can be overridden by the PIXIE_HTTP_PORT environment variable.
 #define DEFAULT_HTTP_PORT 80
@@ -15,6 +25,8 @@
 #define DEFAULT_IP_METHOD "dhcp"
 
 #define IMAGE_METHOD "tftp"
+#define PIXIE_SERVER_PORT 7494
+#define PIXIE_CLIENT_PORT 7495
 
 class sha224_t : public std::array<uint8_t, 28> {
   public:

@@ -14,7 +14,7 @@ class DownloadConfig {
     chunk_size_t chunk_size;
     uint64_t swap_size, root_size;
     std::string ip_method;
-    std::map<std::string, File> file_data;
+    std::map<std::string, InFile> file_data;
 
   public:
     DownloadConfig(const std::string& subnet,
@@ -25,13 +25,14 @@ class DownloadConfig {
     bool matches_address(in_addr_t addr) const {
         return (ip_address & subnet_mask) == (addr & subnet_mask);
     }
-    const std::map<std::string, File>& get_file_data() const {
+    const std::map<std::string, InFile>& get_file_data() const {
         return file_data;
     }
     const sha224_t get_config_hash() const { return config_hash; }
     uint64_t get_root_size() const { return root_size; }
     uint64_t get_swap_size() const { return swap_size; }
     const std::string& get_ip_method() const { return ip_method; }
+    std::vector<uint8_t> get_chunk_list() const;
 };
 
 std::vector<DownloadConfig> parse_config(const std::vector<std::string>&);
