@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <climits>
 #include <fstream>
+#include <iostream>
 #include <utility>
 
 DownloadConfig::DownloadConfig(
@@ -74,6 +75,9 @@ std::vector<DownloadConfig> parse_config(
         configurations.emplace_back(subnet, files, chunk_size,
                                     swap_size * (1ULL << 20),
                                     root_size * (1ULL << 20), ip_method);
+        std::cerr << "Configuration file " << config << " loaded, with hash "
+                  << configurations.back().get_config_hash().to_string()
+                  << std::endl;
     }
     return configurations;
 }
