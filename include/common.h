@@ -27,10 +27,15 @@
 #define IMAGE_METHOD "tftp"
 #define PIXIE_SERVER_PORT 7494
 #define PIXIE_CLIENT_PORT 7495
+#define CLIENT_TIMEOUT 5
+
+static const uint32_t buff_size = 200;
 
 class sha224_t : public std::array<uint8_t, 28> {
   public:
     std::string to_string() const;
+    sha224_t(const std::string& text);
+    sha224_t() {}
 };
 
 typedef uint32_t chunk_size_t;

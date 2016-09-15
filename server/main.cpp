@@ -11,8 +11,6 @@
 
 using namespace std::literals;
 
-static const uint32_t buff_size = 200;
-
 int main(int argc, char** argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s config_file [config_file [...]]\n", argv[0]);

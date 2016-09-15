@@ -9,3 +9,12 @@ std::string sha224_t::to_string() const {
     }
     return ans;
 }
+
+sha224_t::sha224_t(const std::string& text) {
+    if (text.size() != 56) throw std::runtime_error("Invalid sha224 given!");
+    auto from_hex = [](char c) {
+        return (c | ' ') < 'a' ? (c - '0') : ((c | ' ') - 'a' + 10);
+    };
+    for (unsigned i = 0; i < size(); i++)
+        at(i) = from_hex(text[2 * i]) << 4 | from_hex(text[2 * i + 1]);
+}

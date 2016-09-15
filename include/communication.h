@@ -87,6 +87,7 @@ struct DataPacket {
     sha224_t chunk;
     uint8_t data[maximum_data_size];
     uint32_t data_length;
+    static const uint32_t min_packet_size = 37;
 
     uint32_t fill_buffer(uint8_t* buffer) const {
         uint32_t message_n = htonl(message_type);

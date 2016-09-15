@@ -1,4 +1,5 @@
 #include <chunks_info.h>
+#include <iostream>
 
 ChunksInfo::ChunksInfo(const uint8_t* data, uint32_t size) {
     uint32_t pos = 0;
@@ -17,6 +18,7 @@ ChunksInfo::ChunksInfo(const uint8_t* data, uint32_t size) {
             pos += sizeof(Chunk);
         }
         assert(pos <= size);
+        std::cerr << filename << ": " << chunks.size() << std::endl;
         files.emplace(filename, OutFile(filename, chunks));
         OutFile* of = &files.at(filename);
         for (const auto& chunk : chunks)
