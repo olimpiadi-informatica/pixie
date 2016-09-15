@@ -29,7 +29,7 @@ if ! diff /tmp/target_hash /pixie/current_hash &> /dev/null
 then
     ln -sf ${DRIVEPP}6 /pixie/filesystem.img || error "Cannot create symlink"
     cd /pixie
-    pixie $pixie_sha224 || error "Could not dowload the image"
+    pixie $pixie_server $pixie_sha224 || error "Could not dowload the image"
     echo $pixie_sha224 > /pixie/current_hash || error "Could not update the current hash"
 fi
 

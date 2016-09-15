@@ -30,7 +30,8 @@ shell
 )del";
     std::string answer = "#!ipxe\n\nkernel ";
     answer += IMAGE_METHOD;
-    answer += "://${next-server}//vmlinuz.img quiet ip=";
+    answer +=
+        "://${next-server}//vmlinuz.img quiet pixie_server=${next-server} ip=";
     answer += config->get_ip_method() + " ";
     if (filename.substr(0, 4) == "wipe")
         answer += "pixie_wipe=" + filename.substr(5) + " ";
