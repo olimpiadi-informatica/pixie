@@ -16,11 +16,12 @@ ChunksInfo::ChunksInfo(const uint8_t* data, uint32_t size) {
             Chunk ch;
             ch.read_from_buffer(data + pos, sizeof(Chunk));
             pos += sizeof(Chunk);
+            chunks.push_back(ch);
         }
         assert(pos <= size);
-        std::cerr << filename << ": " << chunks.size() << std::endl;
         files.emplace(filename, OutFile(filename, chunks));
         OutFile* of = &files.at(filename);
+        std::cerr << filename << ": " << chunks.size() << std::endl;
         for (const auto& chunk : chunks)
             chunk_map[chunk.hash].emplace_back(chunk, of);
     }

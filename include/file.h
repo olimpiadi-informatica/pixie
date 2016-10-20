@@ -75,7 +75,7 @@ class OutFile {
   public:
     OutFile(const std::string& path, std::vector<Chunk> chunks)
         : chunks(chunks) {
-        fd = open(path.c_str(), O_RDWR);
+        fd = open(path.c_str(), O_RDWR | O_CREAT, 0600);
         if (fd == -1)
             throw std::runtime_error(std::string("open: ") + strerror(errno));
     }

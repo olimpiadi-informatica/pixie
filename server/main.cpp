@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
     }
 
     BroadcastChooser broadcast_chooser;
-    ChunkSender chunk_sender(chunk_lists, file_chunks);
+    ChunkSender chunk_sender(chunk_lists, chunk_lists_hashes, file_chunks);
     std::thread sender_thread([&]() { chunk_sender(); });
 
     int listen_sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -49,6 +49,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("socket: "s + strerror(errno));
     struct sockaddr_in listen_addr;
     memset(&listen_addr, 0, sizeof(struct sockaddr_in));
+    listen_addr.sin_family = AF_INET;
     listen_addr.sin_port = htons(PIXIE_SERVER_PORT);
     if (bind(listen_sock, (struct sockaddr*)&listen_addr,
              sizeof(struct sockaddr_in)) == -1)
@@ -59,6 +60,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("socket: "s + strerror(errno));
     struct sockaddr_in answer_addr;
     memset(&answer_addr, 0, sizeof(struct sockaddr_in));
+    answer_addr.sin_family = AF_INET;
     answer_addr.sin_port = htons(PIXIE_CLIENT_PORT);
 
     struct sockaddr_in client_addr;
@@ -68,9 +70,9 @@ int main(int argc, char** argv) {
     uint8_t send_buffer[buff_size];
 
     while (true) {
-        socklen_t client_addr_len;
+        socklen_t client_addr_len = sizeof(struct sockaddr_in);
         ssize_t recv_size =
-            recvfrom(listen_sock, (void*)recv_buffer, buff_size, 0,
+            recvfrom(listen_sock, recv_buffer, buff_size, 0,
                      (struct sockaddr*)&client_addr, &client_addr_len);
         if (recv_size == -1 && errno == EINTR) continue;
         if (recv_size == -1)
@@ -96,8 +98,8 @@ int main(int argc, char** argv) {
                 uint32_t answer_size = info.fill_buffer(send_buffer);
                 answer_addr.sin_addr.s_addr = client_addr.sin_addr.s_addr;
                 if (sendto(answer_sock, send_buffer, answer_size, 0,
-                           (struct sockaddr*)&client_addr,
-                           sizeof(struct sockaddr_in)) < 0)
+                           (struct sockaddr*)&answer_addr,
+                           sizeof(struct sockaddr_in)) == -1)
                     perror("sendto");
                 break;
             }

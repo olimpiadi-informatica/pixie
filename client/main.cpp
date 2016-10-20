@@ -54,6 +54,7 @@ int main(int argc, char** argv) {
     while (true) {
         if (last_request + CLIENT_TIMEOUT < time(NULL)) {
             last_request = time(NULL);
+            std::cerr << "Sent" << std::endl;
             if (send(answer_sock, send_buffer, request_size, 0) == -1)
                 throw std::runtime_error("send: "s + strerror(errno));
         }

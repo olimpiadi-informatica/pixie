@@ -11,7 +11,7 @@
 
 class ChunkSender {
     typedef std::tuple<sha224_t, uint32_t, uint32_t, in_addr_t> message_t;
-    const std::map<sha224_t, std::vector<uint8_t>>& chunk_lists;
+    std::map<sha224_t, std::vector<uint8_t>> chunk_lists;
     const std::map<sha224_t, std::pair<Chunk, const InFile*>>& file_chunks;
     std::set<message_t> enqueued;
     std::queue<message_t> queue;
@@ -21,6 +21,7 @@ class ChunkSender {
   public:
     ChunkSender(
         const std::map<sha224_t, std::vector<uint8_t>>& chunk_lists,
+        const std::map<sha224_t, sha224_t>& chunk_lists_hashes,
         const std::map<sha224_t, std::pair<Chunk, const InFile*>>& file_chunks);
 
     void enqueue(sha224_t hash, uint32_t start, uint32_t length,

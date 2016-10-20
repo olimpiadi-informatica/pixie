@@ -6,11 +6,11 @@ TGT=$1
 DRIVE=$2
 ROOT_SIZE=$3
 SWAP_SIZE=$4
-DRIVEPP=$DRIVE
-[ $DRIVEPP -eq /dev/nvme0n1 ] && DRIVEPP=/dev/nvme0n1p
+DRIVEPP=$(get_partition_prefix $DRIVE)
 
 create_partitions() {
-    for i in $(fdisk -l | grep -o ^/dev/sda[^\ ]* | sed s_/dev/sda__)
+    POISON=z
+    for i in $(fdisk -l | grep -o ^${DRIVEPP}[^\ ]* | sed s_${DRIVEPP}__)
     do
         POISON="${POISON}${i}"
     done
@@ -18,8 +18,7 @@ create_partitions() {
     UNUSED_PARTS_NUM=$(echo "${UNUSED_PARTS}" | wc -l)
     if [ "${UNUSED_PARTS_NUM}" == "0" ]
     then
-        echo "Not enough free partitions: manual invervention needed" 1>&2
-        exit 1
+        error "Not enough free partitions: manual invervention needed"
     elif [ "${UNUSED_PARTS_NUM}" == "1" ]
     then
         fdisk $DRIVE > /dev/null << EOF
@@ -46,7 +45,7 @@ w
 EOF
     else
         PARTITION_CHOICE=$(echo "${UNUSED_PARTS}" | head -n 1)
-        fdisk $DRIVE > /dev/null << EOF
+        fdisk $DRIVE  << EOF
 n
 e
 ${PARTITION_CHOICE}
@@ -79,7 +78,8 @@ EOF
     mkswap -L pixie_swap ${DRIVEPP}7 > /dev/null || error "Error creating pixie_swap"
     mount ${DRIVEPP}5 /mnt || error "Error mounting pixie_data"
     echo $PIXIE_MAGIC > /mnt/pixie_magic || error "Error creating the magic file"
-    umount /mnt || error "Error umounting pixie_data"
+    my_umount /mnt || error "Error umounting pixie_data"
+    return 0
 }
 
 wipe_all() {
@@ -111,7 +111,9 @@ wipe_pixie() {
 
 case $TGT in
     pixie) wipe_pixie;;
-    linux) wipe_linux;;
-    all) wipe_all;;
+    linux_force) wipe_linux;;
+    linux) mount_pixie $DRIVE || (my_umount /pixie; wipe_linux)
+           my_umount /pixie ;;
+    force) wipe_all;;
     *) echo "Invalid wipe type" 1>&2; exit 1;;
 esac

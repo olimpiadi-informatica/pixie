@@ -33,7 +33,7 @@ InFile::InFile(const std::string& path, chunk_size_t chunk_size,
         throw std::runtime_error("lseek: "s + strerror(errno));
     chunk_off_t current_position = 0;
     while (current_position < file_size) {
-        chunk_off_t next_hole = lseek(fd, 0, SEEK_HOLE);
+        chunk_off_t next_hole = lseek(fd, current_position, SEEK_HOLE);
         if (next_hole == (chunk_off_t)-1)
             throw std::runtime_error("lseek: "s + strerror(errno));
         assert(next_hole <= file_size);
@@ -44,7 +44,9 @@ InFile::InFile(const std::string& path, chunk_size_t chunk_size,
         if (next_hole == file_size) continue;
         if (lseek(fd, next_hole, SEEK_SET) == (off_t)-1)
             throw std::runtime_error("lseek: "s + strerror(errno));
-        current_position = lseek(fd, 1, SEEK_DATA);
+        current_position = lseek(fd, current_position, SEEK_DATA);
+        if (current_position == (chunk_off_t)-1 && errno == ENXIO)
+            break;
         if (current_position == (chunk_off_t)-1)
             throw std::runtime_error("lseek: "s + strerror(errno));
         assert(current_position != file_size);

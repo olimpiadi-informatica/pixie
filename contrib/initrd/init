@@ -4,6 +4,23 @@ dowipe() {
     wipe.sh $1 $2 $pixie_root_size $pixie_swap_size || error "Wipe failed!"
 }
 
+udprec() {
+    while true
+    do
+        udp-receiver --file $1 --portbase $2 && break
+        sleep 5
+    done
+}
+
+udpcrec() {
+    while true
+    do
+        udp-receiver --file $1 --portbase $2 --pipe "/bin/lzop -d" && break
+        sleep 5
+    done
+}
+
+
 # Setup
 /bin/busybox mkdir -p /sys /proc /run /tmp /sbin /mnt /etc /pixie
 /bin/busybox --install -s
@@ -25,19 +42,23 @@ mount_pixie ${DRIVE} || error "Pixie is not present on this machine! You must wi
 check_part_size || dowipe pixie $DRIVE
 
 echo $pixie_sha224 > /tmp/target_hash
+
 if ! diff /tmp/target_hash /pixie/current_hash &> /dev/null
 then
     ln -sf ${DRIVEPP}6 /pixie/filesystem.img || error "Cannot create symlink"
     cd /pixie
-    pixie $pixie_server $pixie_sha224 || error "Could not dowload the image"
-    echo $pixie_sha224 > /pixie/current_hash || error "Could not update the current hash"
+    #pixie $pixie_server $pixie_sha224 || error "Could not dowload the image"
+    udpcrec /pixie/filesystem.img $pixie_fs_port
+    mount /dev/sda6 /mnt || error "mount"
+    cp /mnt/vmlinuz /pixie/vmlinuz.img
+    cp /mnt/initrd.img /pixie/initrd.img
+    my_umount /mnt
+    cp /tmp/target_hash /pixie/current_hash || error "Could not update the current hash"
 fi
-
 
 [ -f /pixie/vmlinuz.img ] || error "The kernel is missing!"
 [ -f /pixie/initrd.img ] || error "The initrd is missing!"
-[ -f /pixie/commandline ] || error "The command line is missing!"
 
 sync
 
-kexec /pixie/vmlinuz.img /pixie/initrd.img "$(cat /pixie/commandline)"  || error "kexec failed!"
+kexec /pixie/vmlinuz.img /pixie/initrd.img "$pixie_commandline"  || error "kexec failed!"

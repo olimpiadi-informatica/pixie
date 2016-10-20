@@ -1,6 +1,11 @@
+my_umount() {
+    mount | grep \ $1\ > /dev/null && umount $1
+    return 0
+}
+
 get_partition_prefix() {
     DRIVEPP=$1
-    [ $DRIVEPP -eq /dev/nvme0n1 ] && DRIVEPP=/dev/nvme0n1p
+    [ $DRIVEPP = /dev/nvme0n1 ] && DRIVEPP=/dev/nvme0n1p
     echo -n $DRIVEPP
 }
 

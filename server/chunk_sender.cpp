@@ -5,9 +5,12 @@
 using namespace std::literals;
 
 ChunkSender::ChunkSender(
-    const std::map<sha224_t, std::vector<uint8_t>>& chunk_lists,
+    const std::map<sha224_t, std::vector<uint8_t>>& cl,
+    const std::map<sha224_t, sha224_t>& chunk_lists_hashes,
     const std::map<sha224_t, std::pair<Chunk, const InFile*>>& file_chunks)
-    : chunk_lists(chunk_lists), file_chunks(file_chunks) {
+    : file_chunks(file_chunks) {
+    for (const auto& chunk : cl)
+        chunk_lists[chunk_lists_hashes.at(chunk.first)] = chunk.second;
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock == -1) throw std::runtime_error("socket: "s + strerror(errno));
     int broadcastEnable = 1;
@@ -56,6 +59,7 @@ void ChunkSender::operator()() {
             packet.data_length = std::min(length, maximum_data_size);
             memcpy(packet.data, data.data() + start, packet.data_length);
             start += packet.data_length;
+            length -= packet.data_length;
             uint32_t message_size = packet.fill_buffer(buffer);
             if (sendto(sock, buffer, message_size, 0, (struct sockaddr*)&s,
                        sizeof(struct sockaddr_in)) < 0)

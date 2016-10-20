@@ -28,7 +28,7 @@ std::string HttpServer::generate_script(std::string uri) {
 echo Unknown host!
 shell
 )del";
-    std::string answer = "#!ipxe\n\nkernel ";
+    std::string answer = "#!ipxe\n\n:retry\ndhcp && isset ${filename} || goto retry\necho Booting from ${filename}\nkernel ";
     answer += IMAGE_METHOD;
     answer +=
         "://${next-server}//vmlinuz.img quiet pixie_server=${next-server} ip=";
@@ -40,9 +40,10 @@ shell
     answer +=
         "pixie_swap_size=" + std::to_string(config->get_swap_size()) + " ";
     answer += "pixie_sha224=" + config->get_config_hash().to_string() + " ";
-    answer += "\ninitrd ";
+    answer += config->get_extra_args() + " ";
+    answer += " || goto error\ninitrd ";
     answer += IMAGE_METHOD;
-    answer += "://${next-server}//initrd.img\nboot\n";
+    answer += "://${next-server}//initrd.img || goto error\nboot || goto error\nerror:\nshell";
     return answer;
 }
 
