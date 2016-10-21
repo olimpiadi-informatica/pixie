@@ -31,8 +31,7 @@ shell
     std::string answer = "#!ipxe\n\n:retry\ndhcp && isset ${filename} || goto retry\necho Booting from ${filename}\nkernel ";
     answer += IMAGE_METHOD;
     answer +=
-        "://${next-server}//vmlinuz.img quiet pixie_server=${next-server} ip=";
-    answer += config->get_ip_method() + " ";
+        "://${next-server}//vmlinuz.img quiet pixie_server=${next-server} ip=${ip}::${gateway}:${netmask}::eth0:none:${dns} ";
     if (filename.substr(0, 4) == "wipe")
         answer += "pixie_wipe=" + filename.substr(5) + " ";
     answer +=

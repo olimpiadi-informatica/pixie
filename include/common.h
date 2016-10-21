@@ -21,9 +21,6 @@
 // This value can be overridden by the chunk_size property in a JSON config.
 #define DEFAULT_CHUNK_SIZE (1 << 22)
 
-// This value can be overridden by the ip_method property in a JSON config.
-#define DEFAULT_IP_METHOD "dhcp"
-
 #define IMAGE_METHOD "tftp"
 #define PIXIE_SERVER_PORT 7494
 #define PIXIE_CLIENT_PORT 7495
