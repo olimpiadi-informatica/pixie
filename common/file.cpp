@@ -45,8 +45,7 @@ InFile::InFile(const std::string& path, chunk_size_t chunk_size,
         if (lseek(fd, next_hole, SEEK_SET) == (off_t)-1)
             throw std::runtime_error("lseek: "s + strerror(errno));
         current_position = lseek(fd, current_position, SEEK_DATA);
-        if (current_position == (chunk_off_t)-1 && errno == ENXIO)
-            break;
+        if (current_position == (chunk_off_t)-1 && errno == ENXIO) break;
         if (current_position == (chunk_off_t)-1)
             throw std::runtime_error("lseek: "s + strerror(errno));
         assert(current_position != file_size);
@@ -67,7 +66,7 @@ std::vector<uint8_t> InFile::read_chunk(const Chunk& chunk) const {
     return data;
 }
 
-sha224_t OutFile::read_chunk(const Chunk& chunk) const {
+bool OutFile::must_download(const Chunk& chunk) const {
     std::vector<uint8_t> data(chunk.size);
     for (ssize_t to_read = data.size(); to_read > 0;) {
         ssize_t off = data.size() - to_read;
@@ -75,18 +74,18 @@ sha224_t OutFile::read_chunk(const Chunk& chunk) const {
             pread(fd, data.data() + off, to_read, chunk.offset + off);
         if (bytes_read == -1)
             throw std::runtime_error("pread: "s + strerror(errno));
-        assert(bytes_read != 0);
+        if (bytes_read == 0) return true;
         to_read -= bytes_read;
     }
     SHA224 hasher;
     hasher.update(data.data(), data.data() + data.size());
-    return hasher.get();
+    return hasher.get() != chunk.hash;
 }
 
 std::vector<Chunk> OutFile::get_missing_chunks() const {
     std::vector<Chunk> ans;
     for (const auto& chunk : chunks)
-        if (read_chunk(chunk) != chunk.hash) ans.push_back(chunk);
+        if (must_download(chunk)) ans.push_back(chunk);
     return ans;
 }
 

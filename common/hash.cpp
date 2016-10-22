@@ -165,6 +165,6 @@ sha224_t SHA224::get() {
     update(data, data + padding + sizeof(uint64_t));
     for (i = 0; i < 8; i++) hash[i] = htobe32(hash[i]);
     sha224_t result;
-    memcpy(&result[0], &hash[0], 28);
+    memcpy(result.data, &hash[0], 28);
     return result;
 }

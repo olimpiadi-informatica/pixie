@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cerrno>
 #include <cstring>
+#include <iostream>
 #include <vector>
 
 struct Chunk {
@@ -26,8 +27,8 @@ struct Chunk {
         return sizeof(chunk_off_t) + sizeof(chunk_size_t) + sizeof(sha224_t);
     }
 
-    void read_from_buffer(const uint8_t* buffer, uint32_t size) {
-        memcpy(this, buffer, size);
+    void read_from_buffer(const uint8_t* buffer, uint32_t _size) {
+        memcpy(this, buffer, _size);
         offset = ntohll(offset);
         size = ntohl(size);
     }
@@ -70,7 +71,7 @@ class InFile {
 class OutFile {
     std::vector<Chunk> chunks;
     int fd;
-    sha224_t read_chunk(const Chunk& chunk) const;
+    bool must_download(const Chunk& chunk) const;
 
   public:
     OutFile(const std::string& path, std::vector<Chunk> chunks)

@@ -74,7 +74,6 @@ int main(int argc, char** argv) {
     list_chunk.size = answer.length;
 
     ChunkRebuilder rebuilder(listen_sock, answer_sock);
-    std::thread rebuilder_thread([&]() { rebuilder(); });
 
     rebuilder.set_interesting(list_chunk);
     while (true) {
@@ -85,8 +84,12 @@ int main(int argc, char** argv) {
     auto chunklist = rebuilder.get_complete_chunk().second;
     ChunksInfo chunk_list(chunklist.second.data(), chunklist.second.size());
 
-    for (const auto& x : chunk_list.get_chunks_needed())
+    size_t needed_chunks = 0;
+
+    for (const auto& x : chunk_list.get_chunks_needed()) {
+        needed_chunks++;
         rebuilder.set_interesting(x);
+    }
 
     while (true) {
         std::this_thread::sleep_for(1ms);
@@ -96,9 +99,14 @@ int main(int argc, char** argv) {
                                    complete_chunk.second.second.data());
             continue;
         }
+        std::cerr << needed_chunks - rebuilder.count() << " of "
+                  << needed_chunks << " chunks done"
+                  << "\r";
         if (rebuilder.count() == 0) break;
     }
 
+    std::cerr << "All " << needed_chunks << " chunks downloaded!" << std::endl;
+
     rebuilder.stop();
-    rebuilder_thread.join();
+    std::quick_exit(0);
 }

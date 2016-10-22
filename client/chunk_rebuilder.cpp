@@ -7,15 +7,39 @@ using namespace std::literals;
 
 void ChunkRebuilder::operator()() {
     uint8_t data_buffer[sizeof(DataPacket)];
+    time_t last_packet_time = time(NULL);
     while (!quit) {
         time_t current_time = time(NULL);
-        while (!expiring_packets.empty() &&
-               expiring_packets.begin()->first + CLIENT_TIMEOUT <
-                   current_time) {
-            sha224_t hash = expiring_packets.begin()->second;
-            expiring_packets.erase(expiring_packets.begin());
-            last_data.erase(hash);
-            send_chunk_request(hash, 0, interesting_chunks[hash]);
+        if (last_packet_time + CLIENT_TIMEOUT < current_time) {
+            last_packet_time = current_time;
+            size_t chunk_counter = 0;
+            for (const auto& missing_chunk : interesting_chunks) {
+                if (chunk_counter++ > 50) break;
+                const auto& hash = missing_chunk.first;
+                if (chunk_missing_data.count(hash)) {
+                    for (unsigned i = 0; i < interesting_chunks[hash]; i++) {
+                        if (!chunk_missing_data[hash].second[i]) {
+                            continue;
+                        }
+                        unsigned move_to = i + 1;
+                        while (move_to < interesting_chunks[hash] &&
+                               chunk_missing_data[hash].second[move_to])
+                            move_to++;
+
+                        /*std::cerr << "Asking for hash " << hash.to_string()
+                                  << ": [" << i << "; " << move_to << ")"
+                                  << std::endl;*/
+                        send_chunk_request(hash, i, move_to - i);
+                        i = move_to - 1;
+                    }
+                } else {
+                    /*std::cerr << "Asking for hash " << hash.to_string() << ":
+                       ["
+                              << 0 << "; " << interesting_chunks[hash] << ")"
+                              << std::endl;*/
+                    send_chunk_request(hash, 0, interesting_chunks[hash]);
+                }
+            }
         }
         ssize_t received_data = recvfrom(
             listen_sock, data_buffer, sizeof(DataPacket), 0, nullptr, nullptr);
@@ -41,9 +65,7 @@ void ChunkRebuilder::operator()() {
             chunk_missing_data[hash] = {interesting_chunks[hash], {}};
             chunk_missing_data[hash].second.resize(interesting_chunks[hash], 1);
         }
-        expiring_packets.erase({last_data[hash], hash});
-        last_data[hash] = time(NULL);
-        expiring_packets.emplace(last_data[hash], hash);
+        last_packet_time = current_time;
         auto& md = chunk_missing_data[hash];
         auto& dt = chunk_data[hash];
         for (uint32_t pos = 0; pos < data.data_length; pos++) {
@@ -66,13 +88,9 @@ void ChunkRebuilder::operator()() {
                 std::cerr << "Wanted " << hash.to_string() << ", received "
                           << real_hash.to_string() << std::endl;
             } else {
-                expiring_packets.erase({last_data[hash], hash});
-                last_data.erase(hash);
-                {
-                    std::lock_guard<std::mutex> queue_lock(queue_mutex);
-                    interesting_chunks.erase(hash);
-                    complete_chunks.emplace(hash, std::move(ch_data));
-                }
+                std::lock_guard<std::mutex> queue_lock(queue_mutex);
+                interesting_chunks.erase(hash);
+                complete_chunks.emplace(hash, std::move(ch_data));
             }
         }
     }

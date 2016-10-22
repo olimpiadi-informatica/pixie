@@ -28,11 +28,26 @@
 
 static const uint32_t buff_size = 200;
 
-class sha224_t : public std::array<uint8_t, 28> {
+class sha224_t {
   public:
+    uint8_t data[28];
     std::string to_string() const;
     sha224_t(const std::string& text);
-    sha224_t() {}
+    sha224_t() {
+        for (int i = 0; i < 28; i++) data[i] = 0;
+    }
+    bool operator<(const sha224_t& other) const {
+        for (int i = 0; i < 28; i++) {
+            if (data[i] < other.data[i]) return true;
+            if (data[i] > other.data[i]) return false;
+        }
+        return false;
+    }
+    bool operator!=(const sha224_t& other) const {
+        for (int i = 0; i < 28; i++)
+            if (data[i] != other.data[i]) return true;
+        return false;
+    }
 };
 
 typedef uint32_t chunk_size_t;

@@ -9,6 +9,7 @@
 #include <mutex>
 #include <queue>
 #include <set>
+#include <thread>
 #include <vector>
 
 class ChunkRebuilder {
@@ -18,12 +19,11 @@ class ChunkRebuilder {
     // TODO: improve this
     std::map<sha224_t, std::pair<uint32_t, std::vector<bool>>>
         chunk_missing_data;
-    std::map<sha224_t, time_t> last_data;
-    std::set<std::pair<time_t, sha224_t>> expiring_packets;
     std::queue<std::pair<sha224_t, std::vector<uint8_t>>> complete_chunks;
     std::mutex queue_mutex;
     std::mutex send_mutex;
     std::atomic<bool> quit;
+    std::thread worker;
 
     void send_chunk_request(sha224_t hash, uint32_t start, uint32_t length) {
         uint8_t send_buffer[sizeof(DataRequest)];
@@ -38,7 +38,11 @@ class ChunkRebuilder {
 
   public:
     ChunkRebuilder(int listen_sock, int answer_sock)
-        : listen_sock(listen_sock), answer_sock(answer_sock), quit(false) {}
+        : listen_sock(listen_sock),
+          answer_sock(answer_sock),
+          complete_chunks{},
+          quit(false),
+          worker(&ChunkRebuilder::operator(), this) {}
 
     void set_interesting(Chunk chunk) {
         interesting_chunks[chunk.hash] = chunk.size;
