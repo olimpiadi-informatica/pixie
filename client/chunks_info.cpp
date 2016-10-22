@@ -22,7 +22,11 @@ ChunksInfo::ChunksInfo(const uint8_t* data, uint32_t size) {
         files.emplace(filename, OutFile(filename, chunks));
         OutFile* of = &files.at(filename);
         std::cerr << filename << ": " << chunks.size() << std::endl;
-        for (const auto& chunk : chunks)
+        chunks = of->get_missing_chunks();
+        std::cerr << filename << " (missing): " << chunks.size() << std::endl;
+        for (const auto& chunk : chunks) {
+            if (!chunk_map.count(chunk.hash)) chunks_needed.push_back(chunk);
             chunk_map[chunk.hash].emplace_back(chunk, of);
+        }
     }
 }

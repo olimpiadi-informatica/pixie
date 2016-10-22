@@ -84,4 +84,21 @@ int main(int argc, char** argv) {
 
     auto chunklist = rebuilder.get_complete_chunk().second;
     ChunksInfo chunk_list(chunklist.second.data(), chunklist.second.size());
+
+    for (const auto& x : chunk_list.get_chunks_needed())
+        rebuilder.set_interesting(x);
+
+    while (true) {
+        std::this_thread::sleep_for(1ms);
+        auto complete_chunk = rebuilder.get_complete_chunk();
+        if (complete_chunk.first) {
+            chunk_list.write_chunk(complete_chunk.second.first,
+                                   complete_chunk.second.second.data());
+            continue;
+        }
+        if (rebuilder.count() == 0) break;
+    }
+
+    rebuilder.stop();
+    rebuilder_thread.join();
 }
