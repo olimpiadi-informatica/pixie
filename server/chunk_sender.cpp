@@ -64,6 +64,7 @@ void ChunkSender::operator()() {
             if (sendto(sock, buffer, message_size, 0, (struct sockaddr*)&s,
                        sizeof(struct sockaddr_in)) < 0)
                 perror("sendto");
+            std::this_thread::sleep_for(message_size * 1us / 10);
         }
     }
 }

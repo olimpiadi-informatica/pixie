@@ -18,13 +18,12 @@ struct Chunk {
     Chunk(int fd, chunk_off_t start, chunk_off_t end, SHA224& global_hasher);
 
     uint32_t fill_buffer(uint8_t* buffer) const {
-        memcpy(buffer, &hash, sizeof(sha224_t));
-        chunk_off_t offset_n = htonll(offset);
-        memcpy(buffer + sizeof(sha224_t), &offset_n, sizeof(chunk_off_t));
-        chunk_size_t size_n = htonl(size);
-        memcpy(buffer + sizeof(chunk_off_t) + sizeof(sha224_t), &size_n,
-               sizeof(chunk_size_t));
-        return sizeof(chunk_off_t) + sizeof(chunk_size_t) + sizeof(sha224_t);
+        Chunk temp{};
+        temp.hash = hash;
+        temp.offset = htonll(offset);
+        temp.size = htonl(size);
+        memcpy(buffer, &temp, sizeof(temp));
+        return sizeof(temp);
     }
 
     void read_from_buffer(const uint8_t* buffer, uint32_t _size) {

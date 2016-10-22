@@ -56,8 +56,7 @@ std::vector<DownloadConfig> parse_config(
             throw std::runtime_error("Subnet missing in the config file!");
         chunk_size_t chunk_size =
             config_root.get("chunk_size", DEFAULT_CHUNK_SIZE).asUInt();
-        std::string extra_args =
-            config_root.get("extra_args", "").asString();
+        std::string extra_args = config_root.get("extra_args", "").asString();
         auto& file_list = config_root["files"];
         if (!file_list.isObject()) throw std::runtime_error("Wrong file list!");
         std::vector<std::pair<std::string, std::string>> files;
@@ -74,8 +73,7 @@ std::vector<DownloadConfig> parse_config(
         }
         configurations.emplace_back(subnet, files, chunk_size,
                                     swap_size * (1ULL << 20),
-                                    root_size * (1ULL << 20),
-                                    extra_args);
+                                    root_size * (1ULL << 20), extra_args);
         std::cerr << "Configuration file " << config << " loaded, with hash "
                   << configurations.back().get_config_hash().to_string()
                   << std::endl;
