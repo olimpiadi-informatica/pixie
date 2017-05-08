@@ -45,10 +45,11 @@ echo $pixie_sha224 > /tmp/target_hash
 
 if ! diff /tmp/target_hash /pixie/current_hash &> /dev/null
 then
-    ln -sf ${DRIVEPP}6 /pixie/filesystem.img || error "Cannot create symlink"
+    ln -sf ${DRIVEPP}6 /pixie/$pixie_filename || error "Cannot create symlink"
     cd /pixie
     #pixie $pixie_server $pixie_sha224 || error "Could not dowload the image"
-    udpcrec /pixie/filesystem.img $pixie_fs_port
+    #udpcrec /pixie/$pixie_filename.img $pixie_fs_port
+    stardust $pixie_server $pixie_filename
     mount /dev/sda6 /mnt || error "mount"
     cp /mnt/vmlinuz /pixie/vmlinuz.img
     cp /mnt/initrd.img /pixie/initrd.img
