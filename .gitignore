@@ -5,3 +5,9 @@ contrib/initrd/bin/busybox
 contrib/initrd/bin/mkfs.ext4
 contrib/initrd/bin/pixie
 contrib/initrd/bin/kexec
+contrib/initrd/bin/stardust
+contrib/bzImage
+contrib/*.bz2
+contrib/*.xz
+contrib/busybox*/
+contrib/linux*/
