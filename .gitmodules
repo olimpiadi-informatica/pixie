@@ -1,0 +1,3 @@
+[submodule "contrib/stardust"]
+	path = contrib/stardust
+	url = https://github.com/dariost/stardust.git
