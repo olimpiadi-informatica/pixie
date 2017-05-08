@@ -5,7 +5,20 @@ import sys
 import traceback
 import argparse
 
-from colorama import init, Fore, Back, Style
+try:
+    from colorama import init, Fore, Style
+except:
+    # colorama is not really required... but is cool to have
+    print('### colorama package is not required but you suck if you not install!')
+    def nope(autoreset=False):
+        pass
+    class AttrDict(dict):
+        def __init__(self, *args, **kwargs):
+            super(AttrDict, self).__init__(*args, **kwargs)
+            self.__dict__ = self
+    Fore = AttrDict({ 'GREEN': '-- ', 'RED': '## ', 'BLUE': '++ ', 'CYAN': '== ', 'YELLOW': '** ' })
+    Style = AttrDict({ 'BRIGHT': '' })
+    init = nope
 
 import gevent
 import gevent.wsgi
