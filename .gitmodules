@@ -1,6 +1,6 @@
-[submodule "contrib/stardust"]
-	path = contrib/stardust
-	url = https://github.com/dariost/stardust.git
-[submodule "contrib/ipxe"]
-	path = contrib/ipxe
+[submodule "ipxe"]
+	path = ipxe
 	url = git://git.ipxe.org/ipxe.git
+[submodule "stardust"]
+	path = stardust
+	url = https://github.com/dariost/stardust.git
