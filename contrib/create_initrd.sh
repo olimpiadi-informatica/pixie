@@ -8,28 +8,27 @@ tar xfv "busybox-""$BUSYBOX_VERSION"".tar.bz2"
 tar xfv "linux-""$KERNEL_VERSION"".tar.xz"
 cp "busybox-""$BUSYBOX_VERSION"".config" "busybox-""$BUSYBOX_VERSION""/.config"
 cp "linux-""$KERNEL_VERSION"".config" "linux-""$KERNEL_VERSION""/.config"
-cd "busybox-""$BUSYBOX_VERSION"
+pushd "busybox-""$BUSYBOX_VERSION"
 make -j $((`nproc`+1))
-cd ..
+popd
 cp "busybox-""$BUSYBOX_VERSION""/busybox" "initrd/bin/"
-cd "linux-""$KERNEL_VERSION"
+pushd "linux-""$KERNEL_VERSION"
 make -j $((`nproc`+1))
 cp arch/x86/boot/bzImage ..
-cd ..
-cd stardust
+popd
+pushd stardust
 cargo build --release --target=x86_64-unknown-linux-musl
-cd ..
+popd
 cp stardust/target/x86_64-unknown-linux-musl/release/stardust initrd/bin/
-mkdir -p build
-cd build
-cmake -DBUILD_KEXEC=ON ../..
+pushd ..
 make -j $((`nproc`+1))
-cd ..
-cp build/kexec initrd/bin/
+popd
+cp ../build/kexec initrd/bin/
 strip -s initrd/bin/stardust
 strip -s initrd/bin/kexec
 strip -s initrd/bin/busybox
-cd initrd
+pushd initrd
 LVL=$1
 [ -z "$LVL" ] && LVL=9
 find ./ | cpio -H newc -o | xz -C crc32 --x86 -e -$LVL > ../initrd.img
+popd
