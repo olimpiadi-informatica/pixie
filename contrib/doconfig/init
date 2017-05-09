@@ -22,15 +22,15 @@ MAC=$( ip addr | grep "global eth0" -B1 | head -n1 | cut -d ' ' -f6 )
 [ -z "$MAC" ] && error "Cannot find MAC address"
 IP="unknown"
 
-dialog --yesno "Is this a worker?" 6 21
+dialog --yesno "Am I a worker?" 6 21
 if [ "$?" -ne "0" ]
 then
     while true; do
-        dialog --inputbox "Enter row:" 8 22 2> __row
-        dialog --inputbox "Enter column:" 8 22 2> __col
+        dialog --inputbox "Enter row [1-255]:" 8 22 2> __row
+        dialog --inputbox "Enter column [1-255]:" 8 22 2> __col
         ROW=$(cat __row)
         COL=$(cat __col)
-        out=$(aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme)
+        out=$(aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme && cat __ignoreme)
         if [ "$?" -eq "0" ]; then
             IP=$out
             break
@@ -40,9 +40,9 @@ then
     done
 else
     while true; do
-        dialog --inputbox "Enter number:" 8 22 2> __num
+        dialog --inputbox "Enter number [1-255]:" 8 22 2> __num
         NUM=$(cat __num)
-        out=$(aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme)
+        out=$(aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme && cat __ignoreme)
         if [ "$?" -eq "0" ]; then
             IP=$out
             break
