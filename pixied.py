@@ -19,8 +19,7 @@ monkey.patch_all()
 
 IMAGE_METHOD = 'tftp'
 
-BOOTSCRIPT = """
-#!ipxe
+BOOTSCRIPT = """#!ipxe
 
 :retry
 dhcp && isset ${{filename}} || goto retry
@@ -36,14 +35,15 @@ error:
 shell
 """
 
-CONFIGSCRIPT = """
-#!ipxe
+CONFIGSCRIPT = """#!ipxe
 
 :retry
 dhcp && isset ${{filename}} || goto retry
 
 echo Booting from ${{filename}}
-kernel {image_method}://${{next-server}}/vmlinuz.img quiet SERVER_IP=${{next-server}}{collector_prefix} || goto error
+kernel {image_method}://${{next-server}}/vmlinuz.img quiet \
+    ip=${{ip}}::${{gateway}}:{{netmask}}::eth0:none:${{dns}} \
+    SERVER_IP=${{next-server}}{collector_prefix} || goto error
 initrd {image_method}://${{next-server}}//doconfig.img || goto error
 boot || goto error
 
