@@ -76,7 +76,7 @@ class EthersManager():
         print(''.join(lines))
 
         for line in lines:
-            pieces = line.split(' ')
+            pieces = line.strip().split(' ')
             if len(pieces) != 2: continue
 
             mac, ip = pieces
@@ -173,6 +173,7 @@ class ScriptHandler(object):
 
     def reboot_loop(self):
         while True:
+            self.ethers_manager.export_ethers()
             print(Fore.YELLOW + "Reboot index %d" % self.reboot_string)
             self.reboot_string += 1
             gevent.sleep(REBOOT_DELAY)
