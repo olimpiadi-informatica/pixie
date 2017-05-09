@@ -186,10 +186,12 @@ if __name__ == '__main__':
                         action='store_true', default=False)
     parser.add_argument('-e', '--ethers', help='Path to ethers file, default: /etc/ethers', default='/etc/ethers')
     parser.add_argument('-n', '--num', help='Stop the script after N ethers received', default=-1, type=int)
+    parser.add_argument('-l', '--listen', help='Address to listen to, default: 0.0.0.0', default='0.0.0.0')
+    parser.add_argument('-p', '--port', help='Port to listen to, default: 8080', default=8080, type=int)
     args = parser.parse_args()
 
     init(autoreset=True)
 
     ethersManager = EthersManager(args.ethers, args.num, args.static, args.wipe)
-    server = gevent.wsgi.WSGIServer(('0.0.0.0', 8080), ScriptHandler(args.contestant, args.worker, ethersManager))
+    server = gevent.wsgi.WSGIServer((args.listen, args.port), ScriptHandler(args.contestant, args.worker, ethersManager))
     gevent.spawn(server.serve_forever).join()
