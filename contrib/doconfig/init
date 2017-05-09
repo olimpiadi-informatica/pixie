@@ -20,25 +20,45 @@ error() {
 
 MAC=$( ip addr | grep "global eth0" -B1 | head -n1 | cut -d ' ' -f6 )
 [ -z "$MAC" ] && error "Cannot find MAC address"
+IP="unknown"
+
 dialog --yesno "Is this a worker?" 6 21
 if [ "$?" -ne "0" ]
 then
-    dialog --inputbox "Enter row:" 8 22 2> __row
-    dialog --inputbox "Enter column:" 8 22 2> __col
-    ROW=$(cat __row)
-    COL=$(cat __col)
-    aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme
+    while true; do
+        dialog --inputbox "Enter row:" 8 22 2> __row
+        dialog --inputbox "Enter column:" 8 22 2> __col
+        ROW=$(cat __row)
+        COL=$(cat __col)
+        out=$(aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme)
+        if [ "$?" -eq "0" ]; then
+            IP=$out
+            break
+        else
+            dialog --msgbox "Error: $out" 6 40
+        fi
+    done
 else
-    dialog --inputbox "Enter number:" 8 22 2> __num
-    NUM=$(cat __num)
-    aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme
+    while true; do
+        dialog --inputbox "Enter number:" 8 22 2> __num
+        NUM=$(cat __num)
+        out=$(aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme)
+        if [ "$?" -eq "0" ]; then
+            IP=$out
+            break
+        else
+            dialog --msgbox "Error: $out" 6 40
+        fi
+    done
 fi
+
 aria2c -q "http://""$SERVER_IP""/reboot_timestamp" -o __timestamp
 if [ "$?" -ne "0" ]
 then
     /bin/reboot || error "Error rebooting"
 fi
-dialog --infobox "Done, waiting to reboot" 3 27
+dialog --infobox "Done, waiting to reboot\nI am $IP" 4 27
+
 while true
 do
     sleep 10
