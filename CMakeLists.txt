@@ -8,6 +8,7 @@ option(DEBUG "Enable debug" OFF)
 option(BUILD_CLIENT "Build the client" ON)
 option(BUILD_SERVER "Build the server" ON)
 option(BUILD_KEXEC "Build kexec" ON)
+option(BUILD_REBOOT "Build reboot" ON)
 
 if(BUILD_SERVER)
 project(pixied)
@@ -18,12 +19,16 @@ endif()
 if(BUILD_KEXEC)
 project(kexec)
 endif()
+if(BUILD_REBOOT)
+project(reboot)
+endif()
 project(common)
 
 file(GLOB SERVER_SOURCES ${CMAKE_SOURCE_DIR}/server/*.cpp)
 file(GLOB CLIENT_SOURCES ${CMAKE_SOURCE_DIR}/client/*.cpp)
 file(GLOB COMMON_SOURCES ${CMAKE_SOURCE_DIR}/common/*.cpp)
-file(GLOB KEXEC_SOURCES ${CMAKE_SOURCE_DIR}/kexec/*.c)
+file(GLOB KEXEC_SOURCES ${CMAKE_SOURCE_DIR}/util/kexec.c)
+file(GLOB REBOOT_SOURCES ${CMAKE_SOURCE_DIR}/util/reboot.c)
 
 if(BUILD_SERVER)
     find_package(JSONCPP REQUIRED)
@@ -53,6 +58,8 @@ if((CMAKE_CXX_COMPILER_ID MATCHES "Clang") OR CMAKE_COMPILER_IS_GNUCXX)
 
     set(KEXEC_LIBS ${KEXEC_LIBS} -static -Wl,--no-export-dynamic)
 
+    set(REBOOT_LIBS ${REBOOT_LIBS} -static -Wl,--no-export-dynamic)
+
     set(LIBS ${LIBS} -pthread)
 endif()
 
@@ -61,6 +68,13 @@ if(BUILD_KEXEC)
     target_include_directories(kexec PRIVATE ${INCLUDES} ${KEXEC_INCLUDES})
     target_link_libraries(kexec PRIVATE ${LIBS} ${KEXEC_LIBS})
     target_compile_options(kexec PRIVATE ${FLAGS} ${KEXEC_FLAGS})
+endif()
+
+if(BUILD_REBOOT)
+    add_executable(kexec ${REBOOT_SOURCES})
+    target_include_directories(kexec PRIVATE ${INCLUDES} ${REBOOT_INCLUDES})
+    target_link_libraries(kexec PRIVATE ${LIBS} ${REBOOT_LIBS})
+    target_compile_options(kexec PRIVATE ${FLAGS} ${REBOOT_FLAGS})
 endif()
 
 add_library(common STATIC ${COMMON_SOURCES})
