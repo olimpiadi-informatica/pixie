@@ -22,7 +22,7 @@ MAC=$( ip addr | grep "global eth0" -B1 | head -n1 | cut -d ' ' -f6 )
 [ -z "$MAC" ] && error "Cannot find MAC address"
 IP="unknown"
 
-dialog --yesno "Am I a worker?" 6 21
+dialog --yesno "Am I a worker?" 6 19
 if [ "$?" -ne "0" ]
 then
     while true; do
@@ -52,7 +52,7 @@ else
     done
 fi
 
-tinycurl "http://""$server_ip""/reboot_timestamp" > __timestamp
+tinycurl "http://""$SERVER_IP""/reboot_timestamp" > __timestamp
 if [ "$?" -ne "0" ]
 then
     /bin/reboot || error "error rebooting"
