@@ -27,7 +27,7 @@ if [ "$?" -ne "0" ]
 then
     while true; do
         dialog --inputbox "Enter row [1-255]:" 8 22 2> __row
-        dialog --inputbox "Enter column [1-255]:" 8 22 2> __col
+        dialog --inputbox "Enter column [1-255]:" 8 25 2> __col
         ROW=$(cat __row)
         COL=$(cat __col)
         out=$(aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme && cat __ignoreme)
@@ -40,7 +40,7 @@ then
     done
 else
     while true; do
-        dialog --inputbox "Enter number [1-255]:" 8 22 2> __num
+        dialog --inputbox "Enter number [1-255]:" 8 25 2> __num
         NUM=$(cat __num)
         out=$(aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme && cat __ignoreme)
         if [ "$?" -eq "0" ]; then
