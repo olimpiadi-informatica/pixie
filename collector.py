@@ -3,22 +3,10 @@
 import os
 import sys
 import traceback
+import re
 import argparse
 
-try:
-    from colorama import init, Fore, Style
-except:
-    # colorama is not really required... but is cool to have
-    print('### colorama package is not required but you suck if you not install!')
-    def nope(autoreset=False):
-        pass
-    class AttrDict(dict):
-        def __init__(self, *args, **kwargs):
-            super(AttrDict, self).__init__(*args, **kwargs)
-            self.__dict__ = self
-    Fore = AttrDict({ 'GREEN': '-- ', 'RED': '## ', 'BLUE': '++ ', 'CYAN': '== ', 'YELLOW': '** ' })
-    Style = AttrDict({ 'BRIGHT': '' })
-    init = nope
+from colorama import init, Fore, Style
 
 import gevent
 import gevent.wsgi
@@ -35,15 +23,16 @@ from subprocess import call
 monkey.patch_all()
 
 
-REBOOT_DELAY = 30
-
-
 class EthersManager():
-    def __init__(self, ethers_path, num_ethers, static_ethers, wipe):
+    def __init__(self, ethers_path, static_ethers, wipe):
+        """
+        :param ethers_path: path to the ethers file
+        :param static_ethers: path to static ethers file (only when wiping)
+        :param wipe: wipe the ethers
+        """
         self.ethers_path = ethers_path
-        self.remaining_ethers = num_ethers
         self.wipe = wipe
-        self.ethers = []
+        self.ethers = {}
 
         EthersManager.assert_writable(self.ethers_path)
 
@@ -72,6 +61,7 @@ class EthersManager():
     def load_ethers(self, path):
         EthersManager.assert_readable(path)
         lines = open(path, 'r').readlines()
+
         print(Fore.BLUE + "The ethers file is")
         print(''.join(lines))
 
@@ -80,24 +70,60 @@ class EthersManager():
             if len(pieces) != 2: continue
 
             mac, ip = pieces
-            self.ethers.append((mac, ip))
+            self.ethers[mac] = ip
+
+    @staticmethod
+    def check_mac_format(mac):
+        if not re.fullmatch('([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', mac):
+            return False
+        return True
+
+    @staticmethod
+    def check_ip_format(ip):
+        pieces = ip.split('.')
+        if len(pieces) != 4: return False
+        try:
+            if not 0 <= int(pieces[0]) <= 255: return False
+            if not 0 <= int(pieces[1]) <= 255: return False
+            if not 0 <= int(pieces[2]) <= 255: return False
+            if not 0 <= int(pieces[3]) <= 255: return False
+        except:
+            return False
+        return True
 
     def add_ether(self, mac, ip):
-        self.ethers.append((mac, ip))
-        self.remaining_ethers -= 1
-        if self.remaining_ethers == 0:
-            self.export_ethers()
+        if not EthersManager.check_mac_format(mac):
+            return 'Invalid MAC: ' + mac
+        if not EthersManager.check_ip_format(ip):
+            return 'Invalid IP: ' + ip
+        if mac in self.ethers:
+            return 'MAC already present!'
+        if ip in self.ethers.values():
+            return 'IP already present'
+
+        self.ethers[mac] = ip
+        return None
+
+    def print_boxed(self, lines):
+        if len(lines) == 0: return
+
+        lun = max([len(line) for line in lines])
+        print('-' * (lun+4))
+        for line in lines:
+            print('| %s |' % (line.ljust(lun)))
+        print('-' * (lun+4))
 
     def export_ethers(self):
-        lines = ''.join("%s %s\n" % (mac, ip) for mac,ip in self.ethers)
+        lines = ["%s %s" % (mac, ip) for mac,ip in self.ethers.items()]
+
         print(Fore.GREEN + Style.BRIGHT + "Generated ethers file")
-        print(lines)
+        self.print_boxed(lines)
 
         file = open(self.ethers_path, 'w')
-        file.write(lines)
+        file.write('\n'.join(lines) + '\n')
         file.close()
 
-        print(Fore.GREEN + Style.BRIGHT + "%s file written" % self.ethers_path)
+        print(Fore.GREEN + "%s file written" % self.ethers_path)
 
         self.reload_services()
 
@@ -110,9 +136,10 @@ class EthersManager():
 
 class ScriptHandler(object):
 
-    def __init__(self, contestant_ip_format, worker_ip_format, ethers_manager):
+    def __init__(self, contestant_ip_format, worker_ip_format, reboot_delay, ethers_manager):
         self.contestant_ip_format = contestant_ip_format
         self.worker_ip_format = worker_ip_format
+        self.reboot_delay = reboot_delay
         self.ethers_manager = ethers_manager
         self.reboot_string = 0
 
@@ -154,8 +181,13 @@ class ScriptHandler(object):
             ip = self.contestant_ip_format.replace('R', row).replace('C', col)
 
             print(Fore.CYAN + "Contestant PC connected: MAC=%s IP=%s" % (mac, ip))
-            self.ethers_manager.add_ether(mac, ip)
-            response.data = ip
+            result = self.ethers_manager.add_ether(mac, ip)
+            if result:
+                print(Fore.RED + result)
+                response.data = result
+                response.status_code = 400
+            else:
+                response.data = ip
 
         elif endpoint == 'worker':
             mac = args['mac']
@@ -163,8 +195,13 @@ class ScriptHandler(object):
             ip = self.worker_ip_format.replace('N', num)
 
             print(Fore.BLUE + "Worker PC connected: MAC=%s IP=%s" % (mac, ip))
-            self.ethers_manager.add_ether(mac, ip)
-            response.data = ip
+            result = self.ethers_manager.add_ether(mac, ip)
+            if result:
+                print(Fore.RED + result)
+                response.data = result
+                response.status_code = 400
+            else:
+                response.data = ip
 
         elif endpoint == 'reboot_timestamp':
             response.data = str(self.reboot_string)
@@ -176,7 +213,7 @@ class ScriptHandler(object):
             self.ethers_manager.export_ethers()
             print(Fore.YELLOW + "Reboot index %d" % self.reboot_string)
             self.reboot_string += 1
-            gevent.sleep(REBOOT_DELAY)
+            gevent.sleep(self.reboot_delay)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='pixie ip collector')
@@ -186,13 +223,14 @@ if __name__ == '__main__':
     parser.add_argument('--wipe', help='Wipe ethers file and start from static (or from scratch)',
                         action='store_true', default=False)
     parser.add_argument('-e', '--ethers', help='Path to ethers file, default: /etc/ethers', default='/etc/ethers')
-    parser.add_argument('-n', '--num', help='Stop the script after N ethers received', default=-1, type=int)
     parser.add_argument('-l', '--listen', help='Address to listen to, default: 0.0.0.0', default='0.0.0.0')
     parser.add_argument('-p', '--port', help='Port to listen to, default: 8080', default=8080, type=int)
+    parser.add_argument('-r', '--reboot-delay', help='Delay between reboot requests', default=30, type=float)
     args = parser.parse_args()
 
     init(autoreset=True)
 
-    ethersManager = EthersManager(args.ethers, args.num, args.static, args.wipe)
-    server = gevent.wsgi.WSGIServer((args.listen, args.port), ScriptHandler(args.contestant, args.worker, ethersManager))
+    ethersManager = EthersManager(args.ethers, args.static, args.wipe)
+    server = gevent.wsgi.WSGIServer((args.listen, args.port), ScriptHandler(args.contestant, args.worker,
+                                                                            args.reboot_delay, ethersManager))
     gevent.spawn(server.serve_forever).join()
