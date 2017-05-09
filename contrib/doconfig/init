@@ -22,12 +22,12 @@ MAC=$( ip addr | grep "global eth0" -B1 | head -n1 | cut -d ' ' -f6 )
 [ -z "$MAC" ] && error "Cannot find MAC address"
 IP="unknown"
 
-dialog --yesno "Am I a worker?" 5 19
+dialog --defaultno --yesno "Am I a worker?" 5 19
 if [ "$?" -ne "0" ]
 then
     while true; do
-        dialog --inputbox "Enter row [1-255]:" 8 22 2> __row
-        dialog --inputbox "Enter column [1-255]:" 8 25 2> __col
+        dialog --nocancel --inputbox "Enter row [1-255]:" 8 22 2> __row
+        dialog --nocancel --inputbox "Enter column [1-255]:" 8 25 2> __col
         ROW=$(cat __row)
         COL=$(cat __col)
         tinycurl "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" > __ip 2> __error
@@ -40,7 +40,7 @@ then
     done
 else
     while true; do
-        dialog --inputbox "Enter number [1-255]:" 8 25 2> __num
+        dialog --nocancel --inputbox "Enter number [1-255]:" 8 25 2> __num
         NUM=$(cat __num)
         tinycurl "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" > __ip 2> __error
         if [ "$?" -eq "0" ]; then
@@ -61,7 +61,7 @@ dialog --infobox "Done, waiting to reboot\nI am $IP" 4 27
 
 while true
 do
-    sleep 10
+    sleep 1
     tinycurl "http://""$SERVER_IP""/reboot_timestamp" > __timestamp_new
     if [ "$?" -ne "0" ]
     then

@@ -32,6 +32,7 @@ popd
 
 pushd stardust
 cargo build --release --target=x86_64-unknown-linux-musl
+strip --strip-all target/x86_64-unknown-linux-musl/release/stardust
 popd
 
 pushd ..
@@ -54,6 +55,8 @@ cp ../build/tinycurl doconfig/bin
 cp ../build/reboot doconfig/bin
 cp "buildroot-${BUILDROOT_VERSION}/output/target/bin/busybox" doconfig/bin/
 cp "buildroot-${BUILDROOT_VERSION}/output/target/usr/bin/dialog" doconfig/bin/
+mkdir -p doconfig/usr/share/terminfo/l
+cp buildroot-${BUILDROOT_VERSION}/output/target/usr/share/terminfo/l/linux doconfig/usr/share/terminfo/l
 
 pushd doconfig
 LVL=$1
