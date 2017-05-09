@@ -159,6 +159,45 @@ class ScriptHandler(object):
             traceback.print_exc()
             return InternalServerError()
 
+    def add_contestant(self, mac, row, col, response):
+        try:
+            if not 1 <= int(row) <= 255: raise
+            if not 1 <= int(col) <= 255: raise
+        except:
+            response.status_code = 400
+            response.data = "Invalid row/col: row=%s col=%s" % (row, col)
+            return
+
+        ip = self.contestant_ip_format.replace('R', row).replace('C', col)
+
+        print(Fore.CYAN + "Contestant PC connected: MAC=%s IP=%s" % (mac, ip))
+        result = self.ethers_manager.add_ether(mac, ip)
+        if result:
+            print(Fore.RED + result)
+            response.data = result
+            response.status_code = 400
+        else:
+            response.data = ip
+
+    def add_worker(self, mac, num, response):
+        try:
+            if not 1 <= int(num) <= 255: raise
+        except:
+            response.status_code = 400
+            response.data = "Invalid num: num=%s" % (num)
+            return
+
+        ip = self.worker_ip_format.replace('N', num)
+
+        print(Fore.BLUE + "Worker PC connected: MAC=%s IP=%s" % (mac, ip))
+        result = self.ethers_manager.add_ether(mac, ip)
+        if result:
+            print(Fore.RED + result)
+            response.data = result
+            response.status_code = 400
+        else:
+            response.data = ip
+
     def wsgi_app(self, environ, start_response):
         route = self.router.bind_to_environ(environ)
         try:
@@ -175,33 +214,23 @@ class ScriptHandler(object):
         response.status_code = 200
 
         if endpoint == 'contestant':
-            mac = args['mac']
-            row = args['row']
-            col = args['col']
-            ip = self.contestant_ip_format.replace('R', row).replace('C', col)
-
-            print(Fore.CYAN + "Contestant PC connected: MAC=%s IP=%s" % (mac, ip))
-            result = self.ethers_manager.add_ether(mac, ip)
-            if result:
-                print(Fore.RED + result)
-                response.data = result
+            if 'mac' not in args or 'row' not in args or 'col' not in args:
                 response.status_code = 400
+                response.data = 'Required query parameters: mac, row, col'
             else:
-                response.data = ip
+                mac = args['mac']
+                row = args['row']
+                col = args['col']
+                self.add_contestant(mac, row, col, response)
 
         elif endpoint == 'worker':
-            mac = args['mac']
-            num = args['num']
-            ip = self.worker_ip_format.replace('N', num)
-
-            print(Fore.BLUE + "Worker PC connected: MAC=%s IP=%s" % (mac, ip))
-            result = self.ethers_manager.add_ether(mac, ip)
-            if result:
-                print(Fore.RED + result)
-                response.data = result
+            if 'mac' not in args or 'num' not in args:
                 response.status_code = 400
+                response.data = 'Required query parameters: mac, num'
             else:
-                response.data = ip
+                mac = args['mac']
+                num = args['num']
+                self.add_worker(mac, num, response)
 
         elif endpoint == 'reboot_timestamp':
             response.data = str(self.reboot_string)
