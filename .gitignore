@@ -11,3 +11,10 @@ contrib/*.bz2
 contrib/*.xz
 contrib/busybox*/
 contrib/linux*/
+contrib/doconfig.img
+contrib/doconfig/bin/
+contrib/doconfig/lib/
+contrib/doconfig/lib64
+contrib/doconfig/share/
+contrib/doconfig/usr
+
