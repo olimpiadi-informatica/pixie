@@ -1,0 +1,55 @@
+#!/bin/busybox sh
+
+# Setup
+/bin/busybox mkdir -p /sys /proc /run /tmp /sbin /mnt /etc /pixie
+/bin/busybox --install -s
+mount -t devtmpfs none /dev
+mkdir /dev/pts
+mount -t devpts none /dev/pts
+mount -t sysfs none /sys
+mount -t proc none /proc
+ln -s /proc/self/mounts /etc/mtab
+
+error() {
+    echo $1
+    while true
+    do
+        /bin/sh
+    done
+}
+
+MAC=$( ip addr | grep "global eth0" -B1 | head -n1 | cut -d ' ' -f6 )
+[ -z "$MAC" ] && error "Cannot find MAC address"
+dialog --yesno "Is this a worker?" 6 21
+if [ "$?" -ne "0" ]
+then
+    dialog --inputbox "Enter row:" 8 22 2> __row
+    dialog --inputbox "Enter column:" 8 22 2> __col
+    ROW=$(cat __row)
+    COL=$(cat __col)
+    aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme
+else
+    dialog --inputbox "Enter number:" 8 22 2> __num
+    NUM=$(cat __num)
+    aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme
+fi
+aria2c -q "http://""$SERVER_IP""/reboot_timestamp" -o __timestamp
+if [ "$?" -ne "0" ]
+then
+    /bin/reboot || error "Error rebooting"
+fi
+dialog --infobox "Done, waiting to reboot" 3 27
+while true
+do
+    sleep 10
+    aria2c -q "http://""$SERVER_IP""/reboot_timestamp" -o __timestamp_new --allow-overwrite=true
+    if [ "$?" -ne "0" ]
+    then
+        /bin/reboot || error "Error rebooting"
+    fi
+    cmp __timestamp __timestamp_new
+    if [ "$?" -ne "0" ]
+    then
+        /bin/reboot
+    fi
+done
