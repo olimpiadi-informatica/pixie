@@ -43,7 +43,7 @@ CONFIGSCRIPT = """
 dhcp && isset ${{filename}} || goto retry
 
 echo Booting from ${{filename}}
-kernel {image_method}://${{next-server}}/vmlinuz.img quiet SERVER_IP=${{next-server}} || goto error
+kernel {image_method}://${{next-server}}/vmlinuz.img quiet SERVER_IP=${{next-server}}{collector_prefix} || goto error
 initrd {image_method}://${{next-server}}//doconfig.img || goto error
 boot || goto error
 
@@ -52,10 +52,11 @@ shell
 """
 
 class ScriptHandler(object):
-    def __init__(self, configs):
+    def __init__(self, configs, collector_prefix):
         self.configs = []
         self.default_config = dict()
         self.default_config['image_method'] = IMAGE_METHOD
+        self.default_config['collector_prefix'] = collector_prefix
         for config in configs:
             self.configs.append(self.load_config(config))
         self.router = Map([
@@ -136,8 +137,10 @@ if __name__ == '__main__':
                         help="address to bind to (default '0.0.0.0')")
     parser.add_argument("-p", "--port", action="store", type=int, default=8080,
                         help="port to bind to (default 8080)")
+    parser.add_argument("-c", "--collector-prefix", action="store", type=str, default="/pixie_collector",
+                        help="prefix on which the collector is served")
     args = parser.parse_args()
     server = gevent.wsgi.WSGIServer(
-        (args.addr, args.port), ScriptHandler(args.configs))
+        (args.addr, args.port), ScriptHandler(args.configs, args.collector_prefix))
     gevent.spawn(server.serve_forever).join()
     
