@@ -30,39 +30,39 @@ then
         dialog --inputbox "Enter column [1-255]:" 8 25 2> __col
         ROW=$(cat __row)
         COL=$(cat __col)
-        aria2c -q "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" -o __ignoreme
+        tinycurl "http://""$SERVER_IP""/contestant?mac=""$MAC""&row=""$ROW""&col=""$COL" > __ip 2> __error
         if [ "$?" -eq "0" ]; then
-            IP=$(cat __ignoreme)
+            IP=$(cat __ip)
             break
         else
-            dialog --msgbox "Error: $(cat __ignoreme)" 6 40
+            dialog --msgbox "Error: $(cat __error)" 6 40
         fi
     done
 else
     while true; do
         dialog --inputbox "Enter number [1-255]:" 8 25 2> __num
         NUM=$(cat __num)
-        aria2c -q "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" -o __ignoreme
+        tinycurl "http://""$SERVER_IP""/worker?mac=""$MAC""&num=""$NUM" > __ip 2> __error
         if [ "$?" -eq "0" ]; then
-            IP=$(cat __ignoreme)
+            IP=$(cat __ip)
             break
         else
-            dialog --msgbox "Error: $(cat __ignoreme)" 6 40
+            dialog --msgbox "Error: $(cat __error)" 6 40
         fi
     done
 fi
 
-aria2c -q "http://""$SERVER_IP""/reboot_timestamp" -o __timestamp
+tinycurl "http://""$server_ip""/reboot_timestamp" > __timestamp
 if [ "$?" -ne "0" ]
 then
-    /bin/reboot || error "Error rebooting"
+    /bin/reboot || error "error rebooting"
 fi
-dialog --infobox "Done, waiting to reboot\nI am $IP" 4 27
+dialog --infobox "done, waiting to reboot\ni am $ip" 4 27
 
 while true
 do
     sleep 10
-    aria2c -q "http://""$SERVER_IP""/reboot_timestamp" -o __timestamp_new --allow-overwrite=true
+    tinycurl "http://""$SERVER_IP""/reboot_timestamp" > __timestamp_new
     if [ "$?" -ne "0" ]
     then
         /bin/reboot || error "Error rebooting"
