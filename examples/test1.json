@@ -1,10 +1,7 @@
 {
-    // The subnet for which this files should be downloaded
     "subnet": "192.168.0.0/16",
-    // The files to be downloaded, in filename: path pairs
-    "files": {"sh": "/bin/sh", "libstdc++.so": "/lib/libstdc++.so"},
-    // Swap partition size (in gigabytes)
+    "hashes": ["/bin/sh"],
     "swap_size": 8,
-    // Root partition size (in gigabytes)
-    "root_size": 16
+    "root_size": 16,
+    "extra_args": "test"
 }
