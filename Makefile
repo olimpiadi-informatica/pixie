@@ -34,7 +34,7 @@ build/buildroot-${BUILDROOT_VERSION}.tar.bz2:
 build/buildroot-${BUILDROOT_VERSION}: build/buildroot-${BUILDROOT_VERSION}.tar.bz2
 	cd build && tar xvf buildroot-${BUILDROOT_VERSION}.tar.bz2
 
-build/buildroot-${BUILDROOT_VERSION}/output/target: build/buildroot-${BUILDROOT_VERSION} config/buildroot-${BUILDROOT_VERSION}.config
+build/buildroot-${BUILDROOT_VERSION}/output: build/buildroot-${BUILDROOT_VERSION} config/buildroot-${BUILDROOT_VERSION}.config
 	cp config/buildroot-${BUILDROOT_VERSION}.config build/buildroot-${BUILDROOT_VERSION}/.config
 	cd build/buildroot-${BUILDROOT_VERSION} && ${MAKE}
 
