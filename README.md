@@ -14,25 +14,29 @@ can do this with the following configuration:
     # If PXE request comes from iPXE, direct it to boot from HTTP
     dhcp-boot=tag:ipxe,http://${next-server}/SCRIPT_URI
 
-`undionly.kpxe` can be found on the iPXE website, or compiled manually from
-the source code. If the network you are working on has another DHCP server
-running on it, iPXE could occasionally have problems loading the script.
-You can solve this by compiling a version of `undionly.kpxe` that only accepts
-DHCP offers from BOOTP server, for example by embedding the script
-`contrib/bootp_only.ipxe`:
+You can build everything by running `make`. This produces a kernel
+image, two ramdisks and an ipxe image inside the folder `build/target`.
 
-    make bin/undionly.kpxe EMBED=path/to/pixie/contrib/bootp_only.ipxe
+The URI received by pixied.py should be of the form `filename?ip=client_ip`,
+where filename can be the empty string or `wipe` to delete data from the
+hard drive. For example, you could use the following URL
 
-The URI received by pixied should be of the form `filename?client_ip`,
-where filename can be the empty string or `wipe-force`, `wipe-linux`,
-`wipe-pixie` to delete data from the hard drive. For example, you could
-use the following URL
-
-    http://${next-server}/pixie/?${ip}
+    http://${next-server}/pixie/?ip=${ip}
 
 supposing you have a nginx server with the following configuration block
 listening on port 80 of the computer running dnsmasq:
 
-    location /pixie {
-        proxy_pass http://127.0.0.1:PIXIE_HTTP_PORT/;
+    location /pixie/ {
+        proxy_pass http://127.0.0.1:8123/;
+    }
+
+You also need to start `collector.py` to complete the configuration of the
+clients. If run with the option `--wipe` this erases the `/etc/ethers` file
+and starts building a new one, otherwise it appends data to the current one.
+Otherwise it just append ethernet addresses to the current file.
+To have the collector work as expected, you should add the following lines
+to `nginx.conf`
+
+    location /pixie_collector/ {
+        proxy_pass http://127.0.0.1:8124/;
     }

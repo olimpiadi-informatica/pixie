@@ -26,7 +26,7 @@ dhcp && isset ${{filename}} || goto retry
 
 echo Booting from ${{filename}}
 kernel {image_method}://${{next-server}}/vmlinuz.img quiet pixie_server=${{next-server}} \
-    ip=${{ip}}::${{gateway}}:{{netmask}}::eth0:none:${{dns}} {wipe} pixie_root_size={root_size} \
+    ip=${{ip}}::${{gateway}}:${{netmask}}::eth0:none:${{dns}} {wipe} pixie_root_size={root_size} \
     pixie_swap_size={swap_size} pixie_sha224={sha224} {extra_args} || goto error
 initrd {image_method}://${{next-server}}//initrd.img || goto error
 boot || goto error
@@ -42,7 +42,7 @@ dhcp && isset ${{filename}} || goto retry
 
 echo Booting from ${{filename}}
 kernel {image_method}://${{next-server}}/vmlinuz.img quiet \
-    ip=${{ip}}::${{gateway}}:{{netmask}}::eth0:none:${{dns}} \
+    ip=${{ip}}::${{gateway}}:${{netmask}}::eth0:none:${{dns}} \
     SERVER_IP=${{next-server}}{collector_prefix} || goto error
 initrd {image_method}://${{next-server}}//doconfig.img || goto error
 boot || goto error

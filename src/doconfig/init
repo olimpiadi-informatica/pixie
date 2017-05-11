@@ -18,6 +18,8 @@ error() {
     done
 }
 
+tinycurl "http://""$SERVER_IP""/reboot_timestamp" &> /dev/null
+
 MAC=$( ip addr | grep "global eth0" -B1 | head -n1 | cut -d ' ' -f6 )
 [ -z "$MAC" ] && error "Cannot find MAC address"
 IP="unknown"

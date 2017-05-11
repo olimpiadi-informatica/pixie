@@ -37,9 +37,12 @@ build/buildroot-${BUILDROOT_VERSION}: build/buildroot-${BUILDROOT_VERSION}.tar.b
 build/buildroot-${BUILDROOT_VERSION}/output: build/buildroot-${BUILDROOT_VERSION} config/buildroot-${BUILDROOT_VERSION}.config
 	cp config/buildroot-${BUILDROOT_VERSION}.config build/buildroot-${BUILDROOT_VERSION}/.config
 	cd build/buildroot-${BUILDROOT_VERSION} && ${MAKE}
+	touch build/buildroot-${BUILDROOT_VERSION}/output
 
 build/target/initrd.img: stardust/target/x86_64-unknown-linux-musl/release/stardust build/kexec build/buildroot-${BUILDROOT_VERSION}/output src/main_initrd/init src/main_initrd/wipe.sh src/main_initrd/common.sh
 	mkdir -p build/initrd/{bin,share}
+	rm -f build/initrd/usr
+	ln -s . build/initrd/usr
 	cp src/main_initrd/init build/initrd
 	cp src/main_initrd/wipe.sh build/initrd/bin/
 	cp src/main_initrd/common.sh build/initrd/share/
@@ -57,6 +60,8 @@ build/target/doconfig.img: build/reboot build/tinycurl build/buildroot-${BUILDRO
 	cp "build/buildroot-${BUILDROOT_VERSION}/output/target/bin/busybox" build/doconfig/bin/
 	cp "build/buildroot-${BUILDROOT_VERSION}/output/target/usr/bin/dialog" build/doconfig/bin/
 	mkdir -p build/doconfig/usr/share/terminfo/l
+	ln -sf /bin build/doconfig/usr
+	ln -sf /sbin build/doconfig/usr
 	cp "build/buildroot-${BUILDROOT_VERSION}/output/target/usr/share/terminfo/l/linux" build/doconfig/usr/share/terminfo/l/
 	cd build/doconfig && find ./ | cpio -H newc -o | xz -C crc32 --x86 -e -9 > ../target/doconfig.img
 
