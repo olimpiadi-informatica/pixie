@@ -3,7 +3,7 @@ CFLAGS:=-Os -static
 NPROC:=$(shell nproc)
 
 KERNEL_VERSION:=4.11
-BUILDROOT_VERSION:=2017.02.2
+BUILDROOT_VERSION:=2017.02.10
 CC:=build/buildroot-${BUILDROOT_VERSION}/output/host/usr/bin/x86_64-buildroot-linux-musl-gcc
 
 all: build/target/vmlinuz.img build/target/undionly.kpxe build/target/doconfig.img build/target/initrd.img
