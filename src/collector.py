@@ -5,26 +5,23 @@ import sys
 import traceback
 import re
 import argparse
+import ipaddress
+import time
+import threading
+from subprocess import call
 
 from colorama import init, Fore, Style
+from flask import Flask, request
 
-import gevent
-import gevent.wsgi
-
-from gevent import monkey
 from werkzeug.exceptions import (BadRequest, HTTPException,
                                  InternalServerError, NotFound)
 from werkzeug.routing import Map, Rule, RequestRedirect
 from werkzeug.wrappers import Request, Response
 from werkzeug.wsgi import responder
 
-from subprocess import call
-
-monkey.patch_all()
-
 
 class EthersManager():
-    def __init__(self, ethers_path, static_ethers, wipe):
+    def __init__(self, ethers_path, static_ethers, wipe, ipv4):
         """
         :param ethers_path: path to the ethers file
         :param static_ethers: path to static ethers file (only when wiping)
@@ -33,6 +30,7 @@ class EthersManager():
         self.ethers_path = ethers_path
         self.wipe = wipe
         self.ethers = {}
+        self.ipv4 = ipv4
 
         EthersManager.assert_writable(self.ethers_path)
 
@@ -49,13 +47,15 @@ class EthersManager():
     @staticmethod
     def assert_writable(path):
         if not os.access(path, os.W_OK):
-            print(Fore.RED + Style.BRIGHT + "ERROR: %s is not writable" % path, file=sys.stderr)
+            print(Fore.RED + Style.BRIGHT + "ERROR: %s is not writable" %
+                  path, file=sys.stderr)
             sys.exit(1)
 
     @staticmethod
     def assert_readable(path):
         if not os.access(path, os.R_OK):
-            print(Fore.RED + Style.BRIGHT + "ERROR: %s is not readable" % path, file=sys.stderr)
+            print(Fore.RED + Style.BRIGHT + "ERROR: %s is not readable" %
+                  path, file=sys.stderr)
             sys.exit(1)
 
     def load_ethers(self, path):
@@ -66,8 +66,21 @@ class EthersManager():
         print(''.join(lines))
 
         for line in lines:
-            pieces = line.strip().split(' ')
-            if len(pieces) != 2: continue
+            if self.ipv4:
+                pieces = line.strip().split(' ')
+            else:
+                try:
+                    pieces = line.strip()
+                    groups = re.findall(
+                        r".*((?:[0-9a-f]{2}:){5}[0-9a-f]{2}).*\[([^]]+)\]", pieces)
+                    if len(groups) != 1:
+                        continue
+                    pieces = groups[0]
+                except:
+                    continue
+
+            if len(pieces) != 2:
+                continue
 
             mac, ip = pieces
             self.ethers[mac] = ip
@@ -78,15 +91,12 @@ class EthersManager():
             return False
         return True
 
-    @staticmethod
-    def check_ip_format(ip):
-        pieces = ip.split('.')
-        if len(pieces) != 4: return False
+    def check_ip_format(self, ip):
         try:
-            if not 0 <= int(pieces[0]) <= 255: return False
-            if not 0 <= int(pieces[1]) <= 255: return False
-            if not 0 <= int(pieces[2]) <= 255: return False
-            if not 0 <= int(pieces[3]) <= 255: return False
+            if self.ipv4:
+                ipaddress.IPv4Address(ip)
+            else:
+                ipaddress.IPv6Address(ip)
         except:
             return False
         return True
@@ -94,7 +104,7 @@ class EthersManager():
     def add_ether(self, mac, ip):
         if not EthersManager.check_mac_format(mac):
             return 'Invalid MAC: ' + mac
-        if not EthersManager.check_ip_format(ip):
+        if not self.check_ip_format(ip):
             return 'Invalid IP: ' + ip
         if mac in self.ethers:
             return 'MAC already present!'
@@ -105,7 +115,8 @@ class EthersManager():
         return None
 
     def print_boxed(self, lines):
-        if len(lines) == 0: return
+        if len(lines) == 0:
+            return
 
         lun = max([len(line) for line in lines])
         print('-' * (lun+4))
@@ -114,7 +125,11 @@ class EthersManager():
         print('-' * (lun+4))
 
     def export_ethers(self):
-        lines = ["%s %s" % (mac, ip) for mac,ip in self.ethers.items()]
+        if self.ipv4:
+            lines = ["%s %s" % (mac, ip) for mac, ip in self.ethers.items()]
+        else:
+            lines = ["%s,[%s],2m" %
+                     (mac, ip) for mac, ip in self.ethers.items()]
 
         print(Fore.GREEN + Style.BRIGHT + "Generated ethers file")
         self.print_boxed(lines)
@@ -130,8 +145,8 @@ class EthersManager():
     def reload_services(self):
         print(Fore.GREEN + Style.BRIGHT + "Reloading services")
 
-        print(Fore.GREEN + "SIGHUPing dnsmasq")
-        call(['killall', '-s', 'SIGHUP', 'dnsmasq'])
+        print(Fore.GREEN + "Reloading dnsmasq")
+        call(['systemctl', 'reload', 'dnsmasq.service'])
 
 
 class ScriptHandler(object):
@@ -143,30 +158,14 @@ class ScriptHandler(object):
         self.ethers_manager = ethers_manager
         self.reboot_string = 0
 
-        gevent.spawn(self.reboot_loop)
-
-        self.router = Map([
-            Rule('/contestant', methods=['GET'], endpoint='contestant'),
-            Rule('/worker', methods=['GET'], endpoint='worker'),
-            Rule('/reboot_timestamp', methods=['GET'], endpoint='reboot_timestamp')
-        ])
-
-    @responder
-    def __call__(self, environ, start_response):
+    def add_contestant(self, mac, row, col):
         try:
-            return self.wsgi_app(environ, start_response)
+            if not 1 <= int(row) <= 255:
+                raise ValueError()
+            if not 1 <= int(col) <= 255:
+                raise ValueError()
         except:
-            traceback.print_exc()
-            return InternalServerError()
-
-    def add_contestant(self, mac, row, col, response):
-        try:
-            if not 1 <= int(row) <= 255: raise
-            if not 1 <= int(col) <= 255: raise
-        except:
-            response.status_code = 400
-            response.data = "Invalid row/col: row=%s col=%s" % (row, col)
-            return
+            return "Invalid row/col: row=%s col=%s" % (row, col), 400
 
         ip = self.contestant_ip_format.replace('R', row).replace('C', col)
 
@@ -174,18 +173,16 @@ class ScriptHandler(object):
         result = self.ethers_manager.add_ether(mac, ip)
         if result:
             print(Fore.RED + result)
-            response.data = result
-            response.status_code = 400
+            return result, 400
         else:
-            response.data = ip
+            return ip
 
-    def add_worker(self, mac, num, response):
+    def add_worker(self, mac, num):
         try:
-            if not 1 <= int(num) <= 255: raise
+            if not 1 <= int(num) <= 255:
+                raise ValueError()
         except:
-            response.status_code = 400
-            response.data = "Invalid num: num=%s" % (num)
-            return
+            return "Invalid num: num=%s" % (num), 400
 
         ip = self.worker_ip_format.replace('N', num)
 
@@ -193,73 +190,73 @@ class ScriptHandler(object):
         result = self.ethers_manager.add_ether(mac, ip)
         if result:
             print(Fore.RED + result)
-            response.data = result
-            response.status_code = 400
+            return result, 400
         else:
-            response.data = ip
+            return ip
 
-    def wsgi_app(self, environ, start_response):
-        route = self.router.bind_to_environ(environ)
-        try:
-            endpoint, args = route.match()
-        except RequestRedirect as e:
-            return e
-        except HTTPException:
-            return NotFound()
-
-        request = Request(environ)
-        args = request.args
-        response = Response()
-        response.mimetype = 'text/plain'
-        response.status_code = 200
-
-        if endpoint == 'contestant':
-            if 'mac' not in args or 'row' not in args or 'col' not in args:
-                response.status_code = 400
-                response.data = 'Required query parameters: mac, row, col'
-            else:
-                mac = args['mac']
-                row = args['row']
-                col = args['col']
-                self.add_contestant(mac, row, col, response)
-
-        elif endpoint == 'worker':
-            if 'mac' not in args or 'num' not in args:
-                response.status_code = 400
-                response.data = 'Required query parameters: mac, num'
-            else:
-                mac = args['mac']
-                num = args['num']
-                self.add_worker(mac, num, response)
-
-        elif endpoint == 'reboot_timestamp':
-            response.data = str(self.reboot_string)
-
-        return response
-
-    def reboot_loop(self):
-        while True:
-            self.ethers_manager.export_ethers()
-            print(Fore.YELLOW + "Reboot index %d" % self.reboot_string)
-            self.reboot_string += 1
-            gevent.sleep(self.reboot_delay)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='pixie ip collector')
-    parser.add_argument('-c', '--contestant', help='Contestant IP format, default: 172.16.C.R', default='172.16.C.R')
-    parser.add_argument('-w', '--worker', help='Worker IP format, default: 172.17.1.N', default='172.17.1.N')
+    parser.add_argument(
+        '-c', '--contestant', help='Contestant IP format, default: fdcd::c:R:C', default='fdcd::c:R:C')
+    parser.add_argument(
+        '-w', '--worker', help='Worker IP format, default: fdcd::d:0:N', default='fdcd::d:0:N')
     parser.add_argument('-s', '--static', help='Path to static ethers')
+    parser.add_argument('-4', '--ipv4', action='store_true', help='IPv4 mode')
     parser.add_argument('--wipe', help='Wipe ethers file and start from static (or from scratch)',
                         action='store_true', default=False)
-    parser.add_argument('-e', '--ethers', help='Path to ethers file, default: /etc/ethers', default='/etc/ethers')
-    parser.add_argument('-l', '--listen', help='Address to listen to, default: 0.0.0.0', default='0.0.0.0')
-    parser.add_argument('-p', '--port', help='Port to listen to, default: 8080', default=8080, type=int)
-    parser.add_argument('-r', '--reboot-delay', help='Delay between reboot requests', default=30, type=float)
+    parser.add_argument(
+        '-e', '--ethers', help='Path to ethers file, default: /etc/dnsmasq.d/ethers.conf', default='/etc/dnsmasq.d/ethers.conf')
+    parser.add_argument(
+        '-l', '--listen', help='Address to listen to, default: ::', default='::')
+    parser.add_argument(
+        '-p', '--port', help='Port to listen to, default: 8124', default=8124, type=int)
+    parser.add_argument('-r', '--reboot-delay',
+                        help='Delay between reboot requests', default=30, type=float)
     args = parser.parse_args()
 
     init(autoreset=True)
 
-    ethersManager = EthersManager(args.ethers, args.static, args.wipe)
-    server = gevent.wsgi.WSGIServer((args.listen, args.port), ScriptHandler(args.contestant, args.worker,
-                                                                            args.reboot_delay, ethersManager))
-    gevent.spawn(server.serve_forever).join()
+    ethers_manager = EthersManager(
+        args.ethers, args.static, args.wipe, args.ipv4)
+    script_handler = ScriptHandler(args.contestant, args.worker,
+                                   args.reboot_delay, ethers_manager)
+    reboot_string = 0
+
+    app = Flask(__name__)
+
+    @app.route("/contestant", methods=["GET"])
+    def GET_contestant():
+        args = request.args
+        if 'mac' not in args or 'row' not in args or 'col' not in args:
+            return 'Required query parameters: mac, row, col', 400
+        else:
+            mac = args['mac']
+            row = args['row']
+            col = args['col']
+            return script_handler.add_contestant(mac, row, col)
+
+    @app.route("/worker", methods=["GET"])
+    def GET_worker():
+        args = request.args
+        if 'mac' not in args or 'num' not in args:
+            return 'Required query parameters: mac, num', 400
+        else:
+            mac = args['mac']
+            num = args['num']
+            return script_handler.add_worker(mac, num)
+
+    @app.route("/reboot_timestamp", methods=["GET"])
+    def GET_reboot_timestamp():
+        return str(reboot_string)
+
+    def reboot_loop():
+        global reboot_string
+        while True:
+            ethers_manager.export_ethers()
+            print(Fore.YELLOW + "Reboot index %d" % reboot_string)
+            reboot_string += 1
+            time.sleep(args.reboot_delay)
+
+    threading.Thread(target=reboot_loop).start()
+    app.run(threaded=True, host=args.listen, port=args.port)
