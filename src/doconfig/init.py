@@ -24,7 +24,7 @@ if run("dialog --defaultno --yesno \"Am I a worker?\" 5 19", shell=True, stderr=
 else:
     while True:
         num = run("dialog --nocancel --inputbox \"Enter number [1-255]:\" 8 22", shell=True, stderr=PIPE).stderr.decode()
-        url = "http://" + SERVER_IP + "/collector/worker?mac=12:23:00:00:00:00&num=" + num
+        url = "http://" + SERVER_IP + "/collector/worker?mac=" + mac + "&num=" + num
         r = requests.get(url)
         if r.status_code != 200:
             print("Error getting ip")
@@ -34,6 +34,7 @@ else:
             print(ip)
             break
 
+run("dialog --infobox \"Done, waiting to reboot\nI am " + ip + "\" 4 27", shell=True)
 
 ts = ''
 r = requests.get("http://" + SERVER_IP + "/collector/reboot_timestamp")
