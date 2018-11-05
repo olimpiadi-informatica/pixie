@@ -128,7 +128,7 @@ class EthersManager():
         if self.ipv4:
             lines = ["%s %s" % (mac, ip) for mac, ip in self.ethers.items()]
         else:
-            lines = ["%s,[%s],2m" %
+            lines = ["%s,[%s],5m" %
                      (mac, ip) for mac, ip in self.ethers.items()]
 
         print(Fore.GREEN + Style.BRIGHT + "Generated ethers file")
@@ -140,13 +140,11 @@ class EthersManager():
 
         print(Fore.GREEN + "%s file written" % self.ethers_path)
 
-        self.reload_services()
-
     def reload_services(self):
         print(Fore.GREEN + Style.BRIGHT + "Reloading services")
 
         print(Fore.GREEN + "Reloading dnsmasq")
-        call(['systemctl', 'reload', 'dnsmasq.service'])
+        call(['systemctl', 'restart', 'dnsmasq.service'])
 
 
 class ScriptHandler(object):
@@ -256,7 +254,12 @@ if __name__ == '__main__':
             ethers_manager.export_ethers()
             print(Fore.YELLOW + "Reboot index %d" % reboot_string)
             reboot_string += 1
-            time.sleep(args.reboot_delay)
+            PRE_SLEEP = 2
+            print(Fore.YELLOW +
+                  f"Wating {PRE_SLEEP}s before restarting dnsmasq")
+            time.sleep(PRE_SLEEP)
+            ethers_manager.reload_services()
+            time.sleep(args.reboot_delay - PRE_SLEEP)
 
     threading.Thread(target=reboot_loop).start()
     app.run(threaded=True, host=args.listen, port=args.port)
