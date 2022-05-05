@@ -1,0 +1,14 @@
+[package]
+edition = "2021"
+name = "uefi_app"
+version = "0.1.0"
+[dependencies]
+uefi-services = "0.12.0"
+
+[dependencies.arrayvec]
+default-features = false
+version = "0.7.2"
+
+[dependencies.uefi]
+features = ["exts"]
+version = "0.15.0"

@@ -1,7 +1,0 @@
-{
-    "subnet": "10.0.0.0/8",
-    "hashes": ["/bin/ls"],
-    "swap_size": 8,
-    "root_size": 16,
-    "extra_args": "test2"
-}

@@ -1,6 +1,0 @@
-#!ipxe
-
-:retry_dhcp
-dhcp && isset ${filename} || goto retry_dhcp
-echo Booting from ${filename}
-chain ${filename}
