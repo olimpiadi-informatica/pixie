@@ -12,3 +12,5 @@ cp uefi-reboot-skip/target/x86_64-unknown-uefi/release/uefi_app.efi storage/http
 
 mkdir -p storage/tftpboot
 [ -f storage/tftpboot/ipxe.efi ] || wget https://boot.ipxe.org/ipxe.efi -O storage/tftpboot/ipxe.efi
+
+
