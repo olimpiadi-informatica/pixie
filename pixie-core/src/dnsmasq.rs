@@ -1,6 +1,7 @@
 use anyhow::{ensure, Context, Result};
 use interfaces::{HardwareAddr, Interface};
 use ipnet::Ipv4Net;
+use serde_derive::Deserialize;
 use std::{collections::HashMap, net::Ipv4Addr, ops::Range, path::Path};
 
 #[derive(Debug, Eq, PartialEq)]
@@ -21,7 +22,7 @@ pub struct FixedNet {
     pub hostname: String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Deserialize)]
 pub struct Net {
     /// If None, this represents a proxy-dhcp subnet; the server IP will be deduced by the
     /// first available address on the specified interface.
@@ -30,7 +31,7 @@ pub struct Net {
     pub interface: String,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Deserialize)]
 pub struct Config {
     pub networks: Vec<Net>,
 }

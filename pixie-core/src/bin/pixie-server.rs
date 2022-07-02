@@ -3,8 +3,14 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use pixie_core::dnsmasq::{Config, Net};
+use pixie_core::dnsmasq::Config;
 use pixie_core::http;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct PixieConfig {
+    dnsmasq: Config,
+}
 
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
@@ -38,16 +44,16 @@ fn main() -> Result<()> {
         anyhow::ensure!(path.is_file(), "{} not found", path.display());
     }
 
-    let config = Config {
-        networks: vec![Net {
-            dhcp_config: None,
-            interface: "enp67s0f0".into(),
-        }],
-    };
+    let config_path = options.storage_dir.join("config.yaml");
+    let config = std::fs::File::open(&config_path)
+        .with_context(|| format!("open config file: {}", config_path.display()))?;
+    let config: PixieConfig = serde_yaml::from_reader(&config)
+        .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
     println!(
         "{}",
         config
+            .dnsmasq
             .to_dnsmasq_config(&options.storage_dir)
             .with_context(|| "Error generating dnsmasq config")?
     );
