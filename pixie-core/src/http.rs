@@ -9,8 +9,8 @@ use crate::shared::{Group, RegistrationInfo};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    listen_address: String,
-    listen_port: u16,
+    pub listen_address: String,
+    pub listen_port: u16,
 }
 
 #[get("/boot.ipxe")]

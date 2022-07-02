@@ -54,7 +54,7 @@ fn main() -> Result<()> {
         "{}",
         config
             .dnsmasq
-            .to_dnsmasq_config(&options.storage_dir)
+            .to_dnsmasq_config(&options.storage_dir, &config.http)
             .with_context(|| "Error generating dnsmasq config")?
     );
 

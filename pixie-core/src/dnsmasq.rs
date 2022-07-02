@@ -37,7 +37,11 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn to_dnsmasq_config(&self, storage_dir: &Path) -> Result<String> {
+    pub fn to_dnsmasq_config(
+        &self,
+        storage_dir: &Path,
+        http_config: &crate::http::Config,
+    ) -> Result<String> {
         ensure!(self.networks.len() == 1, "Not implemented: >1 network");
 
         let net = &self.networks[0];
@@ -68,6 +72,7 @@ impl Config {
         let tftp_root = storage_dir.join("tftpboot").to_str().unwrap().to_owned();
 
         let netid = 0;
+        let server_port = http_config.listen_port;
 
         Ok(format!(
             r#"
@@ -76,7 +81,7 @@ impl Config {
 ## net0
 dhcp-range=set:net{netid},{ip},proxy
 dhcp-boot=tag:pxe,tag:net{netid},ipxe.efi,,{ip}
-dhcp-boot=tag:ipxe,tag:net{netid},http://{ip}/boot.ipxe
+dhcp-boot=tag:ipxe,tag:net{netid},http://{ip}:{server_port}/boot.ipxe
 interface={name}
 
 ### Common configuration
