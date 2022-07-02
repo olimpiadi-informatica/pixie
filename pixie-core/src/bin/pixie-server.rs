@@ -9,7 +9,7 @@ use pixie_core::http;
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
     /// Folder in which files will be stored. Must already contain a tftpboot/ipxe.efi file.
-    #[clap(short, long)]
+    #[clap(short, long, default_value = "./storage")]
     storage_dir: PathBuf,
 }
 
@@ -19,12 +19,11 @@ fn main() -> Result<()> {
     // Validate the configuration.
     let mut options = PixieOptions::parse();
 
-    options.storage_dir = std::fs::canonicalize(&options.storage_dir).with_context(|| {
-        format!(
-            "storage dir is invalid: {}",
-            options.storage_dir.to_string_lossy()
-        )
-    })?;
+    std::fs::create_dir_all(&options.storage_dir)
+        .with_context(|| format!("create storage dir: {}", options.storage_dir.display()))?;
+
+    options.storage_dir = std::fs::canonicalize(&options.storage_dir)
+        .with_context(|| format!("storage dir is invalid: {}", options.storage_dir.display()))?;
 
     anyhow::ensure!(
         options.storage_dir.to_str().is_some(),
@@ -36,10 +35,7 @@ fn main() -> Result<()> {
         for path_piece in file_path {
             path = path.join(path_piece);
         }
-        anyhow::ensure!(
-            path.is_file(),
-            format!("{} not found", path.to_string_lossy())
-        );
+        anyhow::ensure!(path.is_file(), "{} not found", path.display());
     }
 
     let config = Config {
