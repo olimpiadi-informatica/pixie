@@ -1,7 +1,9 @@
-use std::{path::PathBuf, time::SystemTime};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
 use actix_files::Files;
-use actix_web::{get, middleware::Logger, web::Json, App, HttpRequest, HttpServer, Responder};
+use actix_web::{
+    get, middleware::Logger, web::Data, web::Json, App, HttpRequest, HttpServer, Responder,
+};
 use anyhow::Result;
 use serde::Deserialize;
 
@@ -13,16 +15,18 @@ pub struct Config {
     pub listen_port: u16,
 }
 
-#[get("/boot.ipxe")]
-async fn boot(_: HttpRequest) -> impl Responder {
-    /*
-    if let Some(val) = req.peer_addr() {
-        println!("Address {:?}", val.ip());
-    };
-    */
+#[derive(Debug, Deserialize)]
+pub struct BootConfig {
+    pub current: String,
+    pub modes: HashMap<String, String>,
+}
 
-    "#!ipxe
-chain /static/reboot.efi"
+#[derive(Clone, Debug)]
+struct BootString(String);
+
+#[get("/boot.ipxe")]
+async fn boot(_: HttpRequest, boot_string: Data<BootString>) -> impl Responder {
+    boot_string.0.clone()
 }
 
 #[get("/get_registration_info")]
@@ -48,11 +52,13 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
     Json(ans)
 }
 
-async fn main(storage_dir: PathBuf, config: Config) -> Result<()> {
+async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Result<()> {
     let static_files = storage_dir.join("httpstatic").to_owned();
+    let boot_string = BootString(boot_string);
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
+            .app_data(Data::new(boot_string.clone()))
             .service(Files::new("/static", &static_files))
             .service(boot)
             .service(get_registration_info)
@@ -64,6 +70,6 @@ async fn main(storage_dir: PathBuf, config: Config) -> Result<()> {
 }
 
 #[actix_web::main]
-pub async fn main_sync(storage_dir: PathBuf, config: Config) -> Result<()> {
-    main(storage_dir, config).await
+pub async fn main_sync(storage_dir: PathBuf, config: Config, boot_string: String) -> Result<()> {
+    main(storage_dir, config, boot_string).await
 }

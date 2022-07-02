@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 
 use pixie_core::http;
@@ -10,6 +10,7 @@ use serde::Deserialize;
 pub struct PixieConfig {
     dnsmasq: pixie_core::dnsmasq::Config,
     http: pixie_core::http::Config,
+    boot: pixie_core::http::BootConfig,
 }
 
 #[derive(Parser, Debug)]
@@ -58,7 +59,12 @@ fn main() -> Result<()> {
             .with_context(|| "Error generating dnsmasq config")?
     );
 
-    http::main_sync(options.storage_dir, config.http)?;
+    let boot_string = config
+        .boot
+        .modes
+        .get(&config.boot.current)
+        .ok_or(anyhow!("mode {} not found", config.boot.current))?;
+    http::main_sync(options.storage_dir, config.http, boot_string.clone())?;
 
     Ok(())
 }

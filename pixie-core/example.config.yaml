@@ -4,3 +4,9 @@ dnsmasq:
 http:
   listen_address: "0.0.0.0"
   listen_port: 8080
+boot:
+  current: reboot
+  modes:
+    reboot: |
+      #!ipxe
+      chain /static/reboot.efi
