@@ -36,7 +36,7 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
             },
         ],
         candidate_group: "contestants".into(),
-        candidate_position: vec![2, t as u32 % 10],
+        candidate_position: vec![2, (t as u32 % 10) as u8],
     };
     Json(ans)
 }
