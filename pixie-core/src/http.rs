@@ -3,8 +3,15 @@ use std::{path::PathBuf, time::SystemTime};
 use actix_files::Files;
 use actix_web::{get, middleware::Logger, web::Json, App, HttpRequest, HttpServer, Responder};
 use anyhow::Result;
+use serde::Deserialize;
 
 use crate::shared::{Group, RegistrationInfo};
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    listen_address: String,
+    listen_port: u16,
+}
 
 #[get("/boot.ipxe")]
 async fn boot(_: HttpRequest) -> impl Responder {
@@ -41,7 +48,7 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
     Json(ans)
 }
 
-async fn main(storage_dir: PathBuf) -> Result<()> {
+async fn main(storage_dir: PathBuf, config: Config) -> Result<()> {
     let static_files = storage_dir.join("httpstatic").to_owned();
     HttpServer::new(move || {
         App::new()
@@ -50,13 +57,13 @@ async fn main(storage_dir: PathBuf) -> Result<()> {
             .service(boot)
             .service(get_registration_info)
     })
-    .bind(("0.0.0.0", 80))?
+    .bind((config.listen_address, config.listen_port))?
     .run()
     .await?;
     Ok(())
 }
 
 #[actix_web::main]
-pub async fn main_sync(storage_dir: PathBuf) -> Result<()> {
-    main(storage_dir).await
+pub async fn main_sync(storage_dir: PathBuf, config: Config) -> Result<()> {
+    main(storage_dir, config).await
 }

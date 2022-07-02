@@ -3,13 +3,13 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use pixie_core::dnsmasq::Config;
 use pixie_core::http;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct PixieConfig {
-    dnsmasq: Config,
+    dnsmasq: pixie_core::dnsmasq::Config,
+    http: pixie_core::http::Config,
 }
 
 #[derive(Parser, Debug)]
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             .with_context(|| "Error generating dnsmasq config")?
     );
 
-    http::main_sync(options.storage_dir)?;
+    http::main_sync(options.storage_dir, config.http)?;
 
     Ok(())
 }
