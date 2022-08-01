@@ -1008,6 +1008,7 @@ dependencies = [
  "blake3",
  "clap",
  "pixie-core",
+ "serde_json",
 ]
 
 [[package]]
