@@ -1,7 +1,8 @@
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
 };
 
 use anyhow::{ensure, Result};
@@ -65,9 +66,84 @@ impl FileSaver for LocalFileSaver {
     }
 }
 
-fn get_ext4_chunks(_path: &str) -> Result<Option<Vec<ChunkInfo>>> {
-    // TODO
-    Ok(None)
+fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
+    let child = Command::new("dumpe2fs")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let stdout = child.stdout.unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    let block_size: usize = loop {
+        let line = match lines.next() {
+            Some(Ok(x)) => x,
+            Some(Err(e)) => return Err(e.into()),
+            None => return Ok(None),
+        };
+
+        if let Some(value) = line.strip_prefix("Block size:") {
+            break value.trim().parse().unwrap();
+        }
+    };
+    dbg!(block_size);
+
+    let mut ans = Vec::new();
+
+    loop {
+        let (mut begin, end): (usize, usize) = loop {
+            let line = match lines.next() {
+                Some(Ok(x)) => x,
+                Some(Err(e)) => return Err(e.into()),
+                None => return Ok(Some(ans)),
+            };
+
+            if let Some(s) = line.strip_prefix("Group") {
+                let a = s.find('(').unwrap();
+                let b = s.find('-').unwrap();
+                let c = s.find(')').unwrap();
+                break (
+                    s[a + 8..b].parse().unwrap(),
+                    s[b + 1..c].parse::<usize>().unwrap() + 1,
+                );
+            }
+        };
+
+        loop {
+            let line = lines.next().unwrap()?;
+
+            if let Some(s) = line.strip_prefix("  Free blocks: ") {
+                if !s.is_empty() {
+                    for x in s.split(", ") {
+                        let (a, b) = if let Some(m) = x.find('-') {
+                            let a: usize = x[..m].parse().unwrap();
+                            let b: usize = x[m + 1..].parse().unwrap();
+                            (a, b + 1)
+                        } else {
+                            let a = x.parse().unwrap();
+                            (a, a + 1)
+                        };
+
+                        if begin < a {
+                            ans.push(ChunkInfo {
+                                start: block_size * begin,
+                                size: block_size * (a - begin),
+                            });
+                        }
+                        begin = b;
+                    }
+                }
+                if begin < end {
+                    ans.push(ChunkInfo {
+                        start: block_size * begin,
+                        size: block_size * (end - begin),
+                    });
+                }
+                break;
+            }
+        }
+    }
 }
 
 fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
