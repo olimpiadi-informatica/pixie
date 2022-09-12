@@ -194,7 +194,7 @@ fn main() -> Result<()> {
                 let hash = file_saver.save_chunk(&data)?;
                 Ok(pixie_core::shared::Segment {
                     hash,
-                    begin: chnk.start,
+                    start: chnk.start,
                     size: chnk.size,
                 })
             })

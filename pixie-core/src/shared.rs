@@ -27,7 +27,7 @@ pub type Offset = usize;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub hash: ChunkHash,
-    pub begin: Offset,
+    pub start: Offset,
     pub size: usize,
 }
 
