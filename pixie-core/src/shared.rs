@@ -23,9 +23,17 @@ pub type ChunkHash = [u8; OUT_LEN];
 /// The offset of the chunk of a file.
 pub type Offset = usize;
 
+/// Describes one segment from a file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Segment {
+    pub hash: ChunkHash,
+    pub begin: Offset,
+    pub size: usize,
+}
+
 /// A file is stored as a list of chunks and offsets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
     pub name: PathBuf,
-    pub chunks: Vec<(ChunkHash, Offset)>,
+    pub chunks: Vec<Segment>,
 }

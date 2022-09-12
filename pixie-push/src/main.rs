@@ -192,7 +192,11 @@ fn main() -> Result<()> {
                 let mut data = vec![0; chnk.size];
                 file.read_exact(&mut data)?;
                 let hash = file_saver.save_chunk(&data)?;
-                Ok((hash, chnk.start))
+                Ok(pixie_core::shared::Segment {
+                    hash,
+                    begin: chnk.start,
+                    size: chnk.size,
+                })
             })
             .collect();
 
