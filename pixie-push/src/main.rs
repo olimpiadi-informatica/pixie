@@ -91,6 +91,19 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
 
     let mut ans = Vec::new();
 
+    let mut add = |b, e| {
+        let mut b = b * block_size;
+        let e = e * block_size;
+
+        while b < e {
+            ans.push(ChunkInfo {
+                start: b,
+                size: CHUNK_SIZE.min(e - b),
+            });
+            b += CHUNK_SIZE;
+        }
+    };
+
     loop {
         let (mut begin, end): (usize, usize) = loop {
             let line = match lines.next() {
@@ -126,19 +139,13 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
                         };
 
                         if begin < a {
-                            ans.push(ChunkInfo {
-                                start: block_size * begin,
-                                size: block_size * (a - begin),
-                            });
+                            add(begin, a);
                         }
                         begin = b;
                     }
                 }
                 if begin < end {
-                    ans.push(ChunkInfo {
-                        start: block_size * begin,
-                        size: block_size * (end - begin),
-                    });
+                    add(begin, end);
                 }
                 break;
             }
