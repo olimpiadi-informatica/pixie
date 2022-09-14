@@ -54,12 +54,16 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
 
 async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Result<()> {
     let static_files = storage_dir.join("httpstatic");
+    let images = storage_dir.join("images");
+    let chunks = storage_dir.join("chunks");
     let boot_string = BootString(boot_string);
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .app_data(Data::new(boot_string.clone()))
             .service(Files::new("/static", &static_files))
+            .service(Files::new("/image", &images))
+            .service(Files::new("/chunk", &chunks))
             .service(boot)
             .service(get_registration_info)
     })
