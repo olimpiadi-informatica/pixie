@@ -65,6 +65,10 @@ fn main() -> Result<()> {
     let info = file_fetcher.fetch_image()?;
 
     for pixie_core::shared::File { name, chunks } in info {
+        if let Some(prefix) = name.parent() {
+            std::fs::create_dir_all(prefix)?;
+        }
+
         let mut file = File::options()
             .read(true)
             .write(true)
