@@ -7,7 +7,7 @@ use actix_web::{
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::shared::{Group, RegistrationInfo};
+use pixie_shared::{Group, RegistrationInfo};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -53,7 +53,7 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
 }
 
 async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Result<()> {
-    let static_files = storage_dir.join("httpstatic").to_owned();
+    let static_files = storage_dir.join("httpstatic");
     let boot_string = BootString(boot_string);
     HttpServer::new(move || {
         App::new()

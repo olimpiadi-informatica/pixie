@@ -8,7 +8,7 @@ use std::{
 use anyhow::{ensure, Result};
 use clap::Parser;
 
-use pixie_core::shared::{ChunkHash, Offset};
+use pixie_shared::{ChunkHash, Offset, Segment};
 
 const CHUNK_SIZE: usize = 1 << 22;
 
@@ -22,7 +22,7 @@ struct Options {
 
 trait FileSaver {
     fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash>;
-    fn save_image(&self, info: Vec<pixie_core::shared::File>) -> Result<()>;
+    fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()>;
 }
 
 #[derive(Debug)]
@@ -59,7 +59,7 @@ impl FileSaver for LocalFileSaver {
         Ok(hash.as_bytes().to_owned())
     }
 
-    fn save_image(&self, info: Vec<pixie_core::shared::File>) -> Result<()> {
+    fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()> {
         let info_path = Path::new(&self.path).join("info");
         std::fs::write(info_path, serde_json::to_string(&info)?)?;
         Ok(())
@@ -174,8 +174,8 @@ fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
 fn main() -> Result<()> {
     let args = Options::parse();
 
-    ensure!(args.sources.len() > 0, "Specify at least one source");
-    ensure!(args.destination.len() > 0, "Specify a destination");
+    ensure!(!args.sources.is_empty(), "Specify at least one source");
+    ensure!(!args.destination.is_empty(), "Specify a destination");
 
     let file_saver: Box<dyn FileSaver> =
         if args.destination.starts_with("http://") || args.destination.starts_with("https://") {
@@ -184,7 +184,7 @@ fn main() -> Result<()> {
             Box::new(LocalFileSaver::new(&args.destination)?)
         };
 
-    let mut info = Vec::<pixie_core::shared::File>::new();
+    let mut info = Vec::new();
 
     // TODO(veluca): parallelize.
     for s in args.sources {
@@ -199,7 +199,7 @@ fn main() -> Result<()> {
                 let mut data = vec![0; chnk.size];
                 file.read_exact(&mut data)?;
                 let hash = file_saver.save_chunk(&data)?;
-                Ok(pixie_core::shared::Segment {
+                Ok(Segment {
                     hash,
                     start: chnk.start,
                     size: chnk.size,
@@ -207,7 +207,7 @@ fn main() -> Result<()> {
             })
             .collect();
 
-        info.push(pixie_core::shared::File {
+        info.push(pixie_shared::File {
             name: Path::new(&s).to_owned(),
             chunks: chunks?,
         });

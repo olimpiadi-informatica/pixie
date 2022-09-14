@@ -8,7 +8,7 @@ use std::{
 use anyhow::{ensure, Result};
 use clap::Parser;
 
-use pixie_core::shared::ChunkHash;
+use pixie_shared::{ChunkHash, Segment};
 
 #[derive(Parser, Debug)]
 struct Options {
@@ -18,7 +18,7 @@ struct Options {
 
 trait FileFetcher {
     fn fetch_chunk(&self, hash: ChunkHash) -> Result<Vec<u8>>;
-    fn fetch_image(&self) -> Result<Vec<pixie_core::shared::File>>;
+    fn fetch_image(&self) -> Result<Vec<pixie_shared::File>>;
 }
 
 struct LocalFileFetcher {
@@ -42,7 +42,7 @@ impl FileFetcher for LocalFileFetcher {
         Ok(data)
     }
 
-    fn fetch_image(&self) -> Result<Vec<pixie_core::shared::File>> {
+    fn fetch_image(&self) -> Result<Vec<pixie_shared::File>> {
         let info_path = Path::new(&self.path).join("info");
         let json = std::fs::read(info_path)?;
         let files = serde_json::from_str(std::str::from_utf8(&json)?)?;
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
 
     let info = file_fetcher.fetch_image()?;
 
-    for pixie_core::shared::File { name, chunks } in info {
+    for pixie_shared::File { name, chunks } in info {
         if let Some(prefix) = name.parent() {
             std::fs::create_dir_all(prefix)?;
         }
@@ -75,7 +75,7 @@ fn main() -> Result<()> {
             .create(true)
             .open(&name)?;
 
-        for pixie_core::shared::Segment { hash, start, size } in chunks {
+        for Segment { hash, start, size } in chunks {
             let mut data = vec![0; size];
             file.seek(SeekFrom::Start(start as u64))?;
             match file.read_exact(&mut data) {

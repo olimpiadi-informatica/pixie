@@ -63,7 +63,7 @@ fn main() -> Result<()> {
         .boot
         .modes
         .get(&config.boot.current)
-        .ok_or(anyhow!("mode {} not found", config.boot.current))?;
+        .ok_or_else(|| anyhow!("mode {} not found", config.boot.current))?;
     http::main_sync(options.storage_dir, config.http, boot_string.clone())?;
 
     Ok(())

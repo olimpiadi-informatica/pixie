@@ -12,6 +12,6 @@ serde_json = "*"
 features = ["derive"]
 version = "3.2.8"
 
-[dependencies.pixie-core]
-path = "../pixie-core"
+[dependencies.pixie-shared]
+path = "../pixie-shared"
 version = "0.1.0"

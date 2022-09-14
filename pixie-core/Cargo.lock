@@ -996,10 +996,20 @@ dependencies = [
  "env_logger",
  "interfaces",
  "ipnet",
+ "pixie-shared",
  "serde",
  "serde_derive",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "pixie-shared"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_derive",
 ]
 
 [[package]]
