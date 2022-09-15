@@ -1,14 +1,20 @@
-use std::{collections::HashMap, io, path::PathBuf, time::SystemTime};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{self, Write},
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use actix_files::Files;
 use actix_web::{
-    get, middleware::Logger, post, web::Bytes, web::Data, web::Json, web::Path, App, HttpRequest,
-    HttpServer, Responder,
+    get, http::StatusCode, middleware::Logger, post, web::Bytes, web::Data, web::Json, web::Path,
+    App, HttpServer, Responder,
 };
 use anyhow::Result;
 use serde::Deserialize;
 
-use pixie_shared::{Group, RegistrationInfo};
+use pixie_shared::{Group, RegistrationInfo, Station};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -28,15 +34,18 @@ struct BootString(String);
 #[derive(Clone, Debug)]
 struct StorageDir(PathBuf);
 
+#[derive(Clone, Debug)]
+struct RegisteredFile(PathBuf);
+
 #[get("/boot.ipxe")]
-async fn boot(_: HttpRequest, boot_string: Data<BootString>) -> impl Responder {
+async fn boot(boot_string: Data<BootString>) -> impl Responder {
     boot_string.0.clone()
 }
 
 #[get("/get_registration_info")]
-async fn get_registration_info(_: HttpRequest) -> impl Responder {
+async fn get_registration_info() -> impl Responder {
     let t = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_micros();
     let ans = RegistrationInfo {
@@ -54,6 +63,29 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
         candidate_position: vec![2, (t as u32 % 10) as u8],
     };
     Json(ans)
+}
+
+#[post("/register")]
+async fn register(
+    body: Bytes,
+    registered_file: Data<RegisteredFile>,
+) -> io::Result<impl Responder> {
+    let body = body.to_vec();
+    if let Ok(s) = std::str::from_utf8(&body) {
+        if let Ok(data) = serde_json::from_str::<Station>(s) {
+            let mut file = File::options()
+                .append(true)
+                .create(true)
+                .open(&registered_file.0)?;
+
+            writeln!(file, "{}", serde_json::to_string(&data)?)?;
+            return Ok("".customize());
+        }
+    }
+
+    Ok("Invalid payload"
+        .customize()
+        .with_status(StatusCode::BAD_REQUEST))
 }
 
 #[post("/chunk")]
@@ -82,11 +114,14 @@ async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Resu
     let images = storage_dir.join("images");
     let chunks = storage_dir.join("chunks");
     let boot_string = BootString(boot_string);
+    let unix_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let registered_file = RegisteredFile(storage_dir.join(format!("registered_{}", unix_time)));
     let storage_dir = StorageDir(storage_dir);
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .app_data(Data::new(boot_string.clone()))
+            .app_data(Data::new(registered_file.clone()))
             .app_data(Data::new(storage_dir.clone()))
             .service(upload_chunk)
             .service(upload_image)
@@ -95,6 +130,7 @@ async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Resu
             .service(Files::new("/chunk", &chunks))
             .service(boot)
             .service(get_registration_info)
+            .service(register)
     })
     .bind((config.listen_address, config.listen_port))?
     .run()

@@ -37,3 +37,16 @@ pub struct File {
     pub name: PathBuf,
     pub chunks: Vec<Segment>,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum StationKind {
+    Worker,
+    NonWorker,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Station {
+    pub kind: StationKind,
+    pub row: u32,
+    pub col: u32,
+}
