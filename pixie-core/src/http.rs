@@ -56,7 +56,7 @@ async fn get_registration_info(_: HttpRequest) -> impl Responder {
     Json(ans)
 }
 
-#[post("/upload_chunk")]
+#[post("/chunk")]
 async fn upload_chunk(body: Bytes, storage_dir: Data<StorageDir>) -> io::Result<impl Responder> {
     let body = body.to_vec();
     let hash = blake3::hash(&body);
@@ -65,7 +65,7 @@ async fn upload_chunk(body: Bytes, storage_dir: Data<StorageDir>) -> io::Result<
     Ok("")
 }
 
-#[post("/upload_image/{name}")]
+#[post("/image/{name}")]
 async fn upload_image(
     name: Path<String>,
     body: Bytes,
@@ -88,13 +88,13 @@ async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Resu
             .wrap(Logger::default())
             .app_data(Data::new(boot_string.clone()))
             .app_data(Data::new(storage_dir.clone()))
+            .service(upload_chunk)
+            .service(upload_image)
             .service(Files::new("/static", &static_files))
             .service(Files::new("/image", &images))
             .service(Files::new("/chunk", &chunks))
             .service(boot)
             .service(get_registration_info)
-            .service(upload_chunk)
-            .service(upload_image)
     })
     .bind((config.listen_address, config.listen_port))?
     .run()

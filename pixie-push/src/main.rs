@@ -79,7 +79,7 @@ impl RemoteFileSaver {
 
 impl FileSaver for RemoteFileSaver {
     fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
-        let url = Url::parse(&self.url)?.join("/upload_chunk")?;
+        let url = Url::parse(&self.url)?.join("/chunk")?;
         let client = Client::new();
         let resp = client.post(url).body(data.to_owned()).send()?;
         ensure!(
