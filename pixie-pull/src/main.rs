@@ -105,7 +105,6 @@ fn main() -> Result<()> {
         };
 
     let info = file_fetcher.fetch_image()?;
-    dbg!(&info);
 
     for pixie_shared::File { name, chunks } in info {
         if let Some(prefix) = name.parent() {

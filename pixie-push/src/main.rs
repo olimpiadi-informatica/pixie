@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{ensure, Result};
 use clap::Parser;
+use reqwest::{blocking::Client, Url};
 
 use pixie_shared::{ChunkHash, Offset, Segment};
 
@@ -66,6 +67,42 @@ impl FileSaver for LocalFileSaver {
     }
 }
 
+struct RemoteFileSaver {
+    url: String,
+}
+
+impl RemoteFileSaver {
+    fn new(url: String) -> Self {
+        Self { url }
+    }
+}
+
+impl FileSaver for RemoteFileSaver {
+    fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
+        let url = Url::parse(&self.url)?.join("/upload_chunk")?;
+        let client = Client::new();
+        let resp = client.post(url).body(data.to_owned()).send()?;
+        ensure!(
+            resp.status().is_success(),
+            "status ({}) is not success",
+            resp.status().as_u16(),
+        );
+        let hash = blake3::hash(data);
+        Ok(hash.as_bytes().to_owned())
+    }
+
+    fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()> {
+        let client = Client::new();
+        let data = serde_json::to_string(&info)?;
+        let resp = client.post(&self.url).body(data).send()?;
+        ensure!(
+            resp.status().is_success(),
+            "status ({}) is not success",
+            resp.status().as_u16(),
+        );
+        Ok(())
+    }
+}
 fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     let child = Command::new("dumpe2fs")
         .arg(path)
@@ -179,7 +216,7 @@ fn main() -> Result<()> {
 
     let file_saver: Box<dyn FileSaver> =
         if args.destination.starts_with("http://") || args.destination.starts_with("https://") {
-            todo!("implement remote file saver")
+            Box::new(RemoteFileSaver::new(args.destination))
         } else {
             Box::new(LocalFileSaver::new(&args.destination)?)
         };
