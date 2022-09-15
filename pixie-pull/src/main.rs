@@ -50,6 +50,48 @@ impl FileFetcher for LocalFileFetcher {
     }
 }
 
+struct RemoteFileFetcher {
+    url: String,
+}
+
+impl RemoteFileFetcher {
+    fn new(url: String) -> Self {
+        RemoteFileFetcher { url }
+    }
+}
+
+impl FileFetcher for RemoteFileFetcher {
+    fn fetch_chunk(&self, hash: ChunkHash) -> Result<Vec<u8>> {
+        let mut hex = String::new();
+        for byte in hash {
+            write!(hex, "{:02x}", byte)?;
+        }
+        let url = reqwest::Url::parse(&self.url)?
+            .join("/chunk/")?
+            .join(&hex)?;
+        let resp = reqwest::blocking::get(url)?;
+        ensure!(
+            resp.status().is_success(),
+            "status ({}) is not success",
+            resp.status().as_u16(),
+        );
+        let body = resp.bytes()?;
+        Ok(body.to_vec())
+    }
+
+    fn fetch_image(&self) -> Result<Vec<pixie_shared::File>> {
+        let resp = reqwest::blocking::get(&self.url)?;
+        ensure!(
+            resp.status().is_success(),
+            "status ({}) is not success",
+            resp.status().as_u16()
+        );
+        let body = resp.text()?;
+        let files = serde_json::from_str(&body)?;
+        Ok(files)
+    }
+}
+
 fn main() -> Result<()> {
     let args = Options::parse();
 
@@ -57,12 +99,13 @@ fn main() -> Result<()> {
 
     let file_fetcher: Box<dyn FileFetcher> =
         if args.source.starts_with("http://") || args.source.starts_with("https://") {
-            todo!("implement remote file fetcher")
+            Box::new(RemoteFileFetcher::new(args.source))
         } else {
             Box::new(LocalFileFetcher::new(args.source))
         };
 
     let info = file_fetcher.fetch_image()?;
+    dbg!(&info);
 
     for pixie_shared::File { name, chunks } in info {
         if let Some(prefix) = name.parent() {
