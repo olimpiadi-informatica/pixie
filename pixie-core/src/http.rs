@@ -1,8 +1,10 @@
 use std::{
+    error::Error,
     fs::File,
     io::{self, Write},
     net::SocketAddr,
     path::PathBuf,
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,7 +13,7 @@ use actix_web::{
     get, http::StatusCode, middleware::Logger, post, web::Bytes, web::Data, web::Json, web::Path,
     App, HttpRequest, HttpServer, Responder,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use ipnet::Ipv4Net;
 use serde::Deserialize;
 
@@ -94,8 +96,9 @@ async fn get_registration_info() -> impl Responder {
 #[post("/register")]
 async fn register(
     body: Bytes,
+    hint: Data<Mutex<Station>>,
     registered_file: Data<RegisteredFile>,
-) -> io::Result<impl Responder> {
+) -> Result<impl Responder, Box<dyn Error>> {
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
@@ -103,6 +106,13 @@ async fn register(
                 .append(true)
                 .create(true)
                 .open(&registered_file.0)?;
+
+            let mut guard = hint.lock().map_err(|_| anyhow!("Mutex is poisoned"))?;
+            *guard = Station {
+                kind: data.kind,
+                row: data.row,
+                col: data.col + 1,
+            };
 
             writeln!(file, "{}", serde_json::to_string(&data)?)?;
             return Ok("".customize());
@@ -112,6 +122,12 @@ async fn register(
     Ok("Invalid payload"
         .customize()
         .with_status(StatusCode::BAD_REQUEST))
+}
+
+#[get("/register_hint")]
+async fn register_hint(hint: Data<Mutex<Station>>) -> Result<impl Responder, Box<dyn Error>> {
+    let data = *hint.lock().map_err(|_| anyhow!("Mutex is poisoned"))?;
+    Ok(Json(data))
 }
 
 #[post("/chunk")]
@@ -142,12 +158,15 @@ async fn main(storage_dir: PathBuf, config: Config, boot_config: BootConfig) -> 
     let unix_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let registered_file = RegisteredFile(storage_dir.join(format!("registered_{}", unix_time)));
     let storage_dir = StorageDir(storage_dir);
+    let hint = Data::new(Mutex::new(Station::default()));
+
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .app_data(Data::new(boot_config.clone()))
             .app_data(Data::new(registered_file.clone()))
             .app_data(Data::new(storage_dir.clone()))
+            .app_data(hint.clone())
             .service(upload_chunk)
             .service(upload_image)
             .service(Files::new("/static", &static_files))
@@ -156,10 +175,12 @@ async fn main(storage_dir: PathBuf, config: Config, boot_config: BootConfig) -> 
             .service(boot)
             .service(get_registration_info)
             .service(register)
+            .service(register_hint)
     })
     .bind((config.listen_address, config.listen_port))?
     .run()
     .await?;
+
     Ok(())
 }
 

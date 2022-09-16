@@ -38,13 +38,14 @@ pub struct File {
     pub chunks: Vec<Segment>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub enum StationKind {
+    #[default]
     Worker,
     NonWorker,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Station {
     pub kind: StationKind,
     pub row: u32,
