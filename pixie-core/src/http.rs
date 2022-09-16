@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
     fs::File,
     io::{self, Write},
+    net::SocketAddr,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -9,9 +9,10 @@ use std::{
 use actix_files::Files;
 use actix_web::{
     get, http::StatusCode, middleware::Logger, post, web::Bytes, web::Data, web::Json, web::Path,
-    App, HttpServer, Responder,
+    App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::Result;
+use ipnet::Ipv4Net;
 use serde::Deserialize;
 
 use pixie_shared::{Group, RegistrationInfo, Station};
@@ -22,10 +23,16 @@ pub struct Config {
     pub listen_port: u16,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
+pub struct BootOption {
+    net: Ipv4Net,
+    cmd: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(transparent)]
 pub struct BootConfig {
-    pub current: String,
-    pub modes: HashMap<String, String>,
+    options: Vec<BootOption>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,8 +45,27 @@ struct StorageDir(PathBuf);
 struct RegisteredFile(PathBuf);
 
 #[get("/boot.ipxe")]
-async fn boot(boot_string: Data<BootString>) -> impl Responder {
-    boot_string.0.clone()
+async fn boot(req: HttpRequest, boot_config: Data<BootConfig>) -> impl Responder {
+    let peer_ip = match req.peer_addr() {
+        Some(SocketAddr::V4(ip)) => *ip.ip(),
+        _ => {
+            return "Specify an IPv4 address"
+                .to_owned()
+                .customize()
+                .with_status(StatusCode::BAD_REQUEST);
+        }
+    };
+
+    for BootOption { net, cmd } in &boot_config.options {
+        if net.contains(&peer_ip) {
+            return cmd.clone().customize();
+        }
+    }
+
+    "No cmd specified for this IP"
+        .to_owned()
+        .customize()
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 #[get("/get_registration_info")]
@@ -109,18 +135,17 @@ async fn upload_image(
     Ok("")
 }
 
-async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Result<()> {
+async fn main(storage_dir: PathBuf, config: Config, boot_config: BootConfig) -> Result<()> {
     let static_files = storage_dir.join("httpstatic");
     let images = storage_dir.join("images");
     let chunks = storage_dir.join("chunks");
-    let boot_string = BootString(boot_string);
     let unix_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let registered_file = RegisteredFile(storage_dir.join(format!("registered_{}", unix_time)));
     let storage_dir = StorageDir(storage_dir);
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
-            .app_data(Data::new(boot_string.clone()))
+            .app_data(Data::new(boot_config.clone()))
             .app_data(Data::new(registered_file.clone()))
             .app_data(Data::new(storage_dir.clone()))
             .service(upload_chunk)
@@ -139,6 +164,10 @@ async fn main(storage_dir: PathBuf, config: Config, boot_string: String) -> Resu
 }
 
 #[actix_web::main]
-pub async fn main_sync(storage_dir: PathBuf, config: Config, boot_string: String) -> Result<()> {
-    main(storage_dir, config, boot_string).await
+pub async fn main_sync(
+    storage_dir: PathBuf,
+    config: Config,
+    boot_config: BootConfig,
+) -> Result<()> {
+    main(storage_dir, config, boot_config).await
 }

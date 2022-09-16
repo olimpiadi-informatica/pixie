@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 
 use pixie_core::http;
@@ -59,12 +59,7 @@ fn main() -> Result<()> {
             .with_context(|| "Error generating dnsmasq config")?
     );
 
-    let boot_string = config
-        .boot
-        .modes
-        .get(&config.boot.current)
-        .ok_or_else(|| anyhow!("mode {} not found", config.boot.current))?;
-    http::main_sync(options.storage_dir, config.http, boot_string.clone())?;
+    http::main_sync(options.storage_dir, config.http, config.boot)?;
 
     Ok(())
 }
