@@ -1,6 +1,33 @@
-#!/bin/sh
+#!/bin/bash
 
 [ "$1" == "start" ] || exit
 
-echo "push"
+set -e
 
+SERVER_URL=$(cat /proc/cmdline | grep -o 'push=[^ ]*' | cut -f 2 -d =)
+DISK=$(cat /proc/cmdline | grep -o 'disk=[^ ]*' | cut -f 2 -d =)
+
+[ -z "$SERVER_URL" ] && exit
+[ -z "$DISK" ] && exit
+
+echo Waiting for network...
+sleep 20
+
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+
+mkdir efivars
+
+for var in $(efivar -l)
+do
+  efivar -e efivars/$var -D --name $var
+done
+
+tar c efivars > efivars.tar
+
+pixie-push --destination $SERVER_URL -- $DISK efivars.tar
+
+echo Done, rebooting now...
+
+sleep 10 # wait to allow reading messages
+
+reboot

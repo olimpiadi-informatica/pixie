@@ -1,6 +1,29 @@
-#!/bin/sh
+#!/bin/bash
 
 [ "$1" == "start" ] || exit
 
-echo "pull"
+set -e
+
+SERVER_URL=$(cat /proc/cmdline | grep -o 'pull=[^ ]*' | cut -f 2 -d =)
+[ -z "$SERVER_URL" ] && exit
+
+echo Waiting for network...
+sleep 20
+
+mount -t efivarfs efivarfs /sys/firmware/efi/efivars
+
+pixie-pull --source $SERVER_URL
+
+tar xf efivars.tar
+
+for var in $(ls efivars)
+do
+  efivar -i efivars/$var --name $var
+done
+
+echo Done, rebooting now...
+
+sleep 10 # wait to allow reading messages
+
+reboot
 

@@ -1,6 +1,20 @@
-#!/bin/sh
+#!/bin/bash
 
 [ "$1" == "start" ] || exit
 
-echo "register"
+set -e
 
+SERVER_URL=$(cat /proc/cmdline | grep -o 'register=[^ ]*' | cut -f 2 -d =)
+[ -z "$SERVER_URL" ] && exit
+
+echo Waiting for network...
+sleep 20
+
+echo Press enter to start registration...
+read
+pixie-register -s $SERVER_URL
+
+echo Done, rebooting now...
+sleep 10 # wait to allow reading messages
+
+reboot

@@ -9,3 +9,19 @@ boot:
     cmd: |
       #!ipxe
       chain /static/reboot.efi
+
+# registration script:
+# #!ipxe
+# kernel /static/bzImage register=<server_ip>:<server_port> quiet
+# boot
+
+
+# push script:
+# #!ipxe                                                                          
+# kernel /static/bzImage push=http://<server_ip>:<server_port>/image/<image> disk=/dev/nvme0n1 quiet
+# boot
+ 
+# pull script:
+# #!ipxe                                                                          
+# kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> quiet
+# boot
