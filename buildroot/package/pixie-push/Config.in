@@ -1,0 +1,9 @@
+config BR2_PACKAGE_PIXIE_PUSH
+    bool "pixie_push"
+    depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+    depends on BR2_PACKAGE_HOST_PKGCONF
+    depends on BR2_PACKAGE_LIBOPENSSL
+    select BR2_PACKAGE_HOST_RUSTC
+    help
+      Save images.
+

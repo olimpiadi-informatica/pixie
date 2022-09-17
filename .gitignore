@@ -1,2 +1,4 @@
 */target
-storage/
+storage/*
+build/*
+buildroot/pixie.tar.gz
