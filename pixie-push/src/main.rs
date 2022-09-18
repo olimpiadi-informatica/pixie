@@ -103,6 +103,7 @@ impl FileSaver for RemoteFileSaver {
         Ok(())
     }
 }
+
 fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     let child = Command::new("dumpe2fs")
         .arg(path)
@@ -124,22 +125,8 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
             break value.trim().parse().unwrap();
         }
     };
-    dbg!(block_size);
 
     let mut ans = Vec::new();
-
-    let mut add = |b, e| {
-        let mut b = b * block_size;
-        let e = e * block_size;
-
-        while b < e {
-            ans.push(ChunkInfo {
-                start: b,
-                size: CHUNK_SIZE.min(e - b),
-            });
-            b += CHUNK_SIZE;
-        }
-    };
 
     loop {
         let (mut begin, end): (usize, usize) = loop {
@@ -176,13 +163,19 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
                         };
 
                         if begin < a {
-                            add(begin, a);
+                            ans.push(ChunkInfo {
+                                start: block_size * begin,
+                                size: block_size * (a - begin),
+                            });
                         }
                         begin = b;
                     }
                 }
                 if begin < end {
-                    add(begin, end);
+                    ans.push(ChunkInfo {
+                        start: block_size * begin,
+                        size: block_size * (end - begin),
+                    });
                 }
                 break;
             }
@@ -190,20 +183,120 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     }
 }
 
-fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
-    let ext4_chunks = get_ext4_chunks(path)?;
-    if let Some(chunks) = ext4_chunks {
-        return Ok(chunks);
+fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
+    let child = Command::new("fdisk")
+        .arg("-l")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let stdout = child.stdout.unwrap();
+    let mut lines = BufReader::new(stdout).lines();
+
+    let (size_in_bytes, size_in_sectors): (usize, usize) = match lines.next() {
+        Some(Ok(s)) => {
+            let mut it = s.split(' ');
+            let x = it.nth(4);
+            let y = it.nth(1);
+            if let (Some(x), Some(y)) = (x, y) {
+                (x.parse()?, y.parse()?)
+            } else {
+                return Ok(None);
+            }
+        }
+        Some(Err(e)) => return Err(e.into()),
+        None => return Ok(None),
+    };
+
+    let sector_size = size_in_bytes / size_in_sectors;
+
+    loop {
+        if let Some(line) = lines.next().transpose()? {
+            if line.starts_with("Device") {
+                break;
+            }
+        } else {
+            return Ok(None);
+        }
     }
 
-    let mut file = File::open(path)?;
-    let len = file.seek(SeekFrom::End(0))? as usize;
+    let mut pos = 0;
+    let mut ans = Vec::new();
+    while let Some(line) = lines.next().transpose()? {
+        let mut it = line.split(' ').filter(|s| !s.is_empty());
+        let name = it.next().unwrap();
+        let begin: usize = it.next().unwrap().parse().unwrap();
+        let end: usize = it.next().unwrap().parse().unwrap();
 
-    Ok((0..((len + CHUNK_SIZE - 1) / CHUNK_SIZE))
-        .map(|start| start * CHUNK_SIZE)
-        .map(|start| ChunkInfo {
-            start,
-            size: (start + CHUNK_SIZE).min(len) - start,
+        if pos < begin {
+            ans.push(ChunkInfo {
+                start: sector_size * pos,
+                size: sector_size * (begin - pos),
+            });
+        }
+
+        if let Some(chunks) = get_ext4_chunks(name)? {
+            for ChunkInfo { start, size } in chunks {
+                ans.push(ChunkInfo {
+                    start: start + sector_size * begin,
+                    size,
+                });
+            }
+        } else {
+            ans.push(ChunkInfo {
+                start: sector_size * begin,
+                size: sector_size * (end - begin),
+            });
+        }
+
+        pos = end;
+    }
+
+    if pos < size_in_sectors {
+        ans.push(ChunkInfo {
+            start: sector_size * pos,
+            size: sector_size * (size_in_sectors - pos),
+        });
+    }
+
+    Ok(Some(ans))
+}
+
+fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
+    let chunks = {
+        let disk_chunks = get_disk_chunks(path)?;
+        if let Some(chunks) = disk_chunks {
+            chunks
+        } else {
+            let ext4_chunks = get_ext4_chunks(path)?;
+            if let Some(chunks) = ext4_chunks {
+                chunks
+            } else {
+                let mut file = File::open(path)?;
+                let size = file.seek(SeekFrom::End(0))? as usize;
+                let start = 0;
+                vec![ChunkInfo { start, size }]
+            }
+        }
+    };
+
+    Ok(chunks
+        .into_iter()
+        .flat_map(|ChunkInfo { mut start, size }| {
+            let end = start + size;
+            std::iter::from_fn(move || {
+                if start < end {
+                    let x = ChunkInfo {
+                        start,
+                        size: CHUNK_SIZE.min(end - start),
+                    };
+                    start += CHUNK_SIZE;
+                    Some(x)
+                } else {
+                    None
+                }
+            })
         })
         .collect())
 }
@@ -226,6 +319,9 @@ fn main() -> Result<()> {
     // TODO(veluca): parallelize.
     for s in args.sources {
         let chunks = get_file_chunks(&s)?;
+
+        let total_size: usize = chunks.iter().map(|x| x.size).sum();
+        println!("Total size: {}", total_size);
 
         let mut file = std::fs::File::open(&s)?;
 
