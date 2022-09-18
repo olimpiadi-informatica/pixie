@@ -16,9 +16,9 @@ pixie-pull --source $SERVER_URL
 
 tar xf efivars.tar
 
-for var in $(ls efivars)
+for var in efivars/*
 do
-  efivar -i efivars/$var --name $var
+  cp $var /sys/firmware/efi/efivars
 done
 
 echo Done, rebooting now...

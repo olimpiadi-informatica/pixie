@@ -17,9 +17,9 @@ mount -t efivarfs efivarfs /sys/firmware/efi/efivars
 
 mkdir efivars
 
-for var in $(efivar -l)
+for var in /sys/firmware/efi/efivars/Boot00* /sys/firmware/efi/efivars/BootOrder-*
 do
-  efivar -e efivars/$var -D --name $var
+  cp $var efivars
 done
 
 tar c efivars > efivars.tar
