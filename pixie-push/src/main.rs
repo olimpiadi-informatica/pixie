@@ -227,7 +227,7 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
         let mut it = line.split(' ').filter(|s| !s.is_empty());
         let name = it.next().unwrap();
         let begin: usize = it.next().unwrap().parse().unwrap();
-        let end: usize = it.next().unwrap().parse().unwrap();
+        let end: usize = it.next().unwrap().parse::<usize>().unwrap() + 1;
 
         if pos < begin {
             ans.push(ChunkInfo {
@@ -281,24 +281,27 @@ fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
         }
     };
 
-    Ok(chunks
-        .into_iter()
-        .flat_map(|ChunkInfo { mut start, size }| {
-            let end = start + size;
-            std::iter::from_fn(move || {
-                if start < end {
-                    let x = ChunkInfo {
-                        start,
-                        size: CHUNK_SIZE.min(end - start),
-                    };
-                    start += CHUNK_SIZE;
-                    Some(x)
-                } else {
-                    None
-                }
-            })
-        })
-        .collect())
+    let mut out = Vec::<ChunkInfo>::new();
+    for ChunkInfo { mut start, size } in chunks {
+        let end = start + size;
+
+        if let Some(last) = out.last() {
+            if last.start + last.size == start {
+                start = last.start;
+                out.pop();
+            }
+        }
+
+        while start < end {
+            out.push(ChunkInfo {
+                start,
+                size: CHUNK_SIZE.min(end - start),
+            });
+            start += CHUNK_SIZE;
+        }
+    }
+
+    Ok(out)
 }
 
 fn main() -> Result<()> {
