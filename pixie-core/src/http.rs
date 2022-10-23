@@ -3,7 +3,7 @@ use std::{
     error::Error,
     fs,
     io::{self, BufRead, BufReader},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     process::{Command, Stdio},
     sync::{Mutex, RwLock},
@@ -20,7 +20,6 @@ use actix_web::{
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 
 use pixie_shared::{Group, RegistrationInfo, Station, StationKind};
@@ -32,15 +31,9 @@ pub struct Config {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct BootOption {
-    net: Ipv4Net,
-    cmd: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[serde(transparent)]
 pub struct BootConfig {
-    options: Vec<BootOption>,
+    default: String,
+    modes: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +53,7 @@ pub struct Unit {
     kind: StationKind,
     row: u32,
     col: u32,
+    action: String,
 }
 
 #[derive(Debug)]
@@ -75,28 +69,115 @@ impl Machines {
     }
 }
 
-#[get("/boot.ipxe")]
-async fn boot(req: HttpRequest, boot_config: Data<BootConfig>) -> impl Responder {
-    let peer_ip = match req.peer_addr() {
-        Some(SocketAddr::V4(ip)) => *ip.ip(),
-        _ => {
-            return "Specify an IPv4 address"
-                .to_owned()
-                .customize()
-                .with_status(StatusCode::BAD_REQUEST);
-        }
-    };
+fn parse_mac(s: &str) -> Option<MacAddr> {
+    let mut ans = [0; 6];
+    let mut i = 0;
+    for octet in s.split(':') {
+        *ans.get_mut(i)? = u8::from_str_radix(octet, 16).ok()?;
+        i += 1;
+    }
+    if i != 6 {
+        return None;
+    }
+    Some(ans)
+}
 
-    for BootOption { net, cmd } in &boot_config.options {
-        if net.contains(&peer_ip) {
-            return cmd.clone().customize();
+fn find_mac(ip: IpAddr) -> Result<MacAddr> {
+    if ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
+        bail!("localhost not supported");
+    }
+
+    let s = ip.to_string();
+
+    let child = Command::new("ip")
+        .arg("neigh")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let stdout = child.stdout.unwrap();
+    let lines = BufReader::new(stdout).lines();
+
+    for line in lines {
+        let line = line?;
+        let mut parts = line.split(' ');
+
+        if parts.next() == Some(&s) {
+            let mac = parts.nth(3).unwrap();
+            return Ok(parse_mac(mac).unwrap());
         }
     }
 
-    "No cmd specified for this IP"
-        .to_owned()
-        .customize()
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    bail!("Mac address not found");
+}
+
+#[get("/boot.ipxe")]
+async fn boot(
+    req: HttpRequest,
+    boot_config: Data<BootConfig>,
+    machines: Data<RwLock<Machines>>,
+) -> Result<impl Responder, Box<dyn Error>> {
+    let peer_mac = match req.peer_addr() {
+        Some(ip) => find_mac(ip.ip())?,
+        _ => {
+            return Ok("Specify an IPv4 address"
+                .to_owned()
+                .customize()
+                .with_status(StatusCode::BAD_REQUEST))
+        }
+    };
+
+    let Machines { inner, map } = &*machines
+        .read()
+        .map_err(|_| anyhow!("machines mutex is poisoned"))?;
+    let mode: &str = map
+        .get(&peer_mac)
+        .map(|&unit| &inner[unit].action)
+        .unwrap_or(&boot_config.default);
+    Ok(boot_config
+        .modes
+        .get(mode)
+        .ok_or_else(|| anyhow!("mode {} does not exists", mode))?
+        .clone()
+        .customize())
+}
+
+#[get("/action/{mac}/{value}")]
+async fn action(
+    path: Path<(String, String)>,
+    boot_config: Data<BootConfig>,
+    machines: Data<RwLock<Machines>>,
+) -> Result<impl Responder, Box<dyn Error>> {
+    let mac = match parse_mac(&path.0) {
+        Some(mac) => mac,
+        None => {
+            return Ok("Invalid MAC address"
+                .to_owned()
+                .customize()
+                .with_status(StatusCode::BAD_REQUEST))
+        }
+    };
+
+    let value = &path.1;
+    if boot_config.modes.get(value).is_none() {
+        return Ok(format!("Unknown action {}", value)
+            .customize()
+            .with_status(StatusCode::BAD_REQUEST));
+    }
+
+    let Machines { inner, map } = &mut *machines
+        .write()
+        .map_err(|_| anyhow!("machines mutex is poisoned"))?;
+
+    if let Some(&unit) = map.get(&mac) {
+        inner[unit].action = value.clone();
+        Ok("".to_owned().customize())
+    } else {
+        Ok("Unknown MAC address"
+            .to_owned()
+            .customize()
+            .with_status(StatusCode::BAD_REQUEST))
+    }
 }
 
 #[get("/get_registration_info")]
@@ -122,39 +203,11 @@ async fn get_registration_info() -> impl Responder {
     Json(ans)
 }
 
-fn find_mac(ip: IpAddr) -> Result<MacAddr> {
-    if ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
-        bail!("localhost not supported");
-    }
-
-    let s = ip.to_string();
-
-    let child = Command::new("ip")
-        .arg("neigh")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let stdout = child.stdout.unwrap();
-    let lines = BufReader::new(stdout).lines();
-
-    for line in lines {
-        let line = line?;
-        let mut parts = line.split(' ');
-
-        if parts.next() == Some(&s) {
-            let mut octets = parts.nth(3).unwrap().split(':');
-            return Ok([(); 6].map(|()| u8::from_str_radix(octets.next().unwrap(), 16).unwrap()));
-        }
-    }
-
-    bail!("Mac address not found");
-}
-
 #[post("/register")]
 async fn register(
     req: HttpRequest,
     body: Bytes,
+    boot_config: Data<BootConfig>,
     hint: Data<Mutex<Station>>,
     machines: Data<RwLock<Machines>>,
     registered_file: Data<RegisteredFile>,
@@ -188,6 +241,7 @@ async fn register(
                         kind: data.kind,
                         row: data.row,
                         col: data.col,
+                        action: boot_config.default.clone(),
                     });
                     inner.len() - 1
                 });
@@ -241,7 +295,13 @@ async fn main(
     let registered_file = RegisteredFile(storage_dir.join("registered.json"));
     let storage_dir = StorageDir(storage_dir);
     let hint = Data::new(Mutex::new(Station::default()));
-    let machines = Data::new(RwLock::new(Machines::new(units)));
+    let machines = Machines::new(units);
+    for unit in &machines.inner {
+        if boot_config.modes.get(&unit.action).is_none() {
+            bail!("Unknown mode {}", unit.action);
+        }
+    }
+    let machines = Data::new(RwLock::new(machines));
 
     HttpServer::new(move || {
         App::new()
@@ -260,6 +320,7 @@ async fn main(
             .service(get_registration_info)
             .service(register)
             .service(register_hint)
+            .service(action)
     })
     .bind((config.listen_address, config.listen_port))?
     .run()
