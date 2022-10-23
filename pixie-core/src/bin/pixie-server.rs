@@ -59,7 +59,15 @@ fn main() -> Result<()> {
             .with_context(|| "Error generating dnsmasq config")?
     );
 
-    http::main_sync(options.storage_dir, config.http, config.boot)?;
+    let data = std::fs::read(options.storage_dir.join("registered.json"));
+    let units = data
+        .ok()
+        .map(|d| serde_json::from_slice(&d))
+        .transpose()
+        .context("invalid json at registered.json")?
+        .unwrap_or_default();
+
+    http::main_sync(options.storage_dir, config.http, config.boot, units)?;
 
     Ok(())
 }
