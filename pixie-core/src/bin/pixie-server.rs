@@ -11,6 +11,7 @@ pub struct PixieConfig {
     dnsmasq: pixie_core::dnsmasq::Config,
     http: pixie_core::http::Config,
     boot: pixie_core::http::BootConfig,
+    groups: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -67,7 +68,13 @@ fn main() -> Result<()> {
         .context("invalid json at registered.json")?
         .unwrap_or_default();
 
-    http::main_sync(options.storage_dir, config.http, config.boot, units)?;
+    http::main_sync(
+        options.storage_dir,
+        config.http,
+        config.boot,
+        units,
+        config.groups,
+    )?;
 
     Ok(())
 }

@@ -56,7 +56,15 @@ fn main() -> Result<()> {
         s => s.parse()?,
     };
 
-    let data = Station { kind, row, col };
+    write!(stderr, "group? [{}] ", hint.group)?;
+    buf.clear();
+    stdin.read_line(&mut buf)?;
+    let group = match buf.trim() {
+        "" => hint.group,
+        s => s.parse()?,
+    };
+
+    let data = Station { kind, row, col, group };
 
     let body = serde_json::to_string(&data)?;
     let resp = Client::new()

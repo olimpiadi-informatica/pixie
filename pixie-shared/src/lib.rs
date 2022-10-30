@@ -50,4 +50,5 @@ pub struct Station {
     pub kind: StationKind,
     pub row: u32,
     pub col: u32,
+    pub group: u32,
 }

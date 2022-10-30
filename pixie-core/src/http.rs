@@ -36,15 +36,6 @@ pub struct BootConfig {
     modes: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
-struct BootString(String);
-
-#[derive(Clone, Debug)]
-struct StorageDir(PathBuf);
-
-#[derive(Clone, Debug)]
-struct RegisteredFile(PathBuf);
-
 type MacAddr = [u8; 6];
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,6 +44,7 @@ pub struct Unit {
     kind: StationKind,
     row: u32,
     col: u32,
+    group: u32,
     action: String,
 }
 
@@ -68,6 +60,18 @@ impl Machines {
         Self { inner, map }
     }
 }
+
+#[derive(Clone, Debug)]
+struct BootString(String);
+
+#[derive(Clone, Debug)]
+struct StorageDir(PathBuf);
+
+#[derive(Clone, Debug)]
+struct RegisteredFile(PathBuf);
+
+#[derive(Clone, Debug)]
+struct Groups(Vec<String>);
 
 fn parse_mac(s: &str) -> Option<MacAddr> {
     let mut ans = [0; 6];
@@ -147,16 +151,12 @@ async fn action(
     path: Path<(String, String)>,
     boot_config: Data<BootConfig>,
     machines: Data<RwLock<Machines>>,
+    groups: Data<Groups>,
+    registered_file: Data<RegisteredFile>,
 ) -> Result<impl Responder, Box<dyn Error>> {
-    let mac = match parse_mac(&path.0) {
-        Some(mac) => mac,
-        None => {
-            return Ok("Invalid MAC address"
-                .to_owned()
-                .customize()
-                .with_status(StatusCode::BAD_REQUEST))
-        }
-    };
+    let Machines { inner, map } = &mut *machines
+        .write()
+        .map_err(|_| anyhow!("machines mutex is poisoned"))?;
 
     let value = &path.1;
     if boot_config.modes.get(value).is_none() {
@@ -165,15 +165,27 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    let Machines { inner, map } = &mut *machines
-        .write()
-        .map_err(|_| anyhow!("machines mutex is poisoned"))?;
-
-    if let Some(&unit) = map.get(&mac) {
-        inner[unit].action = value.clone();
+    if let Some(mac) = parse_mac(&path.0) {
+        if let Some(&unit) = map.get(&mac) {
+            inner[unit].action = value.clone();
+            fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
+            Ok("".to_owned().customize())
+        } else {
+            Ok("Unknown MAC address"
+                .to_owned()
+                .customize()
+                .with_status(StatusCode::BAD_REQUEST))
+        }
+    } else if let Ok(group) = groups.0.binary_search(&path.0) {
+        for unit in inner.iter_mut() {
+            if unit.group == group as u32 {
+                unit.action = value.clone();
+            }
+        }
+        fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
         Ok("".to_owned().customize())
     } else {
-        Ok("Unknown MAC address"
+        Ok("Unknown PC"
             .to_owned()
             .customize()
             .with_status(StatusCode::BAD_REQUEST))
@@ -211,15 +223,23 @@ async fn register(
     hint: Data<Mutex<Station>>,
     machines: Data<RwLock<Machines>>,
     registered_file: Data<RegisteredFile>,
+    groups: Data<Groups>,
 ) -> Result<impl Responder, Box<dyn Error>> {
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
+            if data.group >= groups.0.len() as u32 {
+                return Ok("Invalid group"
+                    .customize()
+                    .with_status(StatusCode::BAD_REQUEST));
+            }
+
             let mut guard = hint.lock().map_err(|_| anyhow!("hint mutex is poisoned"))?;
             *guard = Station {
                 kind: data.kind,
                 row: data.row,
                 col: data.col + 1,
+                group: data.group,
             };
 
             let peer_ip = req.peer_addr().context("could not get peer ip")?.ip();
@@ -231,9 +251,10 @@ async fn register(
 
             map.entry(peer_mac)
                 .and_modify(|&mut unit| {
+                    inner[unit].kind = data.kind;
                     inner[unit].row = data.row;
                     inner[unit].col = data.col;
-                    inner[unit].kind = data.kind;
+                    inner[unit].group = data.group;
                 })
                 .or_insert_with(|| {
                     inner.push(Unit {
@@ -241,6 +262,7 @@ async fn register(
                         kind: data.kind,
                         row: data.row,
                         col: data.col,
+                        group: data.group,
                         action: boot_config.default.clone(),
                     });
                     inner.len() - 1
@@ -288,6 +310,7 @@ async fn main(
     config: Config,
     boot_config: BootConfig,
     units: Vec<Unit>,
+    mut groups: Vec<String>,
 ) -> Result<()> {
     let static_files = storage_dir.join("httpstatic");
     let images = storage_dir.join("images");
@@ -302,6 +325,8 @@ async fn main(
         }
     }
     let machines = Data::new(RwLock::new(machines));
+    groups.sort();
+    let groups = Data::new(Groups(groups));
 
     HttpServer::new(move || {
         App::new()
@@ -311,6 +336,7 @@ async fn main(
             .app_data(Data::new(storage_dir.clone()))
             .app_data(hint.clone())
             .app_data(machines.clone())
+            .app_data(groups.clone())
             .service(upload_chunk)
             .service(upload_image)
             .service(Files::new("/static", &static_files))
@@ -335,6 +361,7 @@ pub async fn main_sync(
     config: Config,
     boot_config: BootConfig,
     units: Vec<Unit>,
+    groups: Vec<String>,
 ) -> Result<()> {
-    main(storage_dir, config, boot_config, units).await
+    main(storage_dir, config, boot_config, units, groups).await
 }
