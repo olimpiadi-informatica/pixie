@@ -16,6 +16,8 @@ serde = "1.0.137"
 serde_derive = "1.0.137"
 serde_json = "1.0.81"
 serde_yaml = "0.8"
+libc = "0.2.137"
+macaddr = { version = "1.0.1", features = ["serde"] }
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"

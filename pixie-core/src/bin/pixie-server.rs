@@ -2,15 +2,18 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-
-use pixie_core::http;
 use serde::Deserialize;
+
+use pixie_core::{
+    dnsmasq::{self, DnsmasqHandle},
+    http,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct PixieConfig {
-    dnsmasq: pixie_core::dnsmasq::Config,
-    http: pixie_core::http::Config,
-    boot: pixie_core::http::BootConfig,
+    dnsmasq: dnsmasq::Config,
+    http: http::Config,
+    boot: http::BootConfig,
     groups: Vec<String>,
 }
 
@@ -52,13 +55,22 @@ fn main() -> Result<()> {
     let config: PixieConfig = serde_yaml::from_reader(&config)
         .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
-    println!(
-        "{}",
-        config
-            .dnsmasq
-            .to_dnsmasq_config(&options.storage_dir, &config.http)
-            .with_context(|| "Error generating dnsmasq config")?
-    );
+    // println!(
+    //     "{}",
+    //     config
+    //         .dnsmasq
+    //         .to_dnsmasq_config(&options.storage_dir, &config.http)
+    //         .with_context(|| "Error generating dnsmasq config")?
+    // );
+
+    let dnsmasq_handle = DnsmasqHandle::from_config(
+        options
+            .storage_dir
+            .join("hosts")
+            .to_str()
+            .context("hosts file path is not valid utf8")?,
+        &config.dnsmasq,
+    )?;
 
     let data = std::fs::read(options.storage_dir.join("registered.json"));
     let units = data
@@ -74,6 +86,7 @@ fn main() -> Result<()> {
         config.boot,
         units,
         config.groups,
+        dnsmasq_handle,
     )?;
 
     Ok(())

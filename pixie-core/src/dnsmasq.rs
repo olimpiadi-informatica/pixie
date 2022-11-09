@@ -1,8 +1,20 @@
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{Error, Seek, SeekFrom, Write},
+    net::Ipv4Addr,
+    ops::Range,
+    path::Path,
+    process::{Child, Command},
+    thread,
+    time::Duration,
+};
+
 use anyhow::{ensure, Context, Result};
 use interfaces::{HardwareAddr, Interface};
 use ipnet::Ipv4Net;
+use macaddr::MacAddr6;
 use serde_derive::Deserialize;
-use std::{collections::HashMap, net::Ipv4Addr, ops::Range, path::Path};
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct ClientInfo {
@@ -102,5 +114,64 @@ dhcp-vendorclass=set:pxe,PXEClient:Arch:00009
 dhcp-userclass=set:ipxe,iPXE
 "#
         ))
+    }
+}
+
+pub struct DnsmasqHandle {
+    child: Child,
+    hosts: File,
+}
+
+impl DnsmasqHandle {
+    pub fn from_config(hosts_filename: &str, cfg: &Config) -> Result<Self> {
+        let hosts = File::create(hosts_filename)?;
+        ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");
+
+        let net = &cfg.networks[0];
+
+        let netmask = match net.dhcp_config {
+            Some(netmask) => netmask,
+            None => todo!("dhcp-proxy is not suported"),
+        };
+
+        let mut child = Command::new("dnsmasq")
+            .arg(format!(
+                "--dhcp-range={},{}",
+                netmask.network(),
+                netmask.broadcast()
+            ))
+            .arg("--dhcp-range=10.0.0.0,static")
+            .arg(format!("--dhcp-hostsfile={}", hosts_filename))
+            .arg(format!("--interface={}", net.interface))
+            .arg("--no-daemon")
+            .spawn()?;
+
+        // TODO: better check
+        // removing the sleep causes dnsmasq to die
+        thread::sleep(Duration::from_secs(1));
+        assert!(child.try_wait()?.is_none());
+
+        Ok(DnsmasqHandle { child, hosts })
+    }
+
+    pub fn write_host(&mut self, idx: usize, mac: MacAddr6, ip: Ipv4Addr) -> Result<()> {
+        let size = 3 * 6 + 4 * 4;
+        self.hosts.seek(SeekFrom::Start((idx * size) as u64))?;
+        writeln!(self.hosts, "{},{:15}", mac, ip)?;
+        Ok(())
+    }
+
+    pub fn send_sighup(&mut self) -> Result<()> {
+        let r = unsafe { libc::kill(self.child.id().try_into().unwrap(), libc::SIGHUP) };
+        if r < 0 {
+            return Err(Error::last_os_error().into());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for DnsmasqHandle {
+    fn drop(&mut self) {
+        self.child.kill().unwrap();
     }
 }

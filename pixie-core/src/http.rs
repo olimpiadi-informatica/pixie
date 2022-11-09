@@ -20,9 +20,12 @@ use actix_web::{
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 
 use pixie_shared::{Group, RegistrationInfo, Station, StationKind};
+
+use crate::dnsmasq::DnsmasqHandle;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -36,22 +39,20 @@ pub struct BootConfig {
     modes: BTreeMap<String, String>,
 }
 
-type MacAddr = [u8; 6];
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Unit {
-    mac: MacAddr,
+    mac: MacAddr6,
     kind: StationKind,
-    row: u32,
-    col: u32,
-    group: u32,
+    row: u8,
+    col: u8,
+    group: u8,
     action: String,
 }
 
 #[derive(Debug)]
 struct Machines {
     inner: Vec<Unit>,
-    map: BTreeMap<MacAddr, usize>,
+    map: BTreeMap<MacAddr6, usize>,
 }
 
 impl Machines {
@@ -73,20 +74,7 @@ struct RegisteredFile(PathBuf);
 #[derive(Clone, Debug)]
 struct Groups(Vec<String>);
 
-fn parse_mac(s: &str) -> Option<MacAddr> {
-    let mut ans = [0; 6];
-    let mut i = 0;
-    for octet in s.split(':') {
-        *ans.get_mut(i)? = u8::from_str_radix(octet, 16).ok()?;
-        i += 1;
-    }
-    if i != 6 {
-        return None;
-    }
-    Some(ans)
-}
-
-fn find_mac(ip: IpAddr) -> Result<MacAddr> {
+fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
     if ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
         bail!("localhost not supported");
     }
@@ -108,7 +96,7 @@ fn find_mac(ip: IpAddr) -> Result<MacAddr> {
 
         if parts.next() == Some(&s) {
             let mac = parts.nth(3).unwrap();
-            return Ok(parse_mac(mac).unwrap());
+            return Ok(mac.parse().unwrap());
         }
     }
 
@@ -165,7 +153,7 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    if let Some(mac) = parse_mac(&path.0) {
+    if let Ok(mac) = path.0.parse() {
         if let Some(&unit) = map.get(&mac) {
             inner[unit].action = value.clone();
             fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
@@ -178,7 +166,7 @@ async fn action(
         }
     } else if let Ok(group) = groups.0.binary_search(&path.0) {
         for unit in inner.iter_mut() {
-            if unit.group == group as u32 {
+            if unit.group as usize == group {
                 unit.action = value.clone();
             }
         }
@@ -224,11 +212,12 @@ async fn register(
     machines: Data<RwLock<Machines>>,
     registered_file: Data<RegisteredFile>,
     groups: Data<Groups>,
+    dnsmasq_handle: Data<Mutex<DnsmasqHandle>>,
 ) -> Result<impl Responder, Box<dyn Error>> {
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
-            if data.group >= groups.0.len() as u32 {
+            if data.group as usize >= groups.0.len() {
                 return Ok("Invalid group"
                     .customize()
                     .with_status(StatusCode::BAD_REQUEST));
@@ -249,7 +238,8 @@ async fn register(
                 .write()
                 .map_err(|_| anyhow!("machines mutex is poisoned"))?;
 
-            map.entry(peer_mac)
+            let &mut unit = map
+                .entry(peer_mac)
                 .and_modify(|&mut unit| {
                     inner[unit].kind = data.kind;
                     inner[unit].row = data.row;
@@ -267,6 +257,16 @@ async fn register(
                     });
                     inner.len() - 1
                 });
+
+            let ip = Ipv4Addr::new(10, data.group, data.row, data.col);
+
+            let mut dnsmasq_lock = dnsmasq_handle
+                .lock()
+                .map_err(|_| anyhow!("dnsmasq_handle mutex is poisoned"))?;
+            dnsmasq_lock
+                .write_host(unit, peer_mac, ip)
+                .context("writing hosts file")?;
+            dnsmasq_lock.send_sighup().context("sending sighup")?;
 
             fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
             return Ok("".customize());
@@ -311,6 +311,7 @@ async fn main(
     boot_config: BootConfig,
     units: Vec<Unit>,
     mut groups: Vec<String>,
+    mut dnsmasq_handle: DnsmasqHandle,
 ) -> Result<()> {
     let static_files = storage_dir.join("httpstatic");
     let images = storage_dir.join("images");
@@ -319,11 +320,18 @@ async fn main(
     let storage_dir = StorageDir(storage_dir);
     let hint = Data::new(Mutex::new(Station::default()));
     let machines = Machines::new(units);
-    for unit in &machines.inner {
+    for (i, unit) in machines.inner.iter().enumerate() {
+        dnsmasq_handle.write_host(
+            i,
+            unit.mac,
+            Ipv4Addr::new(10, unit.group, unit.row, unit.col),
+        )?;
         if boot_config.modes.get(&unit.action).is_none() {
             bail!("Unknown mode {}", unit.action);
         }
     }
+    dnsmasq_handle.send_sighup()?;
+    let dnsmasq_handle = Data::new(Mutex::new(dnsmasq_handle));
     let machines = Data::new(RwLock::new(machines));
     groups.sort();
     let groups = Data::new(Groups(groups));
@@ -337,6 +345,7 @@ async fn main(
             .app_data(hint.clone())
             .app_data(machines.clone())
             .app_data(groups.clone())
+            .app_data(dnsmasq_handle.clone())
             .service(upload_chunk)
             .service(upload_image)
             .service(Files::new("/static", &static_files))
@@ -362,6 +371,15 @@ pub async fn main_sync(
     boot_config: BootConfig,
     units: Vec<Unit>,
     groups: Vec<String>,
+    dnsmasq_handle: DnsmasqHandle,
 ) -> Result<()> {
-    main(storage_dir, config, boot_config, units, groups).await
+    main(
+        storage_dir,
+        config,
+        boot_config,
+        units,
+        groups,
+        dnsmasq_handle,
+    )
+    .await
 }
