@@ -55,22 +55,9 @@ fn main() -> Result<()> {
     let config: PixieConfig = serde_yaml::from_reader(&config)
         .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
-    // println!(
-    //     "{}",
-    //     config
-    //         .dnsmasq
-    //         .to_dnsmasq_config(&options.storage_dir, &config.http)
-    //         .with_context(|| "Error generating dnsmasq config")?
-    // );
-
-    let dnsmasq_handle = DnsmasqHandle::from_config(
-        options
-            .storage_dir
-            .join("hosts")
-            .to_str()
-            .context("hosts file path is not valid utf8")?,
-        &config.dnsmasq,
-    )?;
+    let dnsmasq_handle =
+        DnsmasqHandle::from_config(&options.storage_dir, &config.dnsmasq, &config.http)
+            .context("Error start dnsmasq")?;
 
     let data = std::fs::read(options.storage_dir.join("registered.json"));
     let units = data

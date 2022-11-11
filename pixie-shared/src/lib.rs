@@ -42,7 +42,7 @@ pub struct File {
 pub enum StationKind {
     #[default]
     Worker,
-    NonWorker,
+    Contestant,
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]

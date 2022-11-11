@@ -30,13 +30,13 @@ fn main() -> Result<()> {
 
     let hint: Station = serde_json::from_str(&resp.text()?)?;
 
-    write!(stderr, "worker / non-worker? [{:?}] ", hint.kind)?;
+    write!(stderr, "worker / contenstant? [{:?}] ", hint.kind)?;
     buf.clear();
     stdin.read_line(&mut buf)?;
     let kind = match buf.to_lowercase().trim() {
         "" => hint.kind,
         "w" | "worker" => StationKind::Worker,
-        "n" | "non-worker" => StationKind::NonWorker,
+        "c" | "contestant" => StationKind::Contestant,
         _ => bail!("Invalid kind"),
     };
 

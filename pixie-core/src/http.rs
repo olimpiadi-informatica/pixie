@@ -122,16 +122,26 @@ async fn boot(
     let Machines { inner, map } = &*machines
         .read()
         .map_err(|_| anyhow!("machines mutex is poisoned"))?;
-    let mode: &str = map
-        .get(&peer_mac)
-        .map(|&unit| &inner[unit].action)
+    let unit = map.get(&peer_mac).copied();
+    let mode: &str = unit
+        .map(|unit| &inner[unit].action)
         .unwrap_or(&boot_config.default);
-    Ok(boot_config
+    let cmd = boot_config
         .modes
         .get(mode)
         .ok_or_else(|| anyhow!("mode {} does not exists", mode))?
-        .clone()
-        .customize())
+        .replace("<server_loc>", req.app_config().host());
+    let cmd = match unit {
+        Some(unit) => cmd.replace(
+            "<image>",
+            match inner[unit].kind {
+                StationKind::Worker => "worker",
+                StationKind::Contestant => "contestant",
+            },
+        ),
+        None => cmd,
+    };
+    Ok(cmd.customize())
 }
 
 #[get("/action/{mac}/{value}")]

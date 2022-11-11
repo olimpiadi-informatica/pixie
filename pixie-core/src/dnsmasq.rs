@@ -16,6 +16,8 @@ use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use serde_derive::Deserialize;
 
+use crate::http;
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct ClientInfo {
     pub ip: Ipv4Addr,
@@ -58,7 +60,7 @@ impl Config {
 
         let net = &self.networks[0];
 
-        ensure!(
+        anyhow::ensure!(
             net.dhcp_config.is_none(),
             "Not implemented: non-dhcp-proxy interfaces"
         );
@@ -123,10 +125,10 @@ pub struct DnsmasqHandle {
 }
 
 impl DnsmasqHandle {
-    pub fn from_config(hosts_filename: &str, cfg: &Config) -> Result<Self> {
-        let hosts = File::create(hosts_filename)?;
-        ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");
+    pub fn from_config(storage_dir: &Path, cfg: &Config, http_cfg: &http::Config) -> Result<Self> {
+        let storage_str = storage_dir.to_str().unwrap();
 
+        ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");
         let net = &cfg.networks[0];
 
         let netmask = match net.dhcp_config {
@@ -134,15 +136,54 @@ impl DnsmasqHandle {
             None => todo!("dhcp-proxy is not suported"),
         };
 
+        let name = &net.interface;
+        let ip = netmask.addr();
+
+        let netid = 0;
+        let server_port = http_cfg.listen_port;
+
+        let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
+        let hosts = File::create(storage_dir.join("hosts"))?;
+
+        let netmask_network = netmask.network();
+        let netmask_broadcast = netmask.broadcast();
+
+        write!(
+            dnsmasq_conf,
+            r#"
+### Per-network configuration
+
+## net0
+dhcp-range=set:net{netid},{netmask_network},{netmask_broadcast}
+# TODO: dhcp-range=set:net{netid},{ip},proxy
+dhcp-range=set:net{netid},10.0.0.0,static
+dhcp-hostsfile={storage_str}/hosts
+dhcp-boot=tag:pxe,tag:net{netid},ipxe.efi,,{ip}
+dhcp-boot=tag:ipxe,tag:net{netid},http://{ip}:{server_port}/boot.ipxe
+interface={name}
+
+### Common configuration
+
+## Root for TFTP server
+tftp-root={storage_str}/tftpboot
+enable-tftp
+
+## PXE prompt and timeout
+pxe-prompt="pixie",1
+
+## PXE kind recognition
+# BC_UEFI (00007)
+dhcp-vendorclass=set:pxe,PXEClient:Arch:00007
+# UEFI x86-64 (00009)
+dhcp-vendorclass=set:pxe,PXEClient:Arch:00009
+# iPXE
+dhcp-userclass=set:ipxe,iPXE
+"#
+        )?;
+
         let mut child = Command::new("dnsmasq")
-            .arg(format!(
-                "--dhcp-range={},{}",
-                netmask.network(),
-                netmask.broadcast()
-            ))
-            .arg("--dhcp-range=10.0.0.0,static")
-            .arg(format!("--dhcp-hostsfile={}", hosts_filename))
-            .arg(format!("--interface={}", net.interface))
+            .arg(format!("--conf-file={storage_str}/dnsmasq.conf"))
+            .arg("--log-dhcp")
             .arg("--no-daemon")
             .spawn()?;
 
