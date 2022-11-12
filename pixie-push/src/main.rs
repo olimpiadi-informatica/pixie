@@ -1,11 +1,11 @@
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use reqwest::{blocking::Client, Url};
 
@@ -81,11 +81,21 @@ impl FileSaver for RemoteFileSaver {
     fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
         let url = Url::parse(&self.url)?.join("/chunk")?;
         let client = Client::new();
-        let resp = client.post(url).body(data.to_owned()).send()?;
+        let resp = client
+            .post(url)
+            .body(data.to_owned())
+            .send()
+            .with_context(|| {
+                format!(
+                    "failed to upload chunk to server, chunk size {}",
+                    data.len()
+                )
+            })?;
         ensure!(
             resp.status().is_success(),
-            "status ({}) is not success",
+            "failed to upload chunk to server, status {}, chunk size {}",
             resp.status().as_u16(),
+            data.len()
         );
         let hash = blake3::hash(data);
         Ok(hash.as_bytes().to_owned())
@@ -94,10 +104,14 @@ impl FileSaver for RemoteFileSaver {
     fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()> {
         let client = Client::new();
         let data = serde_json::to_string(&info)?;
-        let resp = client.post(&self.url).body(data).send()?;
+        let resp = client
+            .post(&self.url)
+            .body(data)
+            .send()
+            .context("failed to upload image to server")?;
         ensure!(
             resp.status().is_success(),
-            "status ({}) is not success",
+            "failed to upload image to server, status ({})",
             resp.status().as_u16(),
         );
         Ok(())
@@ -127,6 +141,8 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     };
 
     let mut ans = Vec::new();
+
+    while lines.next().unwrap()? != "" {}
 
     loop {
         let (mut begin, end): (usize, usize) = loop {
@@ -211,22 +227,24 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
 
     let sector_size = size_in_bytes / size_in_sectors;
 
-    loop {
+    let col_start = loop {
         if let Some(line) = lines.next().transpose()? {
             if line.starts_with("Device") {
-                break;
+                let mut it = line.split(' ').filter(|s| !s.is_empty() && *s != "Boot");
+                it.next();
+                break it.position(|s| s == "Start" || s == "StartLBA").unwrap();
             }
         } else {
             return Ok(None);
         }
-    }
+    };
 
     let mut pos = 0;
     let mut ans = Vec::new();
     while let Some(line) = lines.next().transpose()? {
-        let mut it = line.split(' ').filter(|s| !s.is_empty());
+        let mut it = line.split(' ').filter(|s| !s.is_empty() && *s != "*");
         let name = it.next().unwrap();
-        let begin: usize = it.next().unwrap().parse().unwrap();
+        let begin: usize = it.nth(col_start).unwrap().parse().unwrap();
         let end: usize = it.next().unwrap().parse::<usize>().unwrap() + 1;
 
         if pos < begin {
@@ -317,6 +335,8 @@ fn main() -> Result<()> {
             Box::new(LocalFileSaver::new(&args.destination)?)
         };
 
+    let mut stdout = io::stdout().lock();
+
     let mut info = Vec::new();
 
     // TODO(veluca): parallelize.
@@ -328,9 +348,18 @@ fn main() -> Result<()> {
 
         let mut file = std::fs::File::open(&s)?;
 
+        let total = chunks.len();
+
         let chunks: Result<Vec<_>> = chunks
             .into_iter()
-            .map(|chnk| {
+            .enumerate()
+            .map(|(idx, chnk)| {
+                write!(
+                    stdout,
+                    " pushing chunk {idx} out of {total} from file '{s}'\r"
+                )?;
+                stdout.flush()?;
+
                 file.seek(SeekFrom::Start(chnk.start as u64))?;
                 let mut data = vec![0; chnk.size];
                 file.read_exact(&mut data)?;
@@ -342,6 +371,7 @@ fn main() -> Result<()> {
                 })
             })
             .collect();
+        writeln!(stdout)?;
 
         info.push(pixie_shared::File {
             name: Path::new(&s).to_owned(),

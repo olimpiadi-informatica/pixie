@@ -1,7 +1,7 @@
 use std::{
     fmt::Write as fmtWrite,
     fs::File,
-    io::{ErrorKind, Read, Seek, SeekFrom, Write},
+    io::{self, ErrorKind, Read, Seek, SeekFrom, Write},
     path::Path,
 };
 
@@ -104,6 +104,8 @@ fn main() -> Result<()> {
             Box::new(LocalFileFetcher::new(args.source))
         };
 
+    let mut stdout = io::stdout().lock();
+
     let info = file_fetcher.fetch_image()?;
 
     for pixie_shared::File { name, chunks } in info {
@@ -117,7 +119,16 @@ fn main() -> Result<()> {
             .create(true)
             .open(&name)?;
 
-        for Segment { hash, start, size } in chunks {
+        let total = chunks.len();
+
+        let printable_name: &str = &name.to_string_lossy();
+
+        for (idx, Segment { hash, start, size }) in chunks.into_iter().enumerate() {
+            write!(
+                stdout,
+                " pulling chunk {idx} out of {total} to file '{printable_name}'\r"
+            )?;
+
             let mut data = vec![0; size];
             file.seek(SeekFrom::Start(start as u64))?;
             match file.read_exact(&mut data) {

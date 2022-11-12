@@ -5,7 +5,7 @@ use std::{
     io::{self, BufRead, BufReader},
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{Mutex, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -16,7 +16,7 @@ use actix_web::{
     http::StatusCode,
     middleware::Logger,
     post,
-    web::{Bytes, Data, Json, Path},
+    web::{Bytes, Data, Json, Path, PayloadConfig},
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -29,6 +29,7 @@ use crate::dnsmasq::DnsmasqHandle;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
+    pub max_payload: usize,
     pub listen_address: String,
     pub listen_port: u16,
 }
@@ -75,19 +76,32 @@ struct RegisteredFile(PathBuf);
 struct Groups(Vec<String>);
 
 fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
+    struct Zombie {
+        inner: Child,
+    }
+
+    impl Drop for Zombie {
+        fn drop(&mut self) {
+            self.inner.kill().unwrap();
+            self.inner.wait().unwrap();
+        }
+    }
+
     if ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
         bail!("localhost not supported");
     }
 
     let s = ip.to_string();
 
-    let child = Command::new("ip")
-        .arg("neigh")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let stdout = child.stdout.unwrap();
+    let mut child = Zombie {
+        inner: Command::new("ip")
+            .arg("neigh")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?,
+    };
+    let stdout = child.inner.stdout.take().unwrap();
     let lines = BufReader::new(stdout).lines();
 
     for line in lines {
@@ -349,6 +363,7 @@ async fn main(
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
+            .app_data(PayloadConfig::new(config.max_payload))
             .app_data(Data::new(boot_config.clone()))
             .app_data(Data::new(registered_file.clone()))
             .app_data(Data::new(storage_dir.clone()))
