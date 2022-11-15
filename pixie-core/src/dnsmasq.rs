@@ -50,75 +50,6 @@ pub struct Config {
     pub networks: Vec<Net>,
 }
 
-impl Config {
-    pub fn to_dnsmasq_config(
-        &self,
-        storage_dir: &Path,
-        http_config: &crate::http::Config,
-    ) -> Result<String> {
-        ensure!(self.networks.len() == 1, "Not implemented: >1 network");
-
-        let net = &self.networks[0];
-
-        anyhow::ensure!(
-            net.dhcp_config.is_none(),
-            "Not implemented: non-dhcp-proxy interfaces"
-        );
-
-        // Get an IPv4 address on the chosen interface.
-        let name = &net.interface;
-        let interface = Interface::get_by_name(name).context("Error listing interfaces")?;
-        let interface = interface.with_context(|| format!("Unknown interface: {}", name))?;
-
-        let ip = interface
-            .addresses
-            .iter()
-            .find(|x| x.kind == interfaces::Kind::Ipv4)
-            .with_context(|| format!("Interface {} has no ipv4 address", name))?;
-
-        let ip = ip.addr.unwrap();
-
-        let ip = match ip {
-            std::net::SocketAddr::V4(addr) => *addr.ip(),
-            _ => panic!("IPv4 address is not IPv4"),
-        };
-
-        let tftp_root = storage_dir.join("tftpboot").to_str().unwrap().to_owned();
-
-        let netid = 0;
-        let server_port = http_config.listen_port;
-
-        Ok(format!(
-            r#"
-### Per-network configuration
-
-## net0
-dhcp-range=set:net{netid},{ip},proxy
-dhcp-boot=tag:pxe,tag:net{netid},ipxe.efi,,{ip}
-dhcp-boot=tag:ipxe,tag:net{netid},http://{ip}:{server_port}/boot.ipxe
-interface={name}
-
-### Common configuration
-
-## Root for TFTP server
-tftp-root={tftp_root}
-enable-tftp
-
-## PXE prompt and timeout
-pxe-prompt="pixie",1
-
-## PXE kind recognition
-# BC_UEFI (00007)
-dhcp-vendorclass=set:pxe,PXEClient:Arch:00007
-# UEFI x86-64 (00009)
-dhcp-vendorclass=set:pxe,PXEClient:Arch:00009
-# iPXE
-dhcp-userclass=set:ipxe,iPXE
-"#
-        ))
-    }
-}
-
 pub struct DnsmasqHandle {
     child: Child,
     hosts: File,
@@ -131,22 +62,44 @@ impl DnsmasqHandle {
         ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");
         let net = &cfg.networks[0];
 
-        let netmask = match net.dhcp_config {
-            Some(netmask) => netmask,
-            None => todo!("dhcp-proxy is not suported"),
-        };
-
         let name = &net.interface;
-        let ip = netmask.addr();
-
         let netid = 0;
         let server_port = http_cfg.listen_port;
 
         let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
         let hosts = File::create(storage_dir.join("hosts"))?;
 
-        let netmask_network = netmask.network();
-        let netmask_broadcast = netmask.broadcast();
+        let (ip, magic_line) = match net.dhcp_config {
+            Some(netmask) => {
+                let ip = netmask.addr();
+                let netmask_network = netmask.network();
+                let netmask_broadcast = netmask.broadcast();
+                (
+                    ip,
+                    format!("dhcp-range=set:net{netid},{netmask_network},{netmask_broadcast}"),
+                )
+            }
+            None => {
+                let interface = Interface::get_by_name(name).context("Error listing interfaces")?;
+                let interface =
+                    interface.with_context(|| format!("Unknown interface: {}", name))?;
+
+                let ip = interface
+                    .addresses
+                    .iter()
+                    .find(|x| x.kind == interfaces::Kind::Ipv4)
+                    .with_context(|| format!("Interface {} has no ipv4 address", name))?;
+
+                let ip = ip.addr.unwrap();
+
+                let ip = match ip {
+                    std::net::SocketAddr::V4(addr) => *addr.ip(),
+                    _ => panic!("IPv4 address is not IPv4"),
+                };
+
+                (ip, format!("dhcp-range=set:net{netid},{ip},proxy"))
+            }
+        };
 
         write!(
             dnsmasq_conf,
@@ -154,8 +107,7 @@ impl DnsmasqHandle {
 ### Per-network configuration
 
 ## net0
-dhcp-range=set:net{netid},{netmask_network},{netmask_broadcast}
-# TODO: dhcp-range=set:net{netid},{ip},proxy
+{magic_line}
 dhcp-range=set:net{netid},10.0.0.0,static
 dhcp-hostsfile={storage_str}/hosts
 dhcp-boot=tag:pxe,tag:net{netid},ipxe.efi,,{ip}
