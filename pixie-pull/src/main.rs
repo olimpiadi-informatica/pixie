@@ -128,6 +128,7 @@ fn main() -> Result<()> {
                 stdout,
                 " pulling chunk {idx} out of {total} to file '{printable_name}'\r"
             )?;
+            stdout.flush()?;
 
             let mut data = vec![0; size];
             file.seek(SeekFrom::Start(start as u64))?;
@@ -146,6 +147,7 @@ fn main() -> Result<()> {
             file.seek(SeekFrom::Start(start as u64))?;
             file.write_all(&data)?;
         }
+        writeln!(stdout)?;
     }
 
     Ok(())

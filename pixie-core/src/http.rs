@@ -177,31 +177,41 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
+    let mut updated = 0usize;
+
     if let Ok(mac) = path.0.parse() {
         if let Some(&unit) = map.get(&mac) {
             inner[unit].action = value.clone();
-            fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
-            Ok("".to_owned().customize())
+            updated += 1;
         } else {
-            Ok("Unknown MAC address"
+            return Ok("Unknown MAC address"
                 .to_owned()
                 .customize()
-                .with_status(StatusCode::BAD_REQUEST))
+                .with_status(StatusCode::BAD_REQUEST));
+        }
+    } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
+        for unit in &mut *inner {
+            if Ipv4Addr::new(10, unit.group, unit.row, unit.col) == ip {
+                unit.action = value.clone();
+                updated += 1;
+            }
         }
     } else if let Ok(group) = groups.0.binary_search(&path.0) {
         for unit in inner.iter_mut() {
             if unit.group as usize == group {
                 unit.action = value.clone();
+                updated += 1;
             }
         }
-        fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
-        Ok("".to_owned().customize())
     } else {
-        Ok("Unknown PC"
+        return Ok("Unknown PC"
             .to_owned()
             .customize()
-            .with_status(StatusCode::BAD_REQUEST))
+            .with_status(StatusCode::BAD_REQUEST));
     }
+
+    fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
+    Ok(format!("{updated} computer updated\n").customize())
 }
 
 #[get("/get_registration_info")]
