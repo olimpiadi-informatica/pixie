@@ -229,10 +229,10 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
 
     let col_start = loop {
         if let Some(line) = lines.next().transpose()? {
-            if line.starts_with("Device") {
-                let mut it = line.split(' ').filter(|s| !s.is_empty() && *s != "Boot");
+            if line.starts_with("Number") {
+                let mut it = line.split(' ').filter(|s| !s.is_empty());
                 it.next();
-                break it.position(|s| s == "Start" || s == "StartLBA").unwrap();
+                break it.position(|s| s.starts_with("Start")).unwrap();
             }
         } else {
             return Ok(None);
@@ -243,7 +243,7 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     let mut ans = Vec::new();
     while let Some(line) = lines.next().transpose()? {
         let mut it = line.split(' ').filter(|s| !s.is_empty() && *s != "*");
-        let name = it.next().unwrap();
+        let name = path.to_owned() + it.next().unwrap();
         let begin: usize = it.nth(col_start).unwrap().parse().unwrap();
         let end: usize = it.next().unwrap().parse::<usize>().unwrap() + 1;
 
@@ -254,7 +254,7 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
             });
         }
 
-        if let Some(chunks) = get_ext4_chunks(name)? {
+        if let Some(chunks) = get_ext4_chunks(&name)? {
             for ChunkInfo { start, size } in chunks {
                 ans.push(ChunkInfo {
                     start: start + sector_size * begin,
