@@ -113,6 +113,10 @@ dhcp-hostsfile={storage_str}/hosts
 dhcp-boot=tag:pxe,tag:net{netid},ipxe.efi,,{ip}
 dhcp-boot=tag:ipxe,tag:net{netid},http://{ip}:{server_port}/boot.ipxe
 interface={name}
+except-interface=lo
+user=root
+group=root
+bind-interfaces
 
 ### Common configuration
 

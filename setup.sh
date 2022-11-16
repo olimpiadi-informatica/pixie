@@ -7,6 +7,10 @@ pushd uefi-reboot-skip
 cargo +nightly build --release --target x86_64-unknown-uefi
 popd
 
+pushd pixie-core
+cargo build --release
+popd
+
 mkdir -p storage/httpstatic
 cp uefi-reboot-skip/target/x86_64-unknown-uefi/release/uefi_app.efi storage/httpstatic/reboot.efi
 
