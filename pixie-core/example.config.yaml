@@ -6,10 +6,10 @@ http:
   listen_address: "0.0.0.0"
   listen_port: 8080
 groups:
-  - qwer
   - asdf
+  - qwer
 boot:
-  default: reboot
+  default: register
   modes:
     reboot: |
       #!ipxe
@@ -26,3 +26,11 @@ boot:
       #!ipxe
       kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> quiet
       boot
+    cmd: |
+      #!ipxe
+      kernel /static/bzImage quiet
+      boot
+    wait: |
+      #!ipxe
+      sleep 5
+      chain /boot.ipxe
