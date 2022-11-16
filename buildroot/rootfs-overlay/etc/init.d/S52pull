@@ -18,8 +18,10 @@ tar xf efivars.tar
 
 for var in efivars/*
 do
-  cp $var /sys/firmware/efi/efivars
+  cp -v $var /sys/firmware/efi/efivars
 done
+
+efibootmgr -o $(cat efivars/boot_order)
 
 echo Done, rebooting now...
 
