@@ -15,7 +15,7 @@ pixie-pull --source $SERVER_URL
 
 tar xf efivars.tar
 
-for var in efivars/*
+for var in efivars/Boot*
 do
   cp -v $var /sys/firmware/efi/efivars
 done
