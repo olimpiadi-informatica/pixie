@@ -80,8 +80,25 @@ impl RemoteFileSaver {
 
 impl FileSaver for RemoteFileSaver {
     fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
-        let url = Url::parse(&self.url)?.join("/chunk")?;
+        let hash = blake3::hash(data);
+        let hash_hex = hash.to_hex();
+
         let client = Client::new();
+        let url = Url::parse(&self.url)?.join(&format!("/has_chunk/{}", hash_hex.as_str()))?;
+        let resp = client
+            .get(url)
+            .send()
+            .context("failed to check chunk existance")?;
+        ensure!(
+            resp.status().is_success(),
+            "failed to check chunk existance"
+        );
+
+        if &*resp.bytes()? == b"pass" {
+            return Ok(hash.as_bytes().to_owned());
+        }
+
+        let url = Url::parse(&self.url)?.join(&format!("/chunk/{}", hash_hex.as_str()))?;
         let resp = client
             .post(url)
             .body(data.to_owned())
@@ -94,11 +111,11 @@ impl FileSaver for RemoteFileSaver {
             })?;
         ensure!(
             resp.status().is_success(),
-            "failed to upload chunk to server, status {}, chunk size {}",
+            "failed to upload chunk server, status {}, chunk size {}",
             resp.status().as_u16(),
             data.len()
         );
-        let hash = blake3::hash(data);
+
         Ok(hash.as_bytes().to_owned())
     }
 

@@ -21,6 +21,7 @@ use actix_web::{
 };
 use anyhow::{anyhow, bail, Context, Result};
 use macaddr::MacAddr6;
+use mktemp::Temp;
 use serde::{Deserialize, Serialize};
 
 use pixie_shared::{Group, RegistrationInfo, Station, StationKind};
@@ -318,13 +319,30 @@ async fn register_hint(hint: Data<Mutex<Station>>) -> Result<impl Responder, Box
     Ok(Json(data))
 }
 
-#[post("/chunk")]
-async fn upload_chunk(body: Bytes, storage_dir: Data<StorageDir>) -> io::Result<impl Responder> {
+#[get("/has_chunk/{hash}")]
+async fn has_chunk(hash: Path<String>, storage_dir: Data<StorageDir>) -> impl Responder {
+    let path = storage_dir.0.join("chunks").join(&*hash);
+    if path.exists() {
+        "pass"
+    } else {
+        "send"
+    }
+}
+
+#[post("/chunk/{hash}")]
+async fn upload_chunk(
+    body: Bytes,
+    hash: Path<String>,
+    storage_dir: Data<StorageDir>,
+) -> io::Result<impl Responder> {
+    let path = storage_dir.0.join("chunks").join(&*hash);
+    let tmp_file = Temp::new_file_in(storage_dir.0.join("tmp"))
+        .expect("failed to create tmp file")
+        .release();
     let body = body.to_vec();
-    let hash = blake3::hash(&body);
-    let path = storage_dir.0.join("chunks").join(hash.to_hex().as_str());
-    fs::write(path, body)?;
-    Ok("")
+    fs::write(&tmp_file, body).unwrap();
+    fs::rename(&tmp_file, path).unwrap();
+    Ok("".customize())
 }
 
 #[post("/image/{name}")]
@@ -381,6 +399,7 @@ async fn main(
             .app_data(machines.clone())
             .app_data(groups.clone())
             .app_data(dnsmasq_handle.clone())
+            .service(has_chunk)
             .service(upload_chunk)
             .service(upload_image)
             .service(Files::new("/static", &static_files))
