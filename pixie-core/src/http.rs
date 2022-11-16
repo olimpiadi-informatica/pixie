@@ -6,7 +6,10 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{Mutex, RwLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, RwLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -357,6 +360,37 @@ async fn upload_image(
     Ok("")
 }
 
+#[get("/chunk/{hash}")]
+async fn get_chunk(
+    hash: Path<String>,
+    storage_dir: Data<StorageDir>,
+) -> io::Result<impl Responder> {
+    static CONN: AtomicUsize = AtomicUsize::new(0);
+
+    struct Handle;
+
+    impl Handle {
+        fn new(limit: usize) -> Option<Self> {
+            CONN.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                (x < limit).then(|| x + 1)
+            })
+            .is_ok()
+            .then(|| Handle)
+        }
+    }
+
+    impl Drop for Handle {
+        fn drop(&mut self) {
+            CONN.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    match Handle::new(12) {
+        Some(_handle) => Ok(fs::read(storage_dir.0.join("chunks").join(&*hash))?.customize()),
+        None => Ok(Vec::new().customize().with_status(StatusCode::IM_A_TEAPOT)),
+    }
+}
+
 async fn main(
     storage_dir: PathBuf,
     config: Config,
@@ -367,7 +401,6 @@ async fn main(
 ) -> Result<()> {
     let static_files = storage_dir.join("httpstatic");
     let images = storage_dir.join("images");
-    let chunks = storage_dir.join("chunks");
     let registered_file = RegisteredFile(storage_dir.join("registered.json"));
     let storage_dir = StorageDir(storage_dir);
     let hint = Data::new(Mutex::new(Station::default()));
@@ -404,7 +437,7 @@ async fn main(
             .service(upload_image)
             .service(Files::new("/static", &static_files))
             .service(Files::new("/image", &images))
-            .service(Files::new("/chunk", &chunks))
+            .service(get_chunk)
             .service(boot)
             .service(get_registration_info)
             .service(register)

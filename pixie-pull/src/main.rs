@@ -3,10 +3,13 @@ use std::{
     fs::File,
     io::{self, ErrorKind, Read, Seek, SeekFrom, Write},
     path::Path,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{ensure, Result};
 use clap::Parser;
+use rand::RngCore;
 
 use pixie_shared::{ChunkHash, Segment};
 
@@ -66,13 +69,23 @@ impl FileFetcher for RemoteFileFetcher {
         for byte in hash {
             write!(hex, "{:02x}", byte)?;
         }
-        let url = reqwest::Url::parse(&self.url)?
-            .join("/chunk/")?
-            .join(&hex)?;
-        let resp = reqwest::blocking::get(url)?;
+
+        let resp = loop {
+            let url = reqwest::Url::parse(&self.url)?
+                .join("/chunk/")?
+                .join(&hex)?;
+            let resp = reqwest::blocking::get(url)?;
+            if resp.status() != 418 {
+                break resp;
+            }
+            thread::sleep(Duration::from_millis(
+                1000 + rand::thread_rng().next_u64() % 1000,
+            ));
+        };
+
         ensure!(
             resp.status().is_success(),
-            "status ({}) is not success",
+            "failed to fetch chunk: status ({}) is not success",
             resp.status().as_u16(),
         );
         let body = resp.bytes()?;
@@ -83,7 +96,7 @@ impl FileFetcher for RemoteFileFetcher {
         let resp = reqwest::blocking::get(&self.url)?;
         ensure!(
             resp.status().is_success(),
-            "status ({}) is not success",
+            "failed to fetch image: status ({}) is not success",
             resp.status().as_u16()
         );
         let body = resp.text()?;
