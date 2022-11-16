@@ -7,8 +7,7 @@ set -e
 SERVER_URL=$(cat /proc/cmdline | grep -o 'pull=[^ ]*' | cut -f 2 -d =)
 [ -z "$SERVER_URL" ] && exit
 
-echo Waiting for network...
-sleep 20
+/bin/wait_for_network.sh $SERVER_URL
 
 mount -t efivarfs efivarfs /sys/firmware/efi/efivars
 

@@ -10,8 +10,7 @@ DISK=$(cat /proc/cmdline | grep -o 'disk=[^ ]*' | cut -f 2 -d =)
 [ -z "$SERVER_URL" ] && exit
 [ -z "$DISK" ] && exit
 
-echo Waiting for network...
-sleep 20
+/bin/wait_for_network.sh $SERVER_URL
 
 mount -t efivarfs efivarfs /sys/firmware/efi/efivars
 
