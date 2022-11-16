@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
+use gpt::{self};
 use reqwest::{blocking::Client, Url};
 
 use pixie_shared::{ChunkHash, Offset, Segment};
@@ -200,81 +201,54 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
 }
 
 fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
-    let child = Command::new("fdisk")
-        .arg("-l")
-        .arg(path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let stdout = child.stdout.unwrap();
-    let mut lines = BufReader::new(stdout).lines();
-
-    let (size_in_bytes, size_in_sectors): (usize, usize) = match lines.next() {
-        Some(Ok(s)) => {
-            let mut it = s.split(' ');
-            let x = it.nth(4);
-            let y = it.nth(1);
-            if let (Some(x), Some(y)) = (x, y) {
-                (x.parse()?, y.parse()?)
-            } else {
-                return Ok(None);
-            }
-        }
-        Some(Err(e)) => return Err(e.into()),
-        None => return Ok(None),
+    let disk_size = {
+        File::open(path)
+            .expect("File cannot be opened")
+            .seek(SeekFrom::End(0))
+            .expect("failed to seek disk") as usize
     };
-
-    let sector_size = size_in_bytes / size_in_sectors;
-
-    let col_start = loop {
-        if let Some(line) = lines.next().transpose()? {
-            if line.starts_with("Number") {
-                let mut it = line.split(' ').filter(|s| !s.is_empty());
-                it.next();
-                break it.position(|s| s.starts_with("Start")).unwrap();
-            }
-        } else {
-            return Ok(None);
-        }
-    };
-
-    let mut pos = 0;
-    let mut ans = Vec::new();
-    while let Some(line) = lines.next().transpose()? {
-        let mut it = line.split(' ').filter(|s| !s.is_empty() && *s != "*");
-        let name = path.to_owned() + it.next().unwrap();
-        let begin: usize = it.nth(col_start).unwrap().parse().unwrap();
-        let end: usize = it.next().unwrap().parse::<usize>().unwrap() + 1;
+    let cfg = gpt::GptConfig::new().writable(false);
+    let disk = cfg.open(path);
+    if disk.is_err() {
+        return Ok(None);
+    }
+    let disk = disk.unwrap();
+    let mut pos = 0usize;
+    let mut ans = vec![];
+    for (id, partition) in disk.partitions().iter().enumerate() {
+        let name = format!("{path}p{}", id + 1);
+        // lba 512 byte
+        let begin = (partition.1.first_lba * 512) as usize;
+        let end = ((partition.1.last_lba + 1) * 512) as usize;
 
         if pos < begin {
             ans.push(ChunkInfo {
-                start: sector_size * pos,
-                size: sector_size * (begin - pos),
+                start: pos,
+                size: (begin - pos),
             });
         }
 
         if let Some(chunks) = get_ext4_chunks(&name)? {
             for ChunkInfo { start, size } in chunks {
                 ans.push(ChunkInfo {
-                    start: start + sector_size * begin,
+                    start: start + begin,
                     size,
                 });
             }
         } else {
             ans.push(ChunkInfo {
-                start: sector_size * begin,
-                size: sector_size * (end - begin),
+                start: begin,
+                size: (end - begin),
             });
         }
 
         pos = end;
     }
 
-    if pos < size_in_sectors {
+    if pos < disk_size {
         ans.push(ChunkInfo {
-            start: sector_size * pos,
-            size: sector_size * (size_in_sectors - pos),
+            start: pos,
+            size: disk_size - pos,
         });
     }
 
