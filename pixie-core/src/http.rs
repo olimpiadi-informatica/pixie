@@ -227,6 +227,11 @@ async fn action(
                 updated += 1;
             }
         }
+    } else if path.0 == "all" {
+        for unit in inner.iter_mut() {
+            unit.action = value.clone();
+            updated += 1;
+        }
     } else if let Ok(group) = groups.0.binary_search(&path.0) {
         for unit in inner.iter_mut() {
             if unit.group as usize == group {
