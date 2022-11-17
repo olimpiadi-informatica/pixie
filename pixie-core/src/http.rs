@@ -23,6 +23,7 @@ use actix_web::{
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use interfaces::Interface;
 use macaddr::MacAddr6;
 use mktemp::Temp;
 use serde::{Deserialize, Serialize};
@@ -31,7 +32,7 @@ use pixie_shared::{Group, RegistrationInfo, Station, StationKind};
 
 use crate::dnsmasq::DnsmasqHandle;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub max_payload: usize,
     pub listen_address: String,
@@ -121,11 +122,32 @@ fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
     bail!("Mac address not found");
 }
 
+fn find_interface_ip(peer_ip: Ipv4Addr) -> Result<Ipv4Addr, Box<dyn Error>> {
+    for interface in Interface::get_all()? {
+        for address in &interface.addresses {
+            let Some(IpAddr::V4(addr)) = address.addr.map(|x| x.ip()) else {
+                continue;
+            };
+            let Some(IpAddr::V4(mask)) = address.mask.map(|x| x.ip()) else {
+                continue;
+            };
+            if (u32::from_ne_bytes(addr.octets()) ^ u32::from_ne_bytes(peer_ip.octets()))
+                & u32::from_ne_bytes(mask.octets())
+                == 0
+            {
+                return Ok(addr);
+            }
+        }
+    }
+    Err(anyhow!("Could not find the corresponding ip"))?
+}
+
 #[get("/boot.ipxe")]
 async fn boot(
     req: HttpRequest,
     boot_config: Data<BootConfig>,
     machines: Data<RwLock<Machines>>,
+    config: Data<Config>,
 ) -> Result<impl Responder, Box<dyn Error>> {
     let peer_mac = match req.peer_addr() {
         Some(ip) => find_mac(ip.ip())?,
@@ -147,7 +169,15 @@ async fn boot(
     let cmd = boot_config
         .modes
         .get(mode)
-        .ok_or_else(|| anyhow!("mode {} does not exists", mode))?
+        .ok_or_else(|| anyhow!("mode {} does not exists", mode))?;
+    let peer_ip = req.peer_addr().unwrap().ip();
+    let peer_ip = match peer_ip {
+        IpAddr::V4(ip) => ip,
+        IpAddr::V6(_) => Err(anyhow!("IPv6 is not supported"))?,
+    };
+    let cmd = cmd
+        .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
+        .replace("<server_port>", &config.listen_port.to_string())
         .replace("<server_loc>", req.app_config().host());
     let cmd = match unit {
         Some(unit) => cmd.replace(
@@ -420,6 +450,7 @@ async fn main(
     let machines = Data::new(RwLock::new(machines));
     groups.sort();
     let groups = Data::new(Groups(groups));
+    let config_data = Data::new(config.clone());
 
     HttpServer::new(move || {
         App::new()
@@ -428,6 +459,7 @@ async fn main(
             .app_data(Data::new(boot_config.clone()))
             .app_data(Data::new(registered_file.clone()))
             .app_data(Data::new(storage_dir.clone()))
+            .app_data(config_data.clone())
             .app_data(hint.clone())
             .app_data(machines.clone())
             .app_data(groups.clone())
