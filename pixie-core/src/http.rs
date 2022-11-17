@@ -170,15 +170,12 @@ async fn boot(
         .modes
         .get(mode)
         .ok_or_else(|| anyhow!("mode {} does not exists", mode))?;
-    let peer_ip = req.peer_addr().unwrap().ip();
-    let peer_ip = match peer_ip {
-        IpAddr::V4(ip) => ip,
-        IpAddr::V6(_) => Err(anyhow!("IPv6 is not supported"))?,
+    let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
+        Err(anyhow!("IPv6 is not supported"))?
     };
     let cmd = cmd
         .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
-        .replace("<server_port>", &config.listen_port.to_string())
-        .replace("<server_loc>", req.app_config().host());
+        .replace("<server_port>", &config.listen_port.to_string());
     let cmd = match unit {
         Some(unit) => cmd.replace(
             "<image>",
