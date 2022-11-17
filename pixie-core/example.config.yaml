@@ -1,13 +1,14 @@
 dnsmasq:
   networks:
     - interface: wlan0
+      proxy: 192.168.1.100
 http:
   max_payload: 10000000
   listen_address: "0.0.0.0"
   listen_port: 8080
 groups:
-  - asdf
-  - qwer
+  asdf: 0
+  qwer: 1
 boot:
   default: register
   modes:
