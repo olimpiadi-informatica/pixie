@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{ensure, Context, Result};
-use interfaces::{HardwareAddr, Interface};
+use anyhow::{bail, ensure, Result};
+use interfaces::HardwareAddr;
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use serde_derive::Deserialize;
@@ -38,9 +38,10 @@ pub struct FixedNet {
 
 #[derive(Debug, Eq, PartialEq, Deserialize)]
 pub struct Net {
-    /// If None, this represents a proxy-dhcp subnet; the server IP will be deduced by the
-    /// first available address on the specified interface.
-    pub dhcp_config: Option<Ipv4Net>,
+    /// IP range for dhcp server
+    pub netaddr: Option<Ipv4Net>,
+    /// Address for proxy-dhcp
+    pub proxy: Option<Ipv4Addr>,
     /// Name of the interface this network is served on.
     pub interface: String,
 }
@@ -69,36 +70,17 @@ impl DnsmasqHandle {
         let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
         let hosts = File::create(storage_dir.join("hosts"))?;
 
-        let (ip, magic_line) = match net.dhcp_config {
-            Some(netmask) => {
-                let ip = netmask.addr();
-                let netmask_network = netmask.network();
-                let netmask_broadcast = netmask.broadcast();
+        let (ip, magic_line) = match (net.netaddr, net.proxy) {
+            (Some(net), None) => {
+                let begin = net.network();
+                let end = net.broadcast();
                 (
-                    ip,
-                    format!("dhcp-range=set:net{netid},{netmask_network},{netmask_broadcast}"),
+                    net.addr(),
+                    format!("dhcp-range=set:net{netid},{begin},{end}"),
                 )
             }
-            None => {
-                let interface = Interface::get_by_name(name).context("Error listing interfaces")?;
-                let interface =
-                    interface.with_context(|| format!("Unknown interface: {}", name))?;
-
-                let ip = interface
-                    .addresses
-                    .iter()
-                    .find(|x| x.kind == interfaces::Kind::Ipv4)
-                    .with_context(|| format!("Interface {} has no ipv4 address", name))?;
-
-                let ip = ip.addr.unwrap();
-
-                let ip = match ip {
-                    std::net::SocketAddr::V4(addr) => *addr.ip(),
-                    _ => panic!("IPv4 address is not IPv4"),
-                };
-
-                (ip, format!("dhcp-range=set:net{netid},{ip},proxy"))
-            }
+            (None, Some(ip)) => (ip, format!("dhcp-range=set:net{netid},{ip},proxy")),
+            _ => bail!("specify exactly one between netaddr or proxy"),
         };
 
         write!(
