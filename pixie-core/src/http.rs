@@ -10,7 +10,6 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Mutex, RwLock,
     },
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use actix_files::Files;
@@ -28,7 +27,7 @@ use macaddr::MacAddr6;
 use mktemp::Temp;
 use serde::{Deserialize, Serialize};
 
-use pixie_shared::{Group, RegistrationInfo, Station, StationKind};
+use pixie_shared::{Station, StationKind};
 
 use crate::dnsmasq::DnsmasqHandle;
 
@@ -78,7 +77,7 @@ struct StorageDir(PathBuf);
 struct RegisteredFile(PathBuf);
 
 #[derive(Clone, Debug)]
-struct Groups(Vec<String>);
+struct Groups(BTreeMap<String, u8>);
 
 fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
     struct Zombie {
@@ -232,9 +231,9 @@ async fn action(
             unit.action = value.clone();
             updated += 1;
         }
-    } else if let Ok(group) = groups.0.binary_search(&path.0) {
+    } else if let Some(&group) = groups.0.get(&path.0) {
         for unit in inner.iter_mut() {
-            if unit.group as usize == group {
+            if unit.group == group {
                 unit.action = value.clone();
                 updated += 1;
             }
@@ -250,29 +249,6 @@ async fn action(
     Ok(format!("{updated} computer updated\n").customize())
 }
 
-#[get("/get_registration_info")]
-async fn get_registration_info() -> impl Responder {
-    let t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_micros();
-    let ans = RegistrationInfo {
-        groups: vec![
-            Group {
-                name: "workers".into(),
-                shape: None,
-            },
-            Group {
-                name: "contestants".into(),
-                shape: Some((10, 10)),
-            },
-        ],
-        candidate_group: "contestants".into(),
-        candidate_position: vec![2, (t as u32 % 10) as u8],
-    };
-    Json(ans)
-}
-
 #[post("/register")]
 async fn register(
     req: HttpRequest,
@@ -281,18 +257,11 @@ async fn register(
     hint: Data<Mutex<Station>>,
     machines: Data<RwLock<Machines>>,
     registered_file: Data<RegisteredFile>,
-    groups: Data<Groups>,
     dnsmasq_handle: Data<Mutex<DnsmasqHandle>>,
 ) -> Result<impl Responder, Box<dyn Error>> {
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
-            if data.group as usize >= groups.0.len() {
-                return Ok("Invalid group"
-                    .customize()
-                    .with_status(StatusCode::BAD_REQUEST));
-            }
-
             let mut guard = hint.lock().map_err(|_| anyhow!("hint mutex is poisoned"))?;
             *guard = Station {
                 kind: data.kind,
@@ -428,7 +397,7 @@ async fn main(
     config: Config,
     boot_config: BootConfig,
     units: Vec<Unit>,
-    mut groups: Vec<String>,
+    groups: BTreeMap<String, u8>,
     mut dnsmasq_handle: DnsmasqHandle,
 ) -> Result<()> {
     let static_files = storage_dir.join("httpstatic");
@@ -450,7 +419,6 @@ async fn main(
     dnsmasq_handle.send_sighup()?;
     let dnsmasq_handle = Data::new(Mutex::new(dnsmasq_handle));
     let machines = Data::new(RwLock::new(machines));
-    groups.sort();
     let groups = Data::new(Groups(groups));
     let config_data = Data::new(config.clone());
 
@@ -473,7 +441,6 @@ async fn main(
             .service(Files::new("/image", &images))
             .service(get_chunk)
             .service(boot)
-            .service(get_registration_info)
             .service(register)
             .service(register_hint)
             .service(action)
@@ -491,7 +458,7 @@ pub async fn main_sync(
     config: Config,
     boot_config: BootConfig,
     units: Vec<Unit>,
-    groups: Vec<String>,
+    groups: BTreeMap<String, u8>,
     dnsmasq_handle: DnsmasqHandle,
 ) -> Result<()> {
     main(

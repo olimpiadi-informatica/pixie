@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -14,7 +14,7 @@ pub struct PixieConfig {
     dnsmasq: dnsmasq::Config,
     http: http::Config,
     boot: http::BootConfig,
-    groups: Vec<String>,
+    groups: BTreeMap<String, u8>,
 }
 
 #[derive(Parser, Debug)]
