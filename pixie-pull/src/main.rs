@@ -10,8 +10,9 @@ use std::{
 use anyhow::{ensure, Result};
 use clap::Parser;
 use rand::RngCore;
+use zstd::bulk;
 
-use pixie_shared::{ChunkHash, Segment};
+use pixie_shared::{ChunkHash, Segment, CHUNK_SIZE};
 
 #[derive(Parser, Debug)]
 struct Options {
@@ -89,7 +90,7 @@ impl FileFetcher for RemoteFileFetcher {
             resp.status().as_u16(),
         );
         let body = resp.bytes()?;
-        Ok(body.to_vec())
+        Ok(bulk::decompress(body.as_ref(), CHUNK_SIZE)?)
     }
 
     fn fetch_image(&self) -> Result<Vec<pixie_shared::File>> {

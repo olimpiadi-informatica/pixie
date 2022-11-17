@@ -14,4 +14,3 @@ A system to boot multiple computers, supporting rsync-like updates
 * UI
 * gruppi più flessibili
 * registrazione più fancy
-* compressione

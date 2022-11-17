@@ -7,12 +7,11 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
-use gpt::{self};
+use gpt;
 use reqwest::{blocking::Client, Url};
+use zstd::bulk;
 
-use pixie_shared::{ChunkHash, Offset, Segment};
-
-const CHUNK_SIZE: usize = 1 << 22;
+use pixie_shared::{ChunkHash, Offset, Segment, CHUNK_SIZE};
 
 #[derive(Parser, Debug)]
 struct Options {
@@ -101,7 +100,7 @@ impl FileSaver for RemoteFileSaver {
         let url = Url::parse(&self.url)?.join(&format!("/chunk/{}", hash_hex.as_str()))?;
         let resp = client
             .post(url)
-            .body(data.to_owned())
+            .body(bulk::compress(data, 1)?)
             .send()
             .with_context(|| {
                 format!(

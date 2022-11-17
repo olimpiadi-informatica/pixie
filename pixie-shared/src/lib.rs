@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use blake3::OUT_LEN;
 use serde_derive::{Deserialize, Serialize};
 
+pub const CHUNK_SIZE: usize = 1 << 22;
+
 #[derive(Serialize, Deserialize)]
 pub struct Group {
     pub name: String,
