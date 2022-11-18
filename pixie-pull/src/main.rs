@@ -1,6 +1,7 @@
 use std::{
+    collections::HashMap,
     fmt::Write as fmtWrite,
-    fs::File,
+    fs::{self, File},
     io::{self, ErrorKind, Read, Seek, SeekFrom, Write},
     path::Path,
     thread,
@@ -124,7 +125,7 @@ fn main() -> Result<()> {
 
     for pixie_shared::File { name, chunks } in info {
         if let Some(prefix) = name.parent() {
-            std::fs::create_dir_all(prefix)?;
+            fs::create_dir_all(prefix)?;
         }
 
         let mut file = File::options()
@@ -132,6 +133,8 @@ fn main() -> Result<()> {
             .write(true)
             .create(true)
             .open(&name)?;
+
+        let mut seen = HashMap::new();
 
         let total = chunks.len();
 
@@ -145,21 +148,35 @@ fn main() -> Result<()> {
             stdout.flush()?;
 
             let mut data = vec![0; size];
-            file.seek(SeekFrom::Start(start as u64))?;
-            match file.read_exact(&mut data) {
-                Ok(()) => {
-                    let cur_hash = blake3::hash(&data);
-                    if &hash == cur_hash.as_bytes() {
-                        continue;
-                    }
-                }
-                Err(e) if e.kind() == ErrorKind::UnexpectedEof => {}
-                Err(e) => return Err(e.into()),
-            }
 
-            let data = file_fetcher.fetch_chunk(hash)?;
-            file.seek(SeekFrom::Start(start as u64))?;
-            file.write_all(&data)?;
+            match seen.entry(hash) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    let s = *entry.get();
+                    file.seek(SeekFrom::Start(s as u64))?;
+                    file.read_exact(&mut data)?;
+                    file.seek(SeekFrom::Start(start as u64))?;
+                    file.write_all(&data)?;
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    file.seek(SeekFrom::Start(start as u64))?;
+                    match file.read_exact(&mut data) {
+                        Ok(()) => {
+                            let cur_hash = blake3::hash(&data);
+                            if &hash == cur_hash.as_bytes() {
+                                continue;
+                            }
+                        }
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => {}
+                        Err(e) => return Err(e.into()),
+                    }
+
+                    let data = file_fetcher.fetch_chunk(hash)?;
+                    file.seek(SeekFrom::Start(start as u64))?;
+                    file.write_all(&data)?;
+
+                    entry.insert(start);
+                }
+            }
         }
         writeln!(stdout)?;
     }
