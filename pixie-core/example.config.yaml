@@ -17,15 +17,15 @@ boot:
       chain /static/reboot.efi
     register: |
       #!ipxe
-      kernel /static/bzImage register=<server_ip>:<server_port> quiet
+      kernel /static/bzImage register=<server_ip>:<server_port> ip=dhcp quiet
       boot
     push: |
       #!ipxe
-      kernel /static/bzImage push=http://<server_ip>:<server_port>/image/<image> disk=/dev/nvme0n1 quiet
+      kernel /static/bzImage push=http://<server_ip>:<server_port>/image/<image> disk=/dev/nvme0n1 ip=dhcp quiet
       boot
     pull: |
       #!ipxe
-      kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> quiet
+      kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> ip=dhcp quiet
       boot
     cmd: |
       #!ipxe

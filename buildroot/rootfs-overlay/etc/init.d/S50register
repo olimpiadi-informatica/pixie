@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 [ "$1" == "start" ] || exit
 
@@ -6,8 +6,6 @@ set -e
 
 SERVER_URL=$(cat /proc/cmdline | grep -o 'register=[^ ]*' | cut -f 2 -d =)
 [ -z "$SERVER_URL" ] && exit
-
-/bin/wait_for_network.sh $SERVER_URL
 
 echo Press enter to start registration...
 read
