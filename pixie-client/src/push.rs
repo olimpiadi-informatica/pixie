@@ -99,7 +99,7 @@ impl FileSaver for RemoteFileSaver {
         let url = Url::parse(&self.url)?.join(&format!("/chunk/{}", hash_hex.as_str()))?;
         let resp = client
             .post(url)
-            .body(bulk::compress(data, 1)?)
+            .body(data.to_owned())
             .send()
             .with_context(|| {
                 format!(
@@ -394,11 +394,13 @@ pub fn main() -> Result<()> {
                 file.seek(SeekFrom::Start(chnk.start as u64))?;
                 let mut data = vec![0; chnk.size];
                 file.read_exact(&mut data)?;
+                let data = bulk::compress(&data, 1)?;
                 let hash = file_saver.save_chunk(&data)?;
                 Ok(Segment {
                     hash,
                     start: chnk.start,
                     size: chnk.size,
+                    csize: data.len(),
                 })
             })
             .collect();

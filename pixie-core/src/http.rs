@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader},
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
-    path::PathBuf,
+    path::{self, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -398,8 +398,8 @@ async fn get_chunk(
     }
 }
 
-async fn main(
-    storage_dir: PathBuf,
+pub async fn main(
+    storage_dir: &path::Path,
     config: Config,
     boot_config: BootConfig,
     units: Vec<Unit>,
@@ -409,15 +409,11 @@ async fn main(
     let static_files = storage_dir.join("httpstatic");
     let images = storage_dir.join("images");
     let registered_file = RegisteredFile(storage_dir.join("registered.json"));
-    let storage_dir = StorageDir(storage_dir);
+    let storage_dir = StorageDir(storage_dir.into());
     let hint = Data::new(Mutex::new(Station::default()));
     let machines = Machines::new(units);
     for (i, unit) in machines.inner.iter().enumerate() {
-        dnsmasq_handle.write_host(
-            i,
-            unit.mac,
-            unit.ip(),
-        )?;
+        dnsmasq_handle.write_host(i, unit.mac, unit.ip())?;
         if boot_config.modes.get(&unit.action).is_none() {
             bail!("Unknown mode {}", unit.action);
         }
@@ -456,24 +452,4 @@ async fn main(
     .await?;
 
     Ok(())
-}
-
-#[actix_web::main]
-pub async fn main_sync(
-    storage_dir: PathBuf,
-    config: Config,
-    boot_config: BootConfig,
-    units: Vec<Unit>,
-    groups: BTreeMap<String, u8>,
-    dnsmasq_handle: DnsmasqHandle,
-) -> Result<()> {
-    main(
-        storage_dir,
-        config,
-        boot_config,
-        units,
-        groups,
-        dnsmasq_handle,
-    )
-    .await
 }

@@ -31,6 +31,8 @@ pub struct Segment {
     pub hash: ChunkHash,
     pub start: Offset,
     pub size: usize,
+    /// size after compression
+    pub csize: usize,
 }
 
 /// A file is stored as a list of chunks and offsets.
@@ -54,3 +56,7 @@ pub struct Station {
     pub row: u8,
     pub col: u8,
 }
+
+pub const PACKET_LEN: usize = 1436;
+pub const HEADER_LEN: usize = 34;
+pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;

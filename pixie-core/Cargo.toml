@@ -19,6 +19,8 @@ serde_yaml = "0.8"
 libc = "0.2.137"
 macaddr = { version = "1.0.1", features = ["serde"] }
 mktemp = "0.5.0"
+tokio = { version = "1.22.0", features = ["macros"] }
+actix-rt = "2.7.0"
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"

@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use pixie_core::{
     dnsmasq::{self, DnsmasqHandle},
-    http,
+    http, udp,
 };
 
 #[derive(Debug, Deserialize)]
@@ -15,6 +15,7 @@ pub struct PixieConfig {
     http: http::Config,
     boot: http::BootConfig,
     groups: BTreeMap<String, u8>,
+    udp: udp::Config,
 }
 
 #[derive(Parser, Debug)]
@@ -24,7 +25,8 @@ pub struct PixieOptions {
     storage_dir: PathBuf,
 }
 
-fn main() -> Result<()> {
+#[actix_rt::main]
+async fn main() -> Result<()> {
     env_logger::init();
 
     // Validate the configuration.
@@ -67,14 +69,17 @@ fn main() -> Result<()> {
         .context("invalid json at registered.json")?
         .unwrap_or_default();
 
-    http::main_sync(
-        options.storage_dir,
-        config.http,
-        config.boot,
-        units,
-        config.groups,
-        dnsmasq_handle,
-    )?;
+    tokio::select!(
+        x = http::main(
+            &options.storage_dir,
+            config.http,
+            config.boot,
+            units,
+            config.groups,
+            dnsmasq_handle,
+        ) => x?,
+        x = udp::main(&options.storage_dir, config.udp) => x?,
+    );
 
     Ok(())
 }
