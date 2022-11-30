@@ -12,7 +12,7 @@ struct Options {
     server: String,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Options::parse();
 
     let mut stdin = io::stdin().lock();

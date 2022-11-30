@@ -107,7 +107,7 @@ impl FileFetcher for RemoteFileFetcher {
     }
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Options::parse();
 
     ensure!(!args.source.is_empty(), "Specify a source");

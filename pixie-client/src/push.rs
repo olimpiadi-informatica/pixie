@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
-use gpt;
+use gpt::GptConfig;
 use reqwest::{blocking::Client, Url};
 use zstd::bulk;
 
@@ -159,7 +159,7 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
 
     let mut ans = Vec::new();
 
-    while lines.next().unwrap()? != "" {}
+    while !lines.next().unwrap()?.is_empty() {}
 
     loop {
         let (mut begin, end): (usize, usize) = loop {
@@ -223,7 +223,7 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
             .seek(SeekFrom::End(0))
             .expect("failed to seek disk") as usize
     };
-    let cfg = gpt::GptConfig::new().writable(false);
+    let cfg = GptConfig::new().writable(false);
     let disk = cfg.open(path);
     if disk.is_err() {
         return Ok(None);
@@ -312,7 +312,7 @@ fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
     Ok(out)
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     let args = Options::parse();
 
     ensure!(!args.sources.is_empty(), "Specify at least one source");

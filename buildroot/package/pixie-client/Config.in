@@ -1,9 +1,9 @@
-config BR2_PACKAGE_PIXIE_REGISTER
-    bool "pixie_register"
+config BR2_PACKAGE_PIXIE_CLIENT
+    bool "pixie_client"
     depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
     depends on BR2_PACKAGE_HOST_PKGCONF
     depends on BR2_PACKAGE_LIBOPENSSL
     select BR2_PACKAGE_HOST_RUSTC
     help
-      Register machine.
+      Fetch images.
 
