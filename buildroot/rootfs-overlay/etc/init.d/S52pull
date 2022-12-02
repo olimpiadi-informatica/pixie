@@ -10,15 +10,7 @@ SERVER_URL=$(cat /proc/cmdline | grep -o 'pull=[^ ]*' | cut -f 2 -d =)
 mount -t efivarfs efivarfs /sys/firmware/efi/efivars
 
 pixie-pull --source $SERVER_URL
-
-tar xf efivars.tar
-
-for var in efivars/Boot*
-do
-  cp -v $var /sys/firmware/efi/efivars
-done
-
-efibootmgr -o $(cat efivars/boot_order)
+pixie-set-boot-order --boot-order-path boot_order
 
 echo Done, rebooting now...
 

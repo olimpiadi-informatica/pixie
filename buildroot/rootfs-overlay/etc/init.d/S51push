@@ -12,19 +12,8 @@ DISK=$(cat /proc/cmdline | grep -o 'disk=[^ ]*' | cut -f 2 -d =)
 
 mount -t efivarfs efivarfs /sys/firmware/efi/efivars
 
-mkdir efivars
-
-# TODO
-for var in /sys/firmware/efi/efivars/Boot000*
-do
-  cp $var efivars
-done
-
-efibootmgr | grep BootOrder | cut -f 2 -d : > efivars/boot_order
-
-tar c efivars > efivars.tar
-
-pixie-push --destination $SERVER_URL -- $DISK efivars.tar
+pixie-save-boot-order --boot-order-path boot_order
+pixie-push --destination $SERVER_URL -- $DISK boot_order
 
 echo Done, rebooting now...
 
