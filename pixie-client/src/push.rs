@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, ErrorKind, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -170,7 +170,11 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     let mut reader = File::open(path).unwrap();
     let mut superblock = [0; 1024];
     reader.seek(SeekFrom::Start(1024))?;
-    reader.read_exact(&mut superblock)?;
+    match reader.read_exact(&mut superblock) {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => Err(e)?,
+    }
 
     let magic = le16(&superblock, 0x38);
     if magic != 0xEF53 {
