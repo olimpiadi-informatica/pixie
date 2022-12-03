@@ -65,7 +65,7 @@ impl DnsmasqHandle {
 
         let name = &net.interface;
         let netid = 0;
-        let server_port = http_cfg.listen_port;
+        let server_port = http_cfg.listen_on.port();
 
         let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
         let hosts = File::create(storage_dir.join("hosts"))?;

@@ -3,7 +3,7 @@ use std::{
     error::Error,
     fs,
     io::{self, BufRead, BufReader},
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddrV4},
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
@@ -34,12 +34,12 @@ use crate::dnsmasq::DnsmasqHandle;
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
     pub max_payload: usize,
-    pub listen_address: String,
-    pub listen_port: u16,
+    pub listen_on: SocketAddrV4,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct BootConfig {
+    unregistered: String,
     default: String,
     modes: BTreeMap<String, String>,
 }
@@ -48,10 +48,16 @@ pub struct BootConfig {
 pub struct Unit {
     mac: MacAddr6,
     kind: StationKind,
+    group: u8,
     row: u8,
     col: u8,
-    group: u8,
     action: String,
+}
+
+impl Unit {
+    fn ip(&self) -> Ipv4Addr {
+        Ipv4Addr::new(10, self.group, self.row, self.col)
+    }
 }
 
 #[derive(Debug)]
@@ -164,7 +170,7 @@ async fn boot(
     let unit = map.get(&peer_mac).copied();
     let mode: &str = unit
         .map(|unit| &inner[unit].action)
-        .unwrap_or(&boot_config.default);
+        .unwrap_or(&boot_config.unregistered);
     let cmd = boot_config
         .modes
         .get(mode)
@@ -174,7 +180,7 @@ async fn boot(
     };
     let cmd = cmd
         .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
-        .replace("<server_port>", &config.listen_port.to_string());
+        .replace("<server_port>", &config.listen_on.port().to_string());
     let cmd = match unit {
         Some(unit) => cmd.replace(
             "<image>",
@@ -221,7 +227,7 @@ async fn action(
         }
     } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
         for unit in &mut *inner {
-            if Ipv4Addr::new(10, unit.group, unit.row, unit.col) == ip {
+            if unit.ip() == ip {
                 unit.action = value.clone();
                 updated += 1;
             }
@@ -246,7 +252,7 @@ async fn action(
     }
 
     fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
-    Ok(format!("{updated} computer updated\n").customize())
+    Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
 #[post("/register")]
@@ -281,23 +287,23 @@ async fn register(
                 .entry(peer_mac)
                 .and_modify(|&mut unit| {
                     inner[unit].kind = data.kind;
+                    inner[unit].group = data.group;
                     inner[unit].row = data.row;
                     inner[unit].col = data.col;
-                    inner[unit].group = data.group;
                 })
                 .or_insert_with(|| {
                     inner.push(Unit {
                         mac: peer_mac,
                         kind: data.kind,
+                        group: data.group,
                         row: data.row,
                         col: data.col,
-                        group: data.group,
                         action: boot_config.default.clone(),
                     });
                     inner.len() - 1
                 });
 
-            let ip = Ipv4Addr::new(10, data.group, data.row, data.col);
+            let ip = inner[unit].ip();
 
             let mut dnsmasq_lock = dnsmasq_handle
                 .lock()
@@ -373,10 +379,10 @@ async fn get_chunk(
     impl Handle {
         fn new(limit: usize) -> Option<Self> {
             CONN.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                (x < limit).then(|| x + 1)
+                (x < limit).then_some(x + 1)
             })
             .is_ok()
-            .then(|| Handle)
+            .then_some(Handle)
         }
     }
 
@@ -410,7 +416,7 @@ async fn main(
         dnsmasq_handle.write_host(
             i,
             unit.mac,
-            Ipv4Addr::new(10, unit.group, unit.row, unit.col),
+            unit.ip(),
         )?;
         if boot_config.modes.get(&unit.action).is_none() {
             bail!("Unknown mode {}", unit.action);
@@ -445,7 +451,7 @@ async fn main(
             .service(register_hint)
             .service(action)
     })
-    .bind((config.listen_address, config.listen_port))?
+    .bind(config.listen_on)?
     .run()
     .await?;
 

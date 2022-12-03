@@ -50,7 +50,7 @@ pub enum StationKind {
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Station {
     pub kind: StationKind,
+    pub group: u8,
     pub row: u8,
     pub col: u8,
-    pub group: u8,
 }
