@@ -3,8 +3,11 @@ use std::{
     fs::{self, File},
     io::{self, Seek, SeekFrom, Write},
     net::{SocketAddrV4, UdpSocket},
+    sync::Arc,
     time::Duration,
 };
+
+use tokio::sync::Mutex;
 
 use anyhow::{ensure, Result};
 use clap::Parser;
@@ -61,7 +64,22 @@ impl PartialChunk {
     }
 }
 
-pub fn main() -> Result<()> {
+async fn save_chunk(
+    pc: PartialChunk,
+    pos: Vec<(usize, usize)>,
+    files: Arc<[Mutex<File>]>,
+) -> Result<()> {
+    let data = bulk::decompress(&pc.data[32 * BODY_LEN..], PACKET_LEN + 1)?;
+    for (file, offset) in pos {
+        let mut lock = files[file].lock().await;
+        lock.seek(SeekFrom::Start(offset as u64))?;
+        lock.write_all(&data)?;
+    }
+    Ok(())
+}
+
+#[tokio::main]
+pub async fn main() -> Result<()> {
     let args = Options::parse();
 
     ensure!(!args.source.is_empty(), "Specify a source");
@@ -74,13 +92,14 @@ pub fn main() -> Result<()> {
 
     let mut stat_chunks = 0usize;
 
-    let mut files = info
+    let files = info
         .into_iter()
         .enumerate()
         .map(|(idx, pixie_shared::File { name, chunks })| {
             if let Some(prefix) = name.parent() {
                 fs::create_dir_all(prefix)?;
             }
+
             for Segment {
                 hash,
                 start,
@@ -95,13 +114,16 @@ pub fn main() -> Result<()> {
                     .push((idx, start));
                 stat_chunks += 1;
             }
-            File::options()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&name)
+
+            Ok(Mutex::new(
+                File::options()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .open(&name)?,
+            ))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Arc<[_]>>>()?;
 
     let stat_unique = chunks_info.len();
     let mut stat_recv = 0usize;
@@ -126,7 +148,7 @@ pub fn main() -> Result<()> {
                 assert!(bytes_recv >= 34);
                 let hash: &[u8; 32] = buf[..32].try_into().unwrap();
                 let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
-                let Some(&(size, csize, ref position)) = chunks_info.get(hash) else {
+                let Some(&(_, csize, _)) = chunks_info.get(hash) else {
                     continue;
                 };
 
@@ -165,14 +187,10 @@ pub fn main() -> Result<()> {
 
                 // TODO: fill lost packets
 
-                let data = bulk::decompress(&pchunk.data[32 * BODY_LEN..], size + 1)?;
-                for &(file, offset) in position {
-                    files[file].seek(SeekFrom::Start(offset as u64))?;
-                    files[file].write_all(&data)?;
-                }
+                let pc = received.remove(hash).unwrap();
+                let (_, _, pos) = chunks_info.remove(hash).unwrap();
 
-                received.remove(hash);
-                chunks_info.remove(hash);
+                tokio::spawn(save_chunk(pc, pos, files.clone()));
 
                 stat_recv += 1;
 

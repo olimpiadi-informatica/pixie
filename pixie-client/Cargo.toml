@@ -13,6 +13,7 @@ serde_json = "1.0.89"
 zstd = { version = "0.11.2", default-features = false }
 serde_derive = "1.0.148"
 serde = "1.0.148"
+tokio = { version = "1.23.0", features = ["rt", "macros"] }
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"
