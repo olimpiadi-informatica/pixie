@@ -16,9 +16,9 @@ use pixie_shared::{Segment, BODY_LEN, HEADER_LEN, PACKET_LEN};
 struct Options {
     #[clap(short, long, value_parser)]
     source: String,
-    #[clap(short, long, value_parser, default_value="0.0.0.0:4041")]
+    #[clap(short, long, value_parser, default_value = "0.0.0.0:4041")]
     listen_on: SocketAddrV4,
-    #[clap(short, long, value_parser, default_value="192.168.12.100:4040")]
+    #[clap(short, long, value_parser, default_value = "192.168.12.100:4040")]
     udp_server: SocketAddrV4,
 }
 
@@ -72,6 +72,8 @@ pub fn main() -> Result<()> {
 
     let mut chunks_info = HashMap::new();
 
+    let mut stat_chunks = 0usize;
+
     let mut files = info
         .into_iter()
         .enumerate()
@@ -91,6 +93,7 @@ pub fn main() -> Result<()> {
                     .or_insert((size, csize, Vec::new()))
                     .2
                     .push((idx, start));
+                stat_chunks += 1;
             }
             File::options()
                 .read(true)
@@ -100,8 +103,13 @@ pub fn main() -> Result<()> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let total = chunks_info.len();
-    write!(stdout, " received 0 chunks out of {}\r", total)?;
+    let stat_unique = chunks_info.len();
+    let mut stat_recv = 0usize;
+    let mut stat_requested = 0usize;
+
+    write!(stdout, "Unique chunks:    {stat_unique} / {stat_chunks}\n")?;
+    write!(stdout, "Chunks received:  {stat_recv} / {stat_unique}\n")?;
+    write!(stdout, "Chunks requested: {stat_requested}\n")?;
     stdout.flush()?;
 
     // TODO: filter already present chunks from chunks_info
@@ -166,12 +174,11 @@ pub fn main() -> Result<()> {
                 received.remove(hash);
                 chunks_info.remove(hash);
 
-                write!(
-                    stdout,
-                    " received {} chunks out of {}\r",
-                    total - chunks_info.len(),
-                    total
-                )?;
+                stat_recv += 1;
+
+                write!(stdout, "\x1b[2A")?;
+                write!(stdout, "Chunks received:  {stat_recv} / {stat_unique}\n")?;
+                write!(stdout, "Chunks requested: {stat_requested}\n")?;
                 stdout.flush()?;
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -182,61 +189,18 @@ pub fn main() -> Result<()> {
                     }
                     buf[len..len + 32].copy_from_slice(hash);
                     len += 32;
+                    stat_requested += 1;
                 }
                 socket.send_to(&buf[..len], args.udp_server)?;
+
+                write!(stdout, "\x1b[2A")?;
+                write!(stdout, "Chunks received:  {stat_recv} / {stat_unique}\n")?;
+                write!(stdout, "Chunks requested: {stat_requested}\n")?;
+                stdout.flush()?;
             }
             Err(e) => Err(e)?,
         }
     }
-
-    //  for pixie_shared::File { name, chunks } in info {
-
-    //      let mut seen = HashMap::new();
-
-    //      let total = chunks.len();
-
-    //      let printable_name: &str = &name.to_string_lossy();
-
-    //      for (idx, Segment { hash, start, size }) in chunks.into_iter().enumerate() {
-    //          write!(
-    //              stdout,
-    //              " pulling chunk {idx} out of {total} to file '{printable_name}'\r"
-    //          )?;
-    //          stdout.flush()?;
-
-    //          let mut data = vec![0; size];
-
-    //          match seen.entry(hash) {
-    //              std::collections::hash_map::Entry::Occupied(entry) => {
-    //                  let s = *entry.get();
-    //                  file.seek(SeekFrom::Start(s as u64))?;
-    //                  file.read_exact(&mut data)?;
-    //                  file.seek(SeekFrom::Start(start as u64))?;
-    //                  file.write_all(&data)?;
-    //              }
-    //              std::collections::hash_map::Entry::Vacant(entry) => {
-    //                  file.seek(SeekFrom::Start(start as u64))?;
-    //                  match file.read_exact(&mut data) {
-    //                      Ok(()) => {
-    //                          let cur_hash = blake3::hash(&data);
-    //                          if &hash == cur_hash.as_bytes() {
-    //                              continue;
-    //                          }
-    //                      }
-    //                      Err(e) if e.kind() == ErrorKind::UnexpectedEof => {}
-    //                      Err(e) => return Err(e.into()),
-    //                  }
-
-    //                  let data = file_fetcher.fetch_chunk(hash)?;
-    //                  file.seek(SeekFrom::Start(start as u64))?;
-    //                  file.write_all(&data)?;
-
-    //                  entry.insert(start);
-    //              }
-    //          }
-    //      }
-    //      writeln!(stdout)?;
-    //  }
 
     Ok(())
 }
