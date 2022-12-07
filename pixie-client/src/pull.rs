@@ -16,9 +16,9 @@ use pixie_shared::{Segment, BODY_LEN, HEADER_LEN, PACKET_LEN};
 struct Options {
     #[clap(short, long, value_parser)]
     source: String,
-    #[clap(short, long, value_parser)]
+    #[clap(short, long, value_parser, default_value="0.0.0.0:4041")]
     listen_on: SocketAddrV4,
-    #[clap(short, long, value_parser)]
+    #[clap(short, long, value_parser, default_value="192.168.12.100:4040")]
     udp_server: SocketAddrV4,
 }
 
@@ -43,7 +43,7 @@ struct PartialChunk {
 
 impl PartialChunk {
     fn new(csize: usize) -> Self {
-        let num_packets = (csize + PACKET_LEN - 1) / PACKET_LEN;
+        let num_packets = (csize + BODY_LEN - 1) / BODY_LEN;
         let data = vec![0; 32 * BODY_LEN + csize];
         let missing_first = vec![true; 32 + num_packets];
         let missing_second: [u16; 32] = (0..32)
