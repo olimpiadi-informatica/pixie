@@ -1,13 +1,17 @@
 use std::{
     collections::HashMap,
-    fs::{self, File},
-    io::{self, Seek, SeekFrom, Write},
+    fs::{self, File as StdFile},
+    io::{self, SeekFrom, Write},
     net::{SocketAddrV4, UdpSocket},
     sync::Arc,
     time::Duration,
 };
 
-use tokio::sync::Mutex;
+use tokio::{
+    fs::File,
+    io::{AsyncSeekExt, AsyncWriteExt},
+    sync::Mutex,
+};
 
 use anyhow::{ensure, Result};
 use clap::Parser;
@@ -72,8 +76,8 @@ async fn save_chunk(
     let data = bulk::decompress(&pc.data[32 * BODY_LEN..], PACKET_LEN + 1)?;
     for (file, offset) in pos {
         let mut lock = files[file].lock().await;
-        lock.seek(SeekFrom::Start(offset as u64))?;
-        lock.write_all(&data)?;
+        lock.seek(SeekFrom::Start(offset as u64)).await?;
+        lock.write_all(&data).await?;
     }
     Ok(())
 }
@@ -115,13 +119,13 @@ pub async fn main() -> Result<()> {
                 stat_chunks += 1;
             }
 
-            Ok(Mutex::new(
-                File::options()
+            Ok(Mutex::new(File::from_std(
+                StdFile::options()
                     .read(true)
                     .write(true)
                     .create(true)
                     .open(&name)?,
-            ))
+            )))
         })
         .collect::<Result<Arc<[_]>>>()?;
 
@@ -148,8 +152,9 @@ pub async fn main() -> Result<()> {
                 assert!(bytes_recv >= 34);
                 let hash: &[u8; 32] = buf[..32].try_into().unwrap();
                 let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
-                let Some(&(_, csize, _)) = chunks_info.get(hash) else {
-                    continue;
+                let csize = match chunks_info.get(hash) {
+                    Some(&(_, csize, _)) => csize,
+                    _ => continue,
                 };
 
                 let pchunk = received
