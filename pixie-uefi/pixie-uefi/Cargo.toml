@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name = "uefi_app"
+version = "0.1.0"
+
+[dependencies]
+uefi-services = { path = "../uefi-rs/uefi-services" }
+log = "0.4.17"
+managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
+
+[dependencies.uefi]
+features = ["alloc", "logger"]
+path = "../uefi-rs/uefi" 
+
+[dependencies.smoltcp]
+path = "../smoltcp"
+default-features = false
+features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4"]
