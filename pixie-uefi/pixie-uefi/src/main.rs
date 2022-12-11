@@ -3,8 +3,6 @@
 #![feature(negative_impls)]
 #![feature(abi_efiapi)]
 
-
-
 use os::net::NetworkInterface;
 use os::timer::start_timer;
 use os::UefiOS;
@@ -46,7 +44,7 @@ fn dump_services(os: UefiOS) -> Result {
     services.stall(10000000);
     */
 
-    let req = b"GET /jpeg_xl_data/dices200k-bilevel.zip HTTP/1.1\nHost: old.lucaversari.it\n\n\n";
+    let req = b"GET /jpeg_xl_data/dices200k-bilevel.zip HTTP/1.1\nHost: old.lucaversari.it\nConnection: close\n\n";
 
     let mut net = NetworkInterface::new(os);
 
@@ -115,8 +113,6 @@ fn dump_services(os: UefiOS) -> Result {
         read,
         read as f32 / (now - start) as f32
     );
-
-    net.stop_sending_tcp(&tcp);
 
     loop {
         net.poll();

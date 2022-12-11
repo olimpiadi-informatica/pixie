@@ -10,15 +10,13 @@ use rand::{distributions::Uniform, prelude::Distribution, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use uefi::{
     prelude::{BootServices, RuntimeServices},
-    proto::{network::snp::SimpleNetwork},
+    proto::network::snp::SimpleNetwork,
     table::{
-        boot::{EventType, ScopedProtocol, Tpl},
+        boot::{EventType, ScopedProtocol, Tpl, TplGuard},
         Boot, SystemTable,
     },
     Event, Status,
 };
-
-
 
 pub mod net;
 pub mod timer;
@@ -108,15 +106,19 @@ impl UefiOS {
         unsafe { SIMPLE_NETWORK.unwrap_unchecked() }
     }
 
-    pub fn rand<T, D: Distribution<T>>(&self, d: &D) -> T {
+    pub fn mask_interrupts(&self) -> TplGuard {
         unsafe {
-            // Temporarily mask all interrupts to guarantee that this function is not re-entered.
-            let _tpl_guard = BOOT_SERVICES
+            BOOT_SERVICES
                 .unwrap_unchecked()
                 .as_ref()
-                .raise_tpl(Tpl::HIGH_LEVEL);
-            d.sample(RNG.as_mut().unwrap_unchecked())
+                .raise_tpl(Tpl::HIGH_LEVEL)
         }
+    }
+
+    pub fn rand<T, D: Distribution<T>>(&self, d: &D) -> T {
+        // Temporarily mask all interrupts to guarantee that this function is not re-entered.
+        let _tpl_guard = self.mask_interrupts();
+        unsafe { d.sample(RNG.as_mut().unwrap_unchecked()) }
     }
 
     pub fn rand_u64(&self) -> u64 {

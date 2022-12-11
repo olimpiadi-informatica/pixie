@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap};
+use alloc::collections::BTreeMap;
 use log::info;
 use managed::ManagedSlice;
 
@@ -15,18 +15,20 @@ use smoltcp::{
     wire::{HardwareAddress, IpCidr, IpEndpoint},
     Result,
 };
-use uefi::{
-    proto::network::snp::{ReceiveFlags},
-    Status,
-};
+use uefi::{proto::network::snp::ReceiveFlags, Status};
 
 use smoltcp::phy::TxToken;
 use smoltcp::time::Instant;
 
 use super::{timer::get_time_micros, UefiOS};
 
+const PACKET_SIZE: usize = 1514;
+
 struct SNPDevice {
     os: UefiOS,
+    last_rel_control_us: i64,
+    tx_buf: [u8; PACKET_SIZE + 4],
+    rx_buf: [u8; PACKET_SIZE + 4],
 }
 
 impl SNPDevice {
@@ -44,7 +46,12 @@ impl SNPDevice {
             )
             .unwrap();
 
-        SNPDevice { os }
+        SNPDevice {
+            os,
+            last_rel_control_us: 0,
+            tx_buf: [0; PACKET_SIZE + 4],
+            rx_buf: [0; PACKET_SIZE + 4],
+        }
     }
 }
 
@@ -54,25 +61,22 @@ impl Drop for SNPDevice {
     }
 }
 
-const PACKET_SIZE: usize = 1514;
-
-struct SnpRxToken {
-    packet: [u8; PACKET_SIZE + 4],
-    len: usize,
+struct SnpRxToken<'a> {
+    packet: &'a mut [u8],
 }
 
-struct SnpTxToken {
+struct SnpTxToken<'a> {
     os: UefiOS,
+    buf: &'a mut [u8],
 }
 
-impl TxToken for SnpTxToken {
+impl<'a> TxToken for SnpTxToken<'a> {
     fn consume<R, F>(self, _: Instant, len: usize, f: F) -> Result<R>
     where
         F: FnOnce(&mut [u8]) -> Result<R>,
     {
-        let mut buf = [0u8; PACKET_SIZE];
-        assert!(len <= PACKET_SIZE);
-        let payload = &mut buf[..len];
+        assert!(len <= self.buf.len());
+        let payload = &mut self.buf[..len];
 
         let ret = f(payload)?;
 
@@ -87,41 +91,46 @@ impl TxToken for SnpTxToken {
     }
 }
 
-impl RxToken for SnpRxToken {
-    fn consume<R, F>(mut self, _: Instant, f: F) -> Result<R>
+impl<'a> RxToken for SnpRxToken<'a> {
+    fn consume<R, F>(self, _: Instant, f: F) -> Result<R>
     where
         F: FnOnce(&mut [u8]) -> Result<R>,
     {
-        let packet = &mut self.packet[..self.len];
-        f(packet)
+        f(self.packet)
     }
 }
 
 impl Device for SNPDevice {
-    type TxToken<'d> = SnpTxToken;
-    type RxToken<'d> = SnpRxToken;
+    type TxToken<'d> = SnpTxToken<'d>;
+    type RxToken<'d> = SnpRxToken<'d>;
 
-    fn receive(&mut self) -> Option<(SnpRxToken, SnpTxToken)> {
-        // Ethernet frames may have some extra padding (up to 4 bytes).
-        let mut buffer = [0u8; PACKET_SIZE + 4];
-        self.os.simple_network().get_interrupt_status().unwrap();
+    fn receive(&mut self) -> Option<(SnpRxToken<'_>, SnpTxToken<'_>)> {
         let rec = self
             .os
             .simple_network()
-            .receive(&mut buffer, None, None, None, None);
+            .receive(&mut self.rx_buf, None, None, None, None);
         if rec == Err(Status::NOT_READY.into()) {
+            self.last_rel_control_us = get_time_micros();
             None
         } else {
             let token = SnpRxToken {
-                packet: buffer,
-                len: rec.unwrap(),
+                packet: &mut self.rx_buf[..rec.unwrap()],
             };
-            Some((token, SnpTxToken { os: self.os }))
+            Some((
+                token,
+                SnpTxToken {
+                    os: self.os,
+                    buf: &mut self.tx_buf,
+                },
+            ))
         }
     }
 
-    fn transmit(&mut self) -> Option<SnpTxToken> {
-        Some(SnpTxToken { os: self.os })
+    fn transmit(&mut self) -> Option<SnpTxToken<'_>> {
+        Some(SnpTxToken {
+            os: self.os,
+            buf: &mut self.tx_buf,
+        })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -146,7 +155,7 @@ pub struct NetworkInterface {
 
 pub struct TcpSocketHandle(SocketHandle);
 
-const TCP_BUF_SIZE: usize = 1 << 16;
+const TCP_BUF_SIZE: usize = 1 << 22;
 
 impl NetworkInterface {
     fn get_ephemeral_port(&mut self) -> u16 {
@@ -195,6 +204,7 @@ impl NetworkInterface {
             RingBuffer::new(vec![0; TCP_BUF_SIZE]),
         );
         tcp_socket.set_timeout(Some(Duration::from_secs(5)));
+        tcp_socket.set_keep_alive(Some(Duration::from_secs(1)));
         let sport = self.get_ephemeral_port();
         tcp_socket
             .connect(self.interface.context(), to, sport)
@@ -241,11 +251,10 @@ impl NetworkInterface {
     }
 
     pub fn poll(&mut self) -> bool {
-        let status = self.interface.poll(
-            Instant::from_micros(get_time_micros()),
-            &mut self.device,
-            &mut self.socket_set,
-        );
+        let now = Instant::from_micros(get_time_micros());
+        let status = self
+            .interface
+            .poll(now, &mut self.device, &mut self.socket_set);
         if let Err(err) = status {
             if err != smoltcp::Error::Unrecognized {
                 info!("net error: {:?}", err);
