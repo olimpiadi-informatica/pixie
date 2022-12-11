@@ -1,15 +1,22 @@
-use alloc::{collections::BTreeMap, vec::Vec};
+use alloc::{collections::BTreeMap};
 use log::info;
 use managed::ManagedSlice;
+
 use smoltcp::{
     iface::{Interface, InterfaceBuilder, NeighborCache, Routes, SocketHandle, SocketSet},
     phy::{Device, DeviceCapabilities, Medium, RxToken},
-    socket::dhcpv4::{Event, Socket as Dhcpv4Socket},
-    wire::{HardwareAddress, IpCidr},
+    socket::tcp::{Socket as TcpSocket, State},
+    socket::{
+        dhcpv4::{Event, Socket as Dhcpv4Socket},
+        tcp::RecvError,
+    },
+    storage::RingBuffer,
+    time::Duration,
+    wire::{HardwareAddress, IpCidr, IpEndpoint},
     Result,
 };
 use uefi::{
-    proto::network::snp::{InterruptStatus, ReceiveFlags},
+    proto::network::snp::{ReceiveFlags},
     Status,
 };
 
@@ -50,7 +57,7 @@ impl Drop for SNPDevice {
 const PACKET_SIZE: usize = 1514;
 
 struct SnpRxToken {
-    packet: [u8; PACKET_SIZE],
+    packet: [u8; PACKET_SIZE + 4],
     len: usize,
 }
 
@@ -95,7 +102,8 @@ impl Device for SNPDevice {
     type RxToken<'d> = SnpRxToken;
 
     fn receive(&mut self) -> Option<(SnpRxToken, SnpTxToken)> {
-        let mut buffer = [0u8; PACKET_SIZE];
+        // Ethernet frames may have some extra padding (up to 4 bytes).
+        let mut buffer = [0u8; PACKET_SIZE + 4];
         self.os.simple_network().get_interrupt_status().unwrap();
         let rec = self
             .os
@@ -133,9 +141,20 @@ pub struct NetworkInterface {
     device: SNPDevice,
     socket_set: SocketSet<'static>,
     dhcp_socket_handle: SocketHandle,
+    ephemeral_port_counter: u64,
 }
 
+pub struct TcpSocketHandle(SocketHandle);
+
+const TCP_BUF_SIZE: usize = 1 << 16;
+
 impl NetworkInterface {
+    fn get_ephemeral_port(&mut self) -> u16 {
+        let ans = self.ephemeral_port_counter;
+        self.ephemeral_port_counter += 1;
+        ((ans % (60999 - 49152)) + 49152) as u16
+    }
+
     pub fn new(os: UefiOS) -> NetworkInterface {
         let mut device = SNPDevice::new(os);
 
@@ -148,6 +167,8 @@ impl NetworkInterface {
         let interface = InterfaceBuilder::new()
             .hardware_addr(hw_addr)
             .routes(routes)
+            .ip_addrs(vec![])
+            .random_seed(os.rand_u64())
             .neighbor_cache(neighbor_cache)
             .finalize(&mut device);
 
@@ -160,7 +181,63 @@ impl NetworkInterface {
             dhcp_socket_handle,
             device,
             socket_set,
+            ephemeral_port_counter: os.rand_u64(),
         }
+    }
+
+    pub fn has_ip(&mut self) -> bool {
+        self.interface.ipv4_addr().is_some()
+    }
+
+    pub fn connect(&mut self, to: IpEndpoint) -> Result<TcpSocketHandle> {
+        let mut tcp_socket = TcpSocket::new(
+            RingBuffer::new(vec![0; TCP_BUF_SIZE]),
+            RingBuffer::new(vec![0; TCP_BUF_SIZE]),
+        );
+        tcp_socket.set_timeout(Some(Duration::from_secs(5)));
+        let sport = self.get_ephemeral_port();
+        tcp_socket
+            .connect(self.interface.context(), to, sport)
+            .unwrap();
+        Ok(TcpSocketHandle(self.socket_set.add(tcp_socket)))
+    }
+
+    pub fn tcp_state(&mut self, socket: &TcpSocketHandle) -> State {
+        self.socket_set.get_mut::<TcpSocket>(socket.0).state()
+    }
+
+    pub fn send_tcp(&mut self, socket: &TcpSocketHandle, data: &[u8]) -> usize {
+        // An error may only occur in case of incorrect usage.
+        self.socket_set
+            .get_mut::<TcpSocket>(socket.0)
+            .send_slice(data)
+            .unwrap()
+    }
+
+    pub fn stop_sending_tcp(&mut self, socket: &TcpSocketHandle) {
+        self.socket_set.get_mut::<TcpSocket>(socket.0).close()
+    }
+
+    /// Returns None if connection is closed.
+    pub fn recv_tcp(&mut self, socket: &TcpSocketHandle, data: &mut [u8]) -> Option<usize> {
+        if self.tcp_state(socket) == State::Closed {
+            return None;
+        }
+        let status = self
+            .socket_set
+            .get_mut::<TcpSocket>(socket.0)
+            .recv_slice(data);
+        if status == Err(RecvError::Finished) {
+            None
+        } else {
+            // Only other failure mode is due to incorrect configuration.
+            Some(status.unwrap())
+        }
+    }
+
+    // TODO: figure out why this sends a RST.
+    pub fn remove(&mut self, socket: TcpSocketHandle) {
+        self.socket_set.remove(socket.0);
     }
 
     pub fn poll(&mut self) -> bool {
@@ -191,6 +268,8 @@ impl NetworkInterface {
                 self.interface.update_ip_addrs(|a| {
                     if let ManagedSlice::Owned(ref mut a) = a {
                         a.push(IpCidr::Ipv4(config.address));
+                    } else {
+                        panic!("Invalid addresses: {:?}", a);
                     }
                 });
                 if let Some(router) = config.router {

@@ -1,10 +1,10 @@
-use core::{arch::x86_64::_rdtsc, ffi::c_void, ptr::NonNull};
-use uefi::prelude::BootServices;
+use core::{arch::x86_64::_rdtsc};
+
 
 static mut TICKS_AT_START: i64 = 0;
 static mut TICKS_PER_MICRO: i64 = 0;
 
-use log::info;
+
 
 use super::UefiOS;
 
