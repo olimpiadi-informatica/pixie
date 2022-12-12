@@ -3,15 +3,11 @@
 #![feature(negative_impls)]
 #![feature(abi_efiapi)]
 
-use os::net::NetworkInterface;
-use os::timer::start_timer;
 use os::UefiOS;
-use smoltcp::socket::tcp::State;
+
 use uefi::prelude::*;
 
 use uefi::Result;
-
-use crate::os::timer::get_time_micros;
 
 use log::info;
 
@@ -20,10 +16,16 @@ mod os;
 #[macro_use]
 extern crate alloc;
 
-fn dump_services(os: UefiOS) -> Result {
-    start_timer(os);
+async fn run(os: UefiOS) -> Result {
+    info!("Started");
+
+    os.spawn(async {
+        info!("task started");
+    });
 
     /*
+    start_timer(os);
+
     let handles = services.locate_handle_buffer(uefi::table::boot::SearchType::AllHandles)?;
 
     let mut protos = vec![];
@@ -42,7 +44,6 @@ fn dump_services(os: UefiOS) -> Result {
     }
 
     services.stall(10000000);
-    */
 
     let req = b"GET /jpeg_xl_data/dices200k-bilevel.zip HTTP/1.1\nHost: old.lucaversari.it\nConnection: close\n\n";
 
@@ -128,15 +129,12 @@ fn dump_services(os: UefiOS) -> Result {
     loop {
         net.poll();
     }
+    */
 
     Ok(())
 }
 
 #[entry]
 fn main(_handle: Handle, system_table: SystemTable<Boot>) -> Status {
-    let os = UefiOS::new(system_table);
-
-    dump_services(os).unwrap();
-
-    os.reset();
+    UefiOS::start(system_table, run)
 }

@@ -1,55 +1,57 @@
-use alloc::collections::BTreeMap;
+use alloc::{boxed::Box, collections::BTreeMap};
 use log::info;
 use managed::ManagedSlice;
 
 use smoltcp::{
     iface::{Interface, InterfaceBuilder, NeighborCache, Routes, SocketHandle, SocketSet},
     phy::{Device, DeviceCapabilities, Medium, RxToken},
-    socket::tcp::{Socket as TcpSocket, State},
-    socket::{
-        dhcpv4::{Event, Socket as Dhcpv4Socket},
-        tcp::RecvError,
-    },
-    storage::RingBuffer,
-    time::Duration,
-    wire::{HardwareAddress, IpCidr, IpEndpoint},
+    socket::dhcpv4::{Event, Socket as Dhcpv4Socket},
+    wire::{HardwareAddress, IpCidr},
     Result,
 };
-use uefi::{proto::network::snp::ReceiveFlags, Status};
+use uefi::{
+    prelude::BootServices,
+    proto::network::snp::{ReceiveFlags, SimpleNetwork},
+    table::boot::ScopedProtocol,
+    Status,
+};
 
 use smoltcp::phy::TxToken;
 use smoltcp::time::Instant;
 
-use super::{timer::get_time_micros, UefiOS};
+use super::{rng::Rng, timer::Timer};
 
 const PACKET_SIZE: usize = 1514;
 
+type SNP = &'static ScopedProtocol<'static, SimpleNetwork>;
+
 struct SNPDevice {
-    os: UefiOS,
-    last_rel_control_us: i64,
-    tx_buf: [u8; PACKET_SIZE + 4],
+    snp: SNP,
+    tx_buf: [u8; PACKET_SIZE],
+    // Received packets might contain Ethernet-related padding (up to 4 bytes).
     rx_buf: [u8; PACKET_SIZE + 4],
 }
 
 impl SNPDevice {
-    fn new(os: UefiOS) -> SNPDevice {
-        let _ = os.simple_network().shutdown();
-        let _ = os.simple_network().stop();
-        os.simple_network().start().unwrap();
-        os.simple_network().initialize(0, 0).unwrap();
-        os.simple_network()
-            .receive_filters(
-                ReceiveFlags::UNICAST | ReceiveFlags::BROADCAST,
-                ReceiveFlags::empty(),
-                true,
-                None,
-            )
-            .unwrap();
+    fn new(snp: SNP) -> SNPDevice {
+        // Shut down the SNP protocol if needed.
+        let _ = snp.shutdown();
+        let _ = snp.stop();
+        // Initialize.
+        snp.start().unwrap();
+        snp.initialize(0, 0).unwrap();
+        // Enable packet reception.
+        snp.receive_filters(
+            ReceiveFlags::UNICAST | ReceiveFlags::BROADCAST,
+            ReceiveFlags::empty(),
+            true,
+            None,
+        )
+        .unwrap();
 
         SNPDevice {
-            os,
-            last_rel_control_us: 0,
-            tx_buf: [0; PACKET_SIZE + 4],
+            snp,
+            tx_buf: [0; PACKET_SIZE],
             rx_buf: [0; PACKET_SIZE + 4],
         }
     }
@@ -57,7 +59,7 @@ impl SNPDevice {
 
 impl Drop for SNPDevice {
     fn drop(&mut self) {
-        self.os.simple_network().stop().unwrap()
+        self.snp.stop().unwrap()
     }
 }
 
@@ -66,7 +68,7 @@ struct SnpRxToken<'a> {
 }
 
 struct SnpTxToken<'a> {
-    os: UefiOS,
+    snp: SNP,
     buf: &'a mut [u8],
 }
 
@@ -77,14 +79,10 @@ impl<'a> TxToken for SnpTxToken<'a> {
     {
         assert!(len <= self.buf.len());
         let payload = &mut self.buf[..len];
-
         let ret = f(payload)?;
-
-        let snp = self.os.simple_network();
-
+        let snp = self.snp;
         snp.transmit(0, payload, None, None, None)
             .expect("Failed to transmit frame");
-
         // Wait until sending is complete.
         while snp.get_recycled_transmit_buffer_status().unwrap().is_none() {}
         Ok(ret)
@@ -105,30 +103,24 @@ impl Device for SNPDevice {
     type RxToken<'d> = SnpRxToken<'d>;
 
     fn receive(&mut self) -> Option<(SnpRxToken<'_>, SnpTxToken<'_>)> {
-        let rec = self
-            .os
-            .simple_network()
-            .receive(&mut self.rx_buf, None, None, None, None);
+        let rec = self.snp.receive(&mut self.rx_buf, None, None, None, None);
         if rec == Err(Status::NOT_READY.into()) {
-            self.last_rel_control_us = get_time_micros();
-            None
-        } else {
-            let token = SnpRxToken {
-                packet: &mut self.rx_buf[..rec.unwrap()],
-            };
-            Some((
-                token,
-                SnpTxToken {
-                    os: self.os,
-                    buf: &mut self.tx_buf,
-                },
-            ))
+            return None;
         }
+        Some((
+            SnpRxToken {
+                packet: &mut self.rx_buf[..rec.unwrap()],
+            },
+            SnpTxToken {
+                snp: self.snp,
+                buf: &mut self.tx_buf,
+            },
+        ))
     }
 
     fn transmit(&mut self) -> Option<SnpTxToken<'_>> {
         Some(SnpTxToken {
-            os: self.os,
+            snp: self.snp,
             buf: &mut self.tx_buf,
         })
     }
@@ -136,10 +128,10 @@ impl Device for SNPDevice {
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet;
-        caps.max_transmission_unit = PACKET_SIZE.min(
-            (self.os.simple_network().mode().max_packet_size
-                + self.os.simple_network().mode().media_header_size) as usize,
-        );
+        let mode = self.snp.mode();
+        assert!(mode.media_header_size == 14);
+        caps.max_transmission_unit =
+            PACKET_SIZE.min((mode.max_packet_size + mode.media_header_size) as usize);
         caps.max_burst_size = Some(1);
         caps
     }
@@ -153,31 +145,29 @@ pub struct NetworkInterface {
     ephemeral_port_counter: u64,
 }
 
-pub struct TcpSocketHandle(SocketHandle);
-
 const TCP_BUF_SIZE: usize = 1 << 22;
 
 impl NetworkInterface {
-    fn get_ephemeral_port(&mut self) -> u16 {
-        let ans = self.ephemeral_port_counter;
-        self.ephemeral_port_counter += 1;
-        ((ans % (60999 - 49152)) + 49152) as u16
-    }
-
-    pub fn new(os: UefiOS) -> NetworkInterface {
-        let mut device = SNPDevice::new(os);
+    pub fn new(boot_services: &'static BootServices, rng: &mut Rng) -> NetworkInterface {
+        let snp_handles = boot_services.find_handles::<SimpleNetwork>().unwrap();
+        let snp = Box::leak(Box::new(
+            boot_services
+                .open_protocol_exclusive::<SimpleNetwork>(snp_handles[0])
+                .unwrap(),
+        ));
+        let mut device = SNPDevice::new(snp);
 
         let routes = Routes::new(BTreeMap::new());
         let neighbor_cache = NeighborCache::new(BTreeMap::new());
         let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
-            &os.simple_network().mode().current_address.0[..6],
+            &snp.mode().current_address.0[..6],
         ));
 
         let interface = InterfaceBuilder::new()
             .hardware_addr(hw_addr)
             .routes(routes)
             .ip_addrs(vec![])
-            .random_seed(os.rand_u64())
+            .random_seed(rng.rand_u64())
             .neighbor_cache(neighbor_cache)
             .finalize(&mut device);
 
@@ -190,15 +180,22 @@ impl NetworkInterface {
             dhcp_socket_handle,
             device,
             socket_set,
-            ephemeral_port_counter: os.rand_u64(),
+            ephemeral_port_counter: rng.rand_u64(),
         }
+    }
+
+    fn get_ephemeral_port(&mut self) -> u16 {
+        let ans = self.ephemeral_port_counter;
+        self.ephemeral_port_counter += 1;
+        ((ans % (60999 - 49152)) + 49152) as u16
     }
 
     pub fn has_ip(&mut self) -> bool {
         self.interface.ipv4_addr().is_some()
     }
 
-    pub fn connect(&mut self, to: IpEndpoint) -> Result<TcpSocketHandle> {
+    /*
+    pub fn connect(&mut self, to: IpEndpoint) -> Result<SocketHandle> {
         let mut tcp_socket = TcpSocket::new(
             RingBuffer::new(vec![0; TCP_BUF_SIZE]),
             RingBuffer::new(vec![0; TCP_BUF_SIZE]),
@@ -209,7 +206,11 @@ impl NetworkInterface {
         tcp_socket
             .connect(self.interface.context(), to, sport)
             .unwrap();
-        Ok(TcpSocketHandle(self.socket_set.add(tcp_socket)))
+        Ok(self.socket_set.add(tcp_socket))
+    }
+
+    pub fn tcp_socket(&mut self, socket: &SocketHandle) -> &mut TcpSocket {
+        self.socket_set.get_mut::<TcpSocket>(socket)
     }
 
     pub fn tcp_state(&mut self, socket: &TcpSocketHandle) -> State {
@@ -245,13 +246,16 @@ impl NetworkInterface {
         }
     }
 
-    // TODO: figure out why this sends a RST.
     pub fn remove(&mut self, socket: TcpSocketHandle) {
         self.socket_set.remove(socket.0);
     }
+    */
 
-    pub fn poll(&mut self) -> bool {
-        let now = Instant::from_micros(get_time_micros());
+    pub(super) fn poll<F>(&mut self, timer: &Timer, on_dhcp_change: F) -> bool
+    where
+        F: FnOnce(),
+    {
+        let now = timer.instant();
         let status = self
             .interface
             .poll(now, &mut self.device, &mut self.socket_set);
@@ -272,7 +276,6 @@ impl NetworkInterface {
             .poll();
 
         if let Some(dhcp_status) = dhcp_status {
-            info!("{:?}", dhcp_status);
             if let Event::Configured(config) = dhcp_status {
                 self.interface.update_ip_addrs(|a| {
                     if let ManagedSlice::Owned(ref mut a) = a {
@@ -287,6 +290,7 @@ impl NetworkInterface {
                         .add_default_ipv4_route(router)
                         .unwrap();
                 }
+                on_dhcp_change();
             }
         }
 
