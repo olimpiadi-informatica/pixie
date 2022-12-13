@@ -1,18 +1,12 @@
 use core::{
     cell::{Ref, RefCell, RefMut},
     ffi::c_void,
-    future::Future,
+    future::{poll_fn, Future, PollFn},
     mem::transmute,
     ptr::NonNull,
     sync::atomic::AtomicBool,
-    task::Context,
+    task::{Context, Poll},
 };
-
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
-
-use futures::{task::waker_ref, StreamExt};
-
-use rand::prelude::Distribution;
 
 use uefi::{
     prelude::{BootServices, RuntimeServices},
@@ -20,17 +14,23 @@ use uefi::{
         boot::{EventType, Tpl},
         Boot, SystemTable,
     },
-    Event, Result, Status,
+    Event, Status,
 };
 
-use crate::os::executor::RepeatFn;
+use self::{
+    executor::Executor,
+    net::{NetworkInterface, TcpStream},
+    rng::Rng,
+    timer::Timer,
+};
 
-use self::{executor::Task, net::NetworkInterface, rng::Rng, timer::Timer};
+pub mod error;
+mod executor;
+mod net;
+mod rng;
+mod timer;
 
-pub mod executor;
-pub mod net;
-pub mod rng;
-pub mod timer;
+use error::Result;
 
 struct UefiOSImpl {
     boot_services: &'static BootServices,
@@ -38,8 +38,6 @@ struct UefiOSImpl {
     timer: Timer,
     rng: Rng,
     net: NetworkInterface,
-    // TODO: scheduling.
-    tasks: VecDeque<Arc<Task>>,
 }
 
 static mut OS: Option<RefCell<UefiOSImpl>> = None;
@@ -60,7 +58,7 @@ impl UefiOS {
     pub fn start<F, Fut>(mut system_table: SystemTable<Boot>, f: F) -> !
     where
         F: FnOnce(UefiOS) -> Fut + 'static,
-        Fut: Future<Output = Result>,
+        Fut: Future<Output = Result<()>>,
     {
         // Never call this function twice.
         assert_eq!(
@@ -103,41 +101,25 @@ impl UefiOS {
                 timer,
                 rng,
                 net,
-                tasks: VecDeque::new(),
             }))
         }
+
+        Executor::init();
 
         let os = UefiOS {};
 
         os.spawn(async { f(UefiOS {}).await.unwrap() });
 
-        os.spawn(RepeatFn::new(|| {
+        os.spawn(poll_fn(|cx| {
             let os = UefiOS {}.os().borrow_mut();
             let (mut net, timer) = RefMut::map_split(os, |os| (&mut os.net, &mut os.timer));
-            net.poll(&timer, || ());
+            net.poll(&timer);
+            // TODO(veluca): figure out whether we can suspend the task.
+            cx.waker().wake_by_ref();
+            Poll::Pending
         }));
 
-        os.run_executor()
-    }
-
-    fn run_executor(&self) -> ! {
-        loop {
-            let task = self
-                .os()
-                .borrow_mut()
-                .tasks
-                .pop_front()
-                .expect("Executor should never run out of tasks");
-
-            let waker = waker_ref(&task);
-            let context = &mut Context::from_waker(&waker);
-            let mut task_inner = task.task.borrow_mut();
-            if let Some(mut fut) = task_inner.take() {
-                if fut.as_mut().poll(context).is_pending() {
-                    *task_inner = Some(fut);
-                }
-            }
-        }
+        Executor::run()
     }
 
     fn os(&self) -> &'static RefCell<UefiOSImpl> {
@@ -160,16 +142,43 @@ impl UefiOS {
         RefMut::map(self.os().borrow_mut(), |f| &mut f.net)
     }
 
+    pub fn wait_for_ip(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+        poll_fn(move |cx| {
+            let os = UefiOS {};
+            if os.net().has_ip() {
+                Poll::Ready(())
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
+    pub fn sleep_us(&self, us: u64) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+        let tgt = self.timer().micros() as u64 + us;
+        poll_fn(move |cx| {
+            let os = UefiOS {};
+            let now = os.timer().micros() as u64;
+            if now >= tgt {
+                Poll::Ready(())
+            } else {
+                // TODO(veluca): actually suspend the task.
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
+        TcpStream::new(*self, ip, port).await
+    }
+
     /// Spawn a new task.
     pub fn spawn<Fut>(&self, f: Fut)
     where
         Fut: Future<Output = ()> + 'static,
     {
-        let mut os = self.os().borrow_mut();
-        os.tasks.push_back(Arc::new(Task {
-            task: RefCell::new(Some(Box::pin(f))),
-            os: *self,
-        }));
+        Executor::spawn(f)
     }
 
     pub fn reset(&self) -> ! {

@@ -1,14 +1,22 @@
+use core::{future::poll_fn, task::Poll};
+
 use alloc::{boxed::Box, collections::BTreeMap};
+use futures::future::select;
 use log::info;
 use managed::ManagedSlice;
 
 use smoltcp::{
     iface::{Interface, InterfaceBuilder, NeighborCache, Routes, SocketHandle, SocketSet},
-    phy::{Device, DeviceCapabilities, Medium, RxToken},
-    socket::dhcpv4::{Event, Socket as Dhcpv4Socket},
-    wire::{HardwareAddress, IpCidr},
-    Result,
+    phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
+    socket::{
+        dhcpv4::{Event, Socket as Dhcpv4Socket},
+        tcp::{Socket as TcpSocket, State},
+    },
+    storage::RingBuffer,
+    time::{Duration, Instant},
+    wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address},
 };
+
 use uefi::{
     prelude::BootServices,
     proto::network::snp::{ReceiveFlags, SimpleNetwork},
@@ -16,10 +24,9 @@ use uefi::{
     Status,
 };
 
-use smoltcp::phy::TxToken;
-use smoltcp::time::Instant;
+use super::{rng::Rng, timer::Timer, UefiOS};
 
-use super::{rng::Rng, timer::Timer};
+use super::error::{Error, Result};
 
 const PACKET_SIZE: usize = 1514;
 
@@ -73,9 +80,9 @@ struct SnpTxToken<'a> {
 }
 
 impl<'a> TxToken for SnpTxToken<'a> {
-    fn consume<R, F>(self, _: Instant, len: usize, f: F) -> Result<R>
+    fn consume<R, F>(self, _: Instant, len: usize, f: F) -> smoltcp::Result<R>
     where
-        F: FnOnce(&mut [u8]) -> Result<R>,
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
         assert!(len <= self.buf.len());
         let payload = &mut self.buf[..len];
@@ -90,9 +97,9 @@ impl<'a> TxToken for SnpTxToken<'a> {
 }
 
 impl<'a> RxToken for SnpRxToken<'a> {
-    fn consume<R, F>(self, _: Instant, f: F) -> Result<R>
+    fn consume<R, F>(self, _: Instant, f: F) -> smoltcp::Result<R>
     where
-        F: FnOnce(&mut [u8]) -> Result<R>,
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
         f(self.packet)
     }
@@ -145,8 +152,6 @@ pub struct NetworkInterface {
     ephemeral_port_counter: u64,
 }
 
-const TCP_BUF_SIZE: usize = 1 << 22;
-
 impl NetworkInterface {
     pub fn new(boot_services: &'static BootServices, rng: &mut Rng) -> NetworkInterface {
         let snp_handles = boot_services.find_handles::<SimpleNetwork>().unwrap();
@@ -190,71 +195,11 @@ impl NetworkInterface {
         ((ans % (60999 - 49152)) + 49152) as u16
     }
 
-    pub fn has_ip(&mut self) -> bool {
+    pub fn has_ip(&self) -> bool {
         self.interface.ipv4_addr().is_some()
     }
 
-    /*
-    pub fn connect(&mut self, to: IpEndpoint) -> Result<SocketHandle> {
-        let mut tcp_socket = TcpSocket::new(
-            RingBuffer::new(vec![0; TCP_BUF_SIZE]),
-            RingBuffer::new(vec![0; TCP_BUF_SIZE]),
-        );
-        tcp_socket.set_timeout(Some(Duration::from_secs(5)));
-        tcp_socket.set_keep_alive(Some(Duration::from_secs(1)));
-        let sport = self.get_ephemeral_port();
-        tcp_socket
-            .connect(self.interface.context(), to, sport)
-            .unwrap();
-        Ok(self.socket_set.add(tcp_socket))
-    }
-
-    pub fn tcp_socket(&mut self, socket: &SocketHandle) -> &mut TcpSocket {
-        self.socket_set.get_mut::<TcpSocket>(socket)
-    }
-
-    pub fn tcp_state(&mut self, socket: &TcpSocketHandle) -> State {
-        self.socket_set.get_mut::<TcpSocket>(socket.0).state()
-    }
-
-    pub fn send_tcp(&mut self, socket: &TcpSocketHandle, data: &[u8]) -> usize {
-        // An error may only occur in case of incorrect usage.
-        self.socket_set
-            .get_mut::<TcpSocket>(socket.0)
-            .send_slice(data)
-            .unwrap()
-    }
-
-    pub fn stop_sending_tcp(&mut self, socket: &TcpSocketHandle) {
-        self.socket_set.get_mut::<TcpSocket>(socket.0).close()
-    }
-
-    /// Returns None if connection is closed.
-    pub fn recv_tcp(&mut self, socket: &TcpSocketHandle, data: &mut [u8]) -> Option<usize> {
-        if self.tcp_state(socket) == State::Closed {
-            return None;
-        }
-        let status = self
-            .socket_set
-            .get_mut::<TcpSocket>(socket.0)
-            .recv_slice(data);
-        if status == Err(RecvError::Finished) {
-            None
-        } else {
-            // Only other failure mode is due to incorrect configuration.
-            Some(status.unwrap())
-        }
-    }
-
-    pub fn remove(&mut self, socket: TcpSocketHandle) {
-        self.socket_set.remove(socket.0);
-    }
-    */
-
-    pub(super) fn poll<F>(&mut self, timer: &Timer, on_dhcp_change: F) -> bool
-    where
-        F: FnOnce(),
-    {
+    pub(super) fn poll(&mut self, timer: &Timer) -> bool {
         let now = timer.instant();
         let status = self
             .interface
@@ -290,10 +235,175 @@ impl NetworkInterface {
                         .add_default_ipv4_route(router)
                         .unwrap();
                 }
-                on_dhcp_change();
+            } else {
+                self.interface.update_ip_addrs(|a| {
+                    if let ManagedSlice::Owned(ref mut a) = a {
+                        a.clear();
+                    } else {
+                        panic!("Invalid addresses: {:?}", a);
+                    }
+                });
+                self.interface.routes_mut().remove_default_ipv4_route();
             }
         }
 
-        return true;
+        true
+    }
+}
+
+pub struct TcpStream {
+    handle: SocketHandle,
+    os: UefiOS,
+}
+
+// TODO(veluca): we may leak a fair bit of sockets here. It doesn't really matter, as we won't
+// create that many, but still it would be nice to fix eventually.
+// Also, trying to use a closed connection may result in panics.
+impl TcpStream {
+    pub async fn new(os: UefiOS, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
+        os.wait_for_ip().await;
+        const TCP_BUF_SIZE: usize = 1 << 22;
+        let mut tcp_socket = TcpSocket::new(
+            RingBuffer::new(vec![0; TCP_BUF_SIZE]),
+            RingBuffer::new(vec![0; TCP_BUF_SIZE]),
+        );
+        tcp_socket.set_timeout(Some(Duration::from_secs(5)));
+        tcp_socket.set_keep_alive(Some(Duration::from_secs(1)));
+        let sport = os.net().get_ephemeral_port();
+        tcp_socket.connect(
+            os.net().interface.context(),
+            IpEndpoint {
+                addr: IpAddress::Ipv4(Ipv4Address::new(ip.0, ip.1, ip.2, ip.3)),
+                port,
+            },
+            sport,
+        )?;
+
+        let handle = os.net().socket_set.add(tcp_socket);
+
+        let ret = TcpStream { handle, os };
+
+        ret.wait_for_state(|state| match state {
+            State::Established => Some(Ok(())),
+            State::Closed => return Some(Err(Error::msg("connection refused"))),
+            _ => None,
+        })
+        .await?;
+
+        Ok(ret)
+    }
+
+    pub async fn wait_for_state<T>(&self, f: impl Fn(State) -> Option<T>) -> T {
+        let handle = self.handle.clone();
+        let os = self.os.clone();
+
+        poll_fn(move |cx| {
+            let state = os.net().socket_set.get_mut::<TcpSocket>(handle).state();
+            let res = f(state);
+            if let Some(res) = res {
+                Poll::Ready(res)
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
+    pub async fn wait_until_closed(&self) {
+        self.wait_for_state(|s| if s == State::Closed { Some(()) } else { None })
+            .await;
+        self.os.net().socket_set.remove(self.handle);
+    }
+
+    async fn fail_if_closed(&self) -> Result<()> {
+        self.wait_until_closed().await;
+        return Err(Error::msg("connection closed"));
+    }
+
+    pub async fn send(&self, data: &[u8]) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let handle = self.handle.clone();
+        let os = self.os.clone();
+
+        let mut pos = 0;
+        let send = poll_fn(move |cx| {
+            let mut net = os.net();
+            let socket = net.socket_set.get_mut::<TcpSocket>(handle);
+            let sent = socket.send_slice(&data[pos..]);
+            if sent.is_err() {
+                return Poll::Ready(Err(Error::Send(sent.unwrap_err())));
+            }
+            pos += sent.unwrap();
+            if pos < data.len() {
+                socket.register_send_waker(cx.waker());
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        });
+
+        select(send, Box::pin(self.fail_if_closed()))
+            .await
+            .factor_first()
+            .0
+    }
+
+    /// Returns the number of bytes received (0 if connection is closed on the other end without
+    /// receiving any data.
+    pub async fn recv(&self, data: &mut [u8]) -> Result<usize> {
+        let handle = self.handle.clone();
+        let os = self.os.clone();
+
+        poll_fn(move |cx| {
+            let mut net = os.net();
+            let socket = net.socket_set.get_mut::<TcpSocket>(handle);
+            if !socket.may_recv() {
+                return Poll::Ready(Ok(0));
+            }
+            let recvd = socket.recv_slice(data);
+            if recvd == Err(smoltcp::socket::tcp::RecvError::Finished) {
+                return Poll::Ready(Ok(0));
+            }
+            if recvd.is_err() {
+                return Poll::Ready(Err(Error::Recv(recvd.unwrap_err())));
+            }
+            if recvd.unwrap() == 0 {
+                socket.register_recv_waker(cx.waker());
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(recvd.unwrap()))
+            }
+        })
+        .await
+    }
+
+    pub async fn close_send(&self) {
+        {
+            self.os
+                .net()
+                .socket_set
+                .get_mut::<TcpSocket>(self.handle)
+                .close();
+        }
+        self.wait_for_state(|state| match state {
+            State::Closed | State::Closing | State::FinWait1 | State::FinWait2 => Some(()),
+            _ => None,
+        })
+        .await
+    }
+
+    pub async fn force_close(&self) {
+        {
+            self.os
+                .net()
+                .socket_set
+                .get_mut::<TcpSocket>(self.handle)
+                .abort();
+        }
+        self.wait_until_closed().await;
     }
 }

@@ -7,7 +7,7 @@ use os::UefiOS;
 
 use uefi::prelude::*;
 
-use uefi::Result;
+use os::error::Result;
 
 use log::info;
 
@@ -16,120 +16,51 @@ mod os;
 #[macro_use]
 extern crate alloc;
 
-async fn run(os: UefiOS) -> Result {
+async fn run(os: UefiOS) -> Result<()> {
     info!("Started");
 
-    os.spawn(async {
-        info!("task started");
+    let os2 = os.clone();
+
+    os.spawn(async move {
+        os2.sleep_us(2000000).await;
+        info!("slept for 2s");
     });
 
-    /*
-    start_timer(os);
-
-    let handles = services.locate_handle_buffer(uefi::table::boot::SearchType::AllHandles)?;
-
-    let mut protos = vec![];
-
-    for h in handles.handles() {
-        for p in services.protocols_per_handle(*h)?.protocols() {
-            protos.push(**p);
-        }
-    }
-
-    protos.sort_by_key(|x| format!("{x}"));
-    protos.dedup();
-    for p in protos.iter() {
-        info!("{p}");
-        services.stall(1000000);
-    }
-
-    services.stall(10000000);
-
+    let conn = os.connect((10, 77, 0, 1), 8000).await.unwrap();
     let req = b"GET /jpeg_xl_data/dices200k-bilevel.zip HTTP/1.1\nHost: old.lucaversari.it\nConnection: close\n\n";
-
-    let mut net = NetworkInterface::new(os);
-
-    while !net.has_ip() {
-        net.poll();
-    }
-
-    info!("DHCP done");
-
-    let tcp = net
-        .connect(smoltcp::wire::IpEndpoint {
-            addr: smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::new(10, 77, 0, 1)),
-            port: 8000,
-        })
-        .unwrap();
-
-    loop {
-        net.poll();
-        match net.tcp_state(&tcp) {
-            State::Established => break,
-            State::Closed => {
-                panic!("Failed to connect")
-            }
-            _ => {}
-        }
-    }
-
-    info!("Connected");
-
-    let mut pos = 0;
-    while pos < req.len() {
-        let sent = net.send_tcp(&tcp, &req[pos..]);
-        info!("{} state: {}", sent, net.tcp_state(&tcp));
-        pos += sent;
-        net.poll();
-    }
-
-    info!("Request sent");
+    conn.send(req).await.unwrap();
 
     let mut read = 0;
     let mut read_buf = [0u8; 1 << 16];
-    let start = get_time_micros();
+    let start = os.timer().micros();
     let mut last = start;
+
+    let print_speed = |read| {
+        let now = os.timer().micros();
+        info!(
+            "Received {} bytes, {} MB/s",
+            read,
+            read as f32 / (now - start) as f32,
+        );
+    };
+
     loop {
-        let r = net.recv_tcp(&tcp, &mut read_buf);
-        if r.is_none() {
+        let r = conn.recv(&mut read_buf).await.unwrap();
+        if r == 0 {
             break;
         }
-        read += r.unwrap();
-        net.poll();
-        let now = get_time_micros();
+        read += r;
+        let now = os.timer().micros();
         if now > last + 1000000 {
             last = now;
-            info!(
-                "Received {} bytes, {} MB/s, state: {}",
-                read,
-                read as f32 / (now - start) as f32,
-                net.tcp_state(&tcp)
-            );
+            print_speed(read);
         }
     }
+    print_speed(read);
 
-    let now = get_time_micros();
-    info!(
-        "Received {} bytes, {} MB/s",
-        read,
-        read as f32 / (now - start) as f32
-    );
-
-    loop {
-        net.poll();
-        match net.tcp_state(&tcp) {
-            State::Closed => {
-                net.remove(tcp);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    loop {
-        net.poll();
-    }
-    */
+    conn.close_send().await;
+    conn.wait_until_closed().await;
+    info!("Connection closed.");
 
     Ok(())
 }
