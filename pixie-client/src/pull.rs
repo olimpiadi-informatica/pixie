@@ -17,7 +17,7 @@ use anyhow::{ensure, Result};
 use clap::Parser;
 use zstd::bulk;
 
-use pixie_shared::{Segment, BODY_LEN, HEADER_LEN, PACKET_LEN};
+use pixie_shared::{Segment, BODY_LEN, CHUNK_SIZE, HEADER_LEN, PACKET_LEN};
 
 #[derive(Parser, Debug)]
 struct Options {
@@ -68,11 +68,7 @@ impl PartialChunk {
     }
 }
 
-async fn save_chunk(
-    mut pc: PartialChunk,
-    pos: Vec<(usize, usize)>,
-    files: Arc<[Mutex<File>]>,
-) -> Result<()> {
+async fn save_chunk(mut pc: PartialChunk, pos: Vec<(usize, usize)>, files: Arc<[Mutex<File>]>) {
     let mut xor = [[0; BODY_LEN]; 32];
     for packet in 0..pc.missing_first.len() {
         if !pc.missing_first[packet] {
@@ -93,13 +89,12 @@ async fn save_chunk(
         }
     }
 
-    let data = bulk::decompress(&pc.data[32 * BODY_LEN..], PACKET_LEN + 1)?;
+    let data = bulk::decompress(&pc.data[32 * BODY_LEN..], CHUNK_SIZE + 1).unwrap();
     for (file, offset) in pos {
         let mut lock = files[file].lock().await;
-        lock.seek(SeekFrom::Start(offset as u64)).await?;
-        lock.write_all(&data).await?;
+        lock.seek(SeekFrom::Start(offset as u64)).await.unwrap();
+        lock.write_all(&data).await.unwrap();
     }
-    Ok(())
 }
 
 #[tokio::main]
