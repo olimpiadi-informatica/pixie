@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File as StdFile},
-    io::{self, BufWriter, SeekFrom, Write},
+    io::{self, BufWriter, Read, Seek, SeekFrom, Write},
     net::{SocketAddrV4, UdpSocket},
     sync::Arc,
     time::Duration,
@@ -68,7 +68,11 @@ impl PartialChunk {
     }
 }
 
-async fn save_chunk(mut pc: PartialChunk, pos: Vec<(usize, usize)>, files: Arc<[Mutex<File>]>) {
+async fn save_chunk(
+    mut pc: PartialChunk,
+    pos: Vec<(usize, usize)>,
+    files: Arc<[Mutex<File>]>,
+) -> Result<()> {
     let mut xor = [[0; BODY_LEN]; 32];
     for packet in 0..pc.missing_first.len() {
         if !pc.missing_first[packet] {
@@ -89,12 +93,13 @@ async fn save_chunk(mut pc: PartialChunk, pos: Vec<(usize, usize)>, files: Arc<[
         }
     }
 
-    let data = bulk::decompress(&pc.data[32 * BODY_LEN..], CHUNK_SIZE + 1).unwrap();
+    let data = bulk::decompress(&pc.data[32 * BODY_LEN..], CHUNK_SIZE + 1)?;
     for (file, offset) in pos {
         let mut lock = files[file].lock().await;
-        lock.seek(SeekFrom::Start(offset as u64)).await.unwrap();
-        lock.write_all(&data).await.unwrap();
+        lock.seek(SeekFrom::Start(offset as u64)).await?;
+        lock.write_all(&data).await?;
     }
+    Ok(())
 }
 
 #[tokio::main]
@@ -112,7 +117,7 @@ pub async fn main() -> Result<()> {
 
     let mut stat_chunks = 0usize;
 
-    let files = info
+    let mut files = info
         .into_iter()
         .enumerate()
         .map(|(idx, pixie_shared::File { name, chunks })| {
@@ -135,32 +140,64 @@ pub async fn main() -> Result<()> {
                 stat_chunks += 1;
             }
 
-            Ok(Mutex::new(File::from_std(
-                StdFile::options()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .open(&name)?,
-            )))
+            Ok(StdFile::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(&name)?)
         })
-        .collect::<Result<Arc<[_]>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     let stat_unique = chunks_info.len();
+    write!(stdout, "Total chunks:     {stat_chunks}\n")?;
+    write!(stdout, "Unique chunks:    {stat_unique}\n")?;
+
+    chunks_info.retain(|hash, &mut (size, _, ref pos)| {
+        let mut data = false;
+        let mut buf = vec![0; size];
+        for &(file, offset) in pos {
+            files[file].seek(SeekFrom::Start(offset as u64)).unwrap();
+            match files[file].read_exact(&mut buf) {
+                Ok(()) => {
+                    if blake3::hash(&bulk::compress(&buf, 1).unwrap()).as_bytes() == hash {
+                        data = true;
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => (),
+                Err(e) => Err(e).unwrap(),
+            }
+        }
+        if data {
+            for &(file, offset) in pos {
+                files[file].seek(SeekFrom::Start(offset as u64)).unwrap();
+                files[file].write_all(&buf).unwrap();
+            }
+        }
+        !data
+    });
+
+    let files: Arc<[_]> = files
+        .into_iter()
+        .map(|f| Mutex::new(File::from_std(f)))
+        .collect();
+
+    let stat_fetch = chunks_info.len();
+    write!(stdout, "Chunks to fetch:  {stat_fetch}\n")?;
+
     let mut stat_recv = 0usize;
     let mut stat_requested = 0usize;
-
-    write!(stdout, "Unique chunks:    {stat_unique} / {stat_chunks}\n")?;
-    write!(stdout, "Chunks received:  {stat_recv} / {stat_unique}\n")?;
+    write!(stdout, "Chunks received:  {stat_recv}\n")?;
     write!(stdout, "Chunks requested: {stat_requested}\n")?;
     stdout.flush()?;
-
-    // TODO: filter already present chunks from chunks_info
 
     let socket = UdpSocket::bind(args.listen_on)?;
     socket.set_read_timeout(Some(Duration::from_secs(1)))?;
     let mut buf = [0; 1 << 13];
 
     let mut received = HashMap::new();
+
+    let mut tasks = Vec::new();
 
     while !chunks_info.is_empty() {
         match socket.recv_from(&mut buf) {
@@ -209,12 +246,13 @@ pub async fn main() -> Result<()> {
                 let pc = received.remove(hash).unwrap();
                 let (_, _, pos) = chunks_info.remove(hash).unwrap();
 
-                tokio::spawn(save_chunk(pc, pos, files.clone()));
+                let task = tokio::spawn(save_chunk(pc, pos, files.clone()));
+                tasks.push(task);
 
                 stat_recv += 1;
 
                 write!(stdout, "\x1b[2A")?;
-                write!(stdout, "Chunks received:  {stat_recv} / {stat_unique}\n")?;
+                write!(stdout, "Chunks received:  {stat_recv}\n")?;
                 write!(stdout, "Chunks requested: {stat_requested}\n")?;
                 stdout.flush()?;
             }
@@ -231,12 +269,16 @@ pub async fn main() -> Result<()> {
                 socket.send_to(&buf[..len], args.udp_server)?;
 
                 write!(stdout, "\x1b[2A")?;
-                write!(stdout, "Chunks received:  {stat_recv} / {stat_unique}\n")?;
+                write!(stdout, "Chunks received:  {stat_recv}\n")?;
                 write!(stdout, "Chunks requested: {stat_requested}\n")?;
                 stdout.flush()?;
             }
             Err(e) => Err(e)?,
         }
+    }
+
+    for task in tasks {
+        task.await??;
     }
 
     Ok(())
