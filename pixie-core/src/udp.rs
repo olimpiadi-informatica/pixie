@@ -57,11 +57,32 @@ pub async fn main(storage_dir: &Path, config: Config) -> Result<()> {
             let num_packets = (data.len() + BODY_LEN - 1) / BODY_LEN;
             write_buf[..32].clone_from_slice(&index);
 
-            for i in 0..num_packets {
-                write_buf[32..34].clone_from_slice(&(i as u16).to_le_bytes());
-                let start = i * BODY_LEN;
+            let mut xor = [[0; BODY_LEN]; 32];
+
+            for index in 0..num_packets {
+                write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
+                let start = index * BODY_LEN;
                 let len = BODY_LEN.min(data.len() - start);
-                write_buf[34..34 + len].clone_from_slice(&data[start..start + len]);
+                let body = &data[start..start + len];
+                let group = index & 31;
+                body.iter()
+                    .zip(xor[group].iter_mut())
+                    .for_each(|(a, b)| *b ^= a);
+                write_buf[34..34 + len].clone_from_slice(body);
+
+                time::sleep_until(wait_for).await;
+                let sent_len = socket
+                    .send_to(&write_buf[..34 + len], config.dest_addr)
+                    .await?;
+                ensure!(sent_len == 34 + len, "Could not send packet");
+                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / config.bits_per_second;
+            }
+
+            for index in 0..32.min(num_packets) {
+                write_buf[32..34].clone_from_slice(&(index as u16).wrapping_sub(32).to_le_bytes());
+                let len = BODY_LEN;
+                let body = &xor[index];
+                write_buf[34..34 + len].clone_from_slice(body);
 
                 time::sleep_until(wait_for).await;
                 let sent_len = socket

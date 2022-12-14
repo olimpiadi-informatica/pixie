@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{self, File as StdFile},
-    io::{self, SeekFrom, Write},
+    io::{self, BufWriter, SeekFrom, Write},
     net::{SocketAddrV4, UdpSocket},
     sync::Arc,
     time::Duration,
@@ -69,10 +69,30 @@ impl PartialChunk {
 }
 
 async fn save_chunk(
-    pc: PartialChunk,
+    mut pc: PartialChunk,
     pos: Vec<(usize, usize)>,
     files: Arc<[Mutex<File>]>,
 ) -> Result<()> {
+    let mut xor = [[0; BODY_LEN]; 32];
+    for packet in 0..pc.missing_first.len() {
+        if !pc.missing_first[packet] {
+            let group = packet & 31;
+            pc.data[BODY_LEN * packet..]
+                .iter()
+                .zip(xor[group].iter_mut())
+                .for_each(|(a, b)| *b ^= a);
+        }
+    }
+    for packet in 0..pc.missing_first.len() {
+        if pc.missing_first[packet] {
+            let group = packet & 31;
+            pc.data[BODY_LEN * packet..]
+                .iter_mut()
+                .zip(xor[group].iter())
+                .for_each(|(a, b)| *a = *b);
+        }
+    }
+
     let data = bulk::decompress(&pc.data[32 * BODY_LEN..], PACKET_LEN + 1)?;
     for (file, offset) in pos {
         let mut lock = files[file].lock().await;
@@ -88,7 +108,8 @@ pub async fn main() -> Result<()> {
 
     ensure!(!args.source.is_empty(), "Specify a source");
 
-    let mut stdout = io::stdout().lock();
+    let stdout = io::stdout().lock();
+    let mut stdout = BufWriter::new(stdout);
 
     let info = fetch_image(args.source)?;
 
@@ -161,15 +182,15 @@ pub async fn main() -> Result<()> {
                     .entry(*hash)
                     .or_insert_with(|| PartialChunk::new(csize));
 
-                let rot_index = index.wrapping_add(32);
+                let rot_index = (index as u16).wrapping_add(32) as usize;
+                match &mut pchunk.missing_first[rot_index] {
+                    false => continue,
+                    x @ true => *x = false,
+                }
+
                 let start = rot_index * BODY_LEN;
                 pchunk.data[start..start + bytes_recv - HEADER_LEN]
                     .clone_from_slice(&buf[HEADER_LEN..bytes_recv]);
-
-                if !pchunk.missing_first[rot_index] {
-                    continue;
-                }
-                pchunk.missing_first[rot_index] = false;
 
                 let group = index & 31;
                 match &mut pchunk.missing_second[group] {
@@ -189,8 +210,6 @@ pub async fn main() -> Result<()> {
                         continue;
                     }
                 }
-
-                // TODO: fill lost packets
 
                 let pc = received.remove(hash).unwrap();
                 let (_, _, pos) = chunks_info.remove(hash).unwrap();
