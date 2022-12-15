@@ -5,12 +5,12 @@ use tokio::{
     time::{self, Duration, Instant},
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use serde::Deserialize;
 
 use pixie_shared::{BODY_LEN, PACKET_LEN};
 
-use crate::State;
+use crate::{find_mac, State};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -27,7 +27,7 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-pub async fn main(state: Arc<State>) -> Result<()> {
+async fn broadcast(state: Arc<State>) -> Result<()> {
     let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
     socket.set_broadcast(true)?;
     let mut queue = BTreeSet::<[u8; 32]>::new();
@@ -97,4 +97,28 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             }
         }
     }
+}
+
+async fn action(state: Arc<State>) -> Result<()> {
+    let socket = UdpSocket::bind("0.0.0.0:25640").await?;
+    let mut buf = [0; PACKET_LEN];
+    loop {
+        let (_len, addr) = socket.recv_from(&mut buf).await?;
+        let peer_mac = find_mac(addr.ip())?;
+        let units = state
+            .units
+            .read()
+            .map_err(|_| anyhow!("units mutex is poisoned"))?;
+        let unit = units.iter().find(|unit| unit.mac == peer_mac);
+        let mode: &str = unit
+            .map(|unit| &unit.action)
+            .unwrap_or(&state.config.boot.unregistered);
+        let mode = mode.as_bytes();
+        socket.send_to(mode, addr).await?;
+    }
+}
+
+pub async fn main(state: Arc<State>) -> Result<()> {
+    tokio::try_join!(broadcast(state.clone()), action(state.clone()))?;
+    Ok(())
 }

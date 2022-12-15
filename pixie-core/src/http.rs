@@ -1,10 +1,8 @@
 use std::{
     collections::BTreeMap,
     error::Error,
-    fs,
-    io::{self, BufRead, BufReader},
+    fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
-    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -20,15 +18,14 @@ use actix_web::{
     web::{Bytes, Data, Json, Path, PayloadConfig},
     App, HttpRequest, HttpServer, Responder,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use interfaces::Interface;
-use macaddr::MacAddr6;
 use mktemp::Temp;
 use serde::Deserialize;
 
 use pixie_shared::{Station, StationKind};
 
-use crate::{State, Unit};
+use crate::{State, Unit, find_mac};
 
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub struct Config {
@@ -38,51 +35,9 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct BootConfig {
-    unregistered: String,
-    default: String,
+    pub unregistered: String,
+    pub default: String,
     pub modes: BTreeMap<String, String>,
-}
-
-fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
-    struct Zombie {
-        inner: Child,
-    }
-
-    impl Drop for Zombie {
-        fn drop(&mut self) {
-            self.inner.kill().unwrap();
-            self.inner.wait().unwrap();
-        }
-    }
-
-    if ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
-        bail!("localhost not supported");
-    }
-
-    let s = ip.to_string();
-
-    let mut child = Zombie {
-        inner: Command::new("ip")
-            .arg("neigh")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?,
-    };
-    let stdout = child.inner.stdout.take().unwrap();
-    let lines = BufReader::new(stdout).lines();
-
-    for line in lines {
-        let line = line?;
-        let mut parts = line.split(' ');
-
-        if parts.next() == Some(&s) {
-            let mac = parts.nth(3).unwrap();
-            return Ok(mac.parse().unwrap());
-        }
-    }
-
-    bail!("Mac address not found");
 }
 
 fn find_interface_ip(peer_ip: Ipv4Addr) -> Result<Ipv4Addr, Box<dyn Error>> {
@@ -120,8 +75,8 @@ async fn boot(req: HttpRequest, state: Data<State>) -> Result<impl Responder, Bo
     let units = state
         .units
         .read()
-        .map_err(|_| anyhow!("machines mutex is poisoned"))?;
-    let unit = units.iter().find(|x| x.mac == peer_mac);
+        .map_err(|_| anyhow!("units mutex is poisoned"))?;
+    let unit = units.iter().find(|unit| unit.mac == peer_mac);
     let mode: &str = unit
         .map(|unit| &unit.action)
         .unwrap_or(&state.config.boot.unregistered);
@@ -161,7 +116,7 @@ async fn action(
     let units = &mut **state
         .units
         .write()
-        .map_err(|_| anyhow!("machines mutex is poisoned"))?;
+        .map_err(|_| anyhow!("units mutex is poisoned"))?;
 
     let value = &path.1;
     if state.config.boot.modes.get(value).is_none() {
@@ -235,7 +190,7 @@ async fn register(
             let units = &mut *state
                 .units
                 .write()
-                .map_err(|_| anyhow!("machines mutex is poisoned"))?;
+                .map_err(|_| anyhow!("units mutex is poisoned"))?;
 
             let unit = units
                 .iter_mut()

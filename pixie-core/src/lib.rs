@@ -4,11 +4,14 @@ pub mod udp;
 
 use std::{
     collections::BTreeMap,
-    net::Ipv4Addr,
+    io::{BufRead, BufReader},
+    net::{IpAddr, Ipv4Addr},
     path::PathBuf,
+    process::{Child, Command, Stdio},
     sync::{Mutex, RwLock},
 };
 
+use anyhow::{bail, Result};
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 
@@ -53,4 +56,46 @@ impl State {
     pub fn registered_file(&self) -> PathBuf {
         self.storage_dir.join("registered.json")
     }
+}
+
+pub fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
+    struct Zombie {
+        inner: Child,
+    }
+
+    impl Drop for Zombie {
+        fn drop(&mut self) {
+            self.inner.kill().unwrap();
+            self.inner.wait().unwrap();
+        }
+    }
+
+    if ip == IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)) {
+        bail!("localhost not supported");
+    }
+
+    let s = ip.to_string();
+
+    let mut child = Zombie {
+        inner: Command::new("ip")
+            .arg("neigh")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?,
+    };
+    let stdout = child.inner.stdout.take().unwrap();
+    let lines = BufReader::new(stdout).lines();
+
+    for line in lines {
+        let line = line?;
+        let mut parts = line.split(' ');
+
+        if parts.next() == Some(&s) {
+            let mac = parts.nth(3).unwrap();
+            return Ok(mac.parse().unwrap());
+        }
+    }
+
+    bail!("Mac address not found");
 }
