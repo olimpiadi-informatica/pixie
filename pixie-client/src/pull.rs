@@ -257,7 +257,8 @@ pub async fn main() -> Result<()> {
                 stdout.flush()?;
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                let mut len = 0;
+                let mut len = 2;
+                buf[..2].copy_from_slice(b"RB");
                 for (hash, _) in chunks_info.iter() {
                     if len + 32 > PACKET_LEN {
                         break;

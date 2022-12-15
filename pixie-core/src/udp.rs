@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, fmt::Write, fs, net::SocketAddrV4, ops::Bound, 
 
 use tokio::{
     net::UdpSocket,
+    sync::mpsc::{self, Receiver, Sender},
     time::{self, Duration, Instant},
 };
 
@@ -27,34 +28,49 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-async fn broadcast(state: Arc<State>) -> Result<()> {
-    let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
-    socket.set_broadcast(true)?;
+async fn broadcast(
+    state: Arc<State>,
+    socket: &UdpSocket,
+    mut rx: Receiver<[u8; 32]>,
+) -> Result<()> {
     let mut queue = BTreeSet::<[u8; 32]>::new();
     let mut write_buf = [0; PACKET_LEN];
     let mut wait_for = Instant::now();
     let mut index = [0; 32];
 
     loop {
-        let mut read_buf = [0; PACKET_LEN];
-        let (len, _) = socket.recv_from(&mut read_buf).await?;
-        // TODO
-        assert!(len % 32 == 0);
-        for i in 0..len / 32 {
-            queue.insert(read_buf[32 * i..32 * i + 32].try_into().unwrap());
-        }
+        match rx.recv().await {
+            Some(hash) => queue.insert(hash),
+            None => break,
+        };
 
         wait_for = wait_for.max(Instant::now());
-        while let Some(hash) = queue
-            .range((Bound::Excluded(index), Bound::Unbounded))
-            .next()
-            .or_else(|| queue.iter().next())
-        {
+        loop {
+            while let Ok(hash) = rx.try_recv() {
+                queue.insert(hash);
+            }
+
+            let hash = queue
+                .range((Bound::Excluded(index), Bound::Unbounded))
+                .next()
+                .or_else(|| queue.iter().next());
+
+            let Some(hash) = hash else {
+                break;
+            };
+
             index = *hash;
             queue.remove(&index);
 
             let filename = state.storage_dir.join("chunks").join(to_hex(&index));
-            let data = fs::read(&filename)?;
+            let data = match fs::read(&filename) {
+                Ok(data) => data,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    eprintln!("ERROR: chunk {} not found", to_hex(&index));
+                    continue;
+                }
+                Err(e) => Err(e)?,
+            };
 
             let num_packets = (data.len() + BODY_LEN - 1) / BODY_LEN;
             write_buf[..32].clone_from_slice(&index);
@@ -97,28 +113,48 @@ async fn broadcast(state: Arc<State>) -> Result<()> {
             }
         }
     }
+
+    Ok(())
 }
 
-async fn action(state: Arc<State>) -> Result<()> {
-    let socket = UdpSocket::bind("0.0.0.0:25640").await?;
+async fn handle_requests(
+    state: Arc<State>,
+    socket: &UdpSocket,
+    tx: Sender<[u8; 32]>,
+) -> Result<()> {
     let mut buf = [0; PACKET_LEN];
     loop {
-        let (_len, addr) = socket.recv_from(&mut buf).await?;
-        let peer_mac = find_mac(addr.ip())?;
-        let units = state
-            .units
-            .read()
-            .map_err(|_| anyhow!("units mutex is poisoned"))?;
-        let unit = units.iter().find(|unit| unit.mac == peer_mac);
-        let mode: &str = unit
-            .map(|unit| &unit.action)
-            .unwrap_or(&state.config.boot.unregistered);
-        let mode = mode.as_bytes();
-        socket.send_to(mode, addr).await?;
+        let (len, addr) = socket.recv_from(&mut buf).await?;
+        let buf = &buf[..len];
+        if buf == b"GA" {
+            let peer_mac = find_mac(addr.ip())?;
+            let units = state
+                .units
+                .read()
+                .map_err(|_| anyhow!("units mutex is poisoned"))?;
+            let unit = units.iter().find(|unit| unit.mac == peer_mac);
+            let mode: &str = unit
+                .map(|unit| &unit.action)
+                .unwrap_or(&state.config.boot.unregistered);
+            let mode = mode.as_bytes();
+            socket.send_to(mode, addr).await?;
+        } else if buf.starts_with(b"RB") && (buf.len() - 2) % 32 == 0 {
+            for hash in buf[2..].chunks(32) {
+                tx.send(hash.try_into().unwrap()).await?;
+            }
+        }
     }
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    tokio::try_join!(broadcast(state.clone()), action(state.clone()))?;
+    let (tx, rx) = mpsc::channel(128);
+    let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
+    socket.set_broadcast(true)?;
+
+    tokio::try_join!(
+        broadcast(state.clone(), &socket, rx),
+        handle_requests(state, &socket, tx),
+    )?;
+
     Ok(())
 }
