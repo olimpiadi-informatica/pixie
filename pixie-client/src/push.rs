@@ -342,11 +342,12 @@ fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
         }
 
         while start < end {
+            let split = end.min((start / CHUNK_SIZE + 1) * CHUNK_SIZE);
             out.push(ChunkInfo {
                 start,
-                size: CHUNK_SIZE.min(end - start),
+                size: split - start,
             });
-            start += CHUNK_SIZE;
+            start = split;
         }
     }
 
