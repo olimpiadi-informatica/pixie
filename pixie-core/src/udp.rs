@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt::Write, fs, net::SocketAddrV4, ops::Bound, path::Path};
+use std::{collections::BTreeSet, fmt::Write, fs, net::SocketAddrV4, ops::Bound, sync::Arc};
 
 use tokio::{
     net::UdpSocket,
@@ -9,6 +9,8 @@ use anyhow::{ensure, Result};
 use serde::Deserialize;
 
 use pixie_shared::{BODY_LEN, PACKET_LEN};
+
+use crate::State;
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -25,8 +27,8 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-pub async fn main(storage_dir: &Path, config: Config) -> Result<()> {
-    let socket = UdpSocket::bind(config.listen_on).await?;
+pub async fn main(state: Arc<State>) -> Result<()> {
+    let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
     socket.set_broadcast(true)?;
     let mut queue = BTreeSet::<[u8; 32]>::new();
     let mut write_buf = [0; PACKET_LEN];
@@ -51,7 +53,7 @@ pub async fn main(storage_dir: &Path, config: Config) -> Result<()> {
             index = *hash;
             queue.remove(&index);
 
-            let filename = storage_dir.join("chunks").join(to_hex(&index));
+            let filename = state.storage_dir.join("chunks").join(to_hex(&index));
             let data = fs::read(&filename)?;
 
             let num_packets = (data.len() + BODY_LEN - 1) / BODY_LEN;
@@ -72,10 +74,11 @@ pub async fn main(storage_dir: &Path, config: Config) -> Result<()> {
 
                 time::sleep_until(wait_for).await;
                 let sent_len = socket
-                    .send_to(&write_buf[..34 + len], config.dest_addr)
+                    .send_to(&write_buf[..34 + len], state.config.udp.dest_addr)
                     .await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
-                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / config.bits_per_second;
+                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1)
+                    / state.config.udp.bits_per_second;
             }
 
             for index in 0..32.min(num_packets) {
@@ -86,10 +89,11 @@ pub async fn main(storage_dir: &Path, config: Config) -> Result<()> {
 
                 time::sleep_until(wait_for).await;
                 let sent_len = socket
-                    .send_to(&write_buf[..34 + len], config.dest_addr)
+                    .send_to(&write_buf[..34 + len], state.config.udp.dest_addr)
                     .await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
-                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / config.bits_per_second;
+                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1)
+                    / state.config.udp.bits_per_second;
             }
         }
     }

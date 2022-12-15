@@ -1,22 +1,15 @@
-use std::{collections::BTreeMap, path::PathBuf};
-
-use anyhow::{Context, Result};
-use clap::Parser;
-use serde::Deserialize;
-
-use pixie_core::{
-    dnsmasq::{self, DnsmasqHandle},
-    http, udp,
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    sync::{Mutex, RwLock},
 };
 
-#[derive(Debug, Deserialize)]
-pub struct PixieConfig {
-    dnsmasq: dnsmasq::Config,
-    http: http::Config,
-    boot: http::BootConfig,
-    groups: BTreeMap<String, u8>,
-    udp: udp::Config,
-}
+use anyhow::{bail, Context, Result};
+use clap::Parser;
+
+use pixie_shared::Station;
+
+use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, Config, State, Unit};
 
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
@@ -54,31 +47,42 @@ async fn main() -> Result<()> {
     let config_path = options.storage_dir.join("config.yaml");
     let config = std::fs::File::open(&config_path)
         .with_context(|| format!("open config file: {}", config_path.display()))?;
-    let config: PixieConfig = serde_yaml::from_reader(&config)
+    let config: Config = serde_yaml::from_reader(&config)
         .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
-    let dnsmasq_handle =
+    let mut dnsmasq_handle =
         DnsmasqHandle::from_config(&options.storage_dir, &config.dnsmasq, &config.http)
             .context("Error start dnsmasq")?;
 
     let data = std::fs::read(options.storage_dir.join("registered.json"));
-    let units = data
+    let units: Vec<Unit> = data
         .ok()
         .map(|d| serde_json::from_slice(&d))
         .transpose()
         .context("invalid json at registered.json")?
         .unwrap_or_default();
 
+    for (i, unit) in units.iter().enumerate() {
+        dnsmasq_handle.write_host(i, unit.mac, unit.ip())?;
+        if config.boot.modes.get(&unit.action).is_none() {
+            bail!("Unknown mode {}", unit.action);
+        }
+    }
+    dnsmasq_handle.send_sighup()?;
+
+    let hint = Mutex::new(Station::default());
+
+    let state = Arc::new(State {
+        storage_dir: options.storage_dir,
+        config,
+        units: RwLock::new(units),
+        dnsmasq_handle: Mutex::new(dnsmasq_handle),
+        hint,
+    });
+
     tokio::select!(
-        x = http::main(
-            &options.storage_dir,
-            config.http,
-            config.boot,
-            units,
-            config.groups,
-            dnsmasq_handle,
-        ) => x?,
-        x = udp::main(&options.storage_dir, config.udp) => x?,
+        x = http::main( state.clone(),) => x?,
+        x = udp::main(state.clone()) => x?,
     );
 
     Ok(())

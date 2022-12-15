@@ -4,11 +4,10 @@ use std::{
     fs,
     io::{self, BufRead, BufReader},
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
-    path::{self, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Mutex, RwLock,
+        Arc,
     },
 };
 
@@ -25,13 +24,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use interfaces::Interface;
 use macaddr::MacAddr6;
 use mktemp::Temp;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use pixie_shared::{Station, StationKind};
 
-use crate::dnsmasq::DnsmasqHandle;
+use crate::{State, Unit};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Copy)]
 pub struct Config {
     pub max_payload: usize,
     pub listen_on: SocketAddrV4,
@@ -41,49 +40,8 @@ pub struct Config {
 pub struct BootConfig {
     unregistered: String,
     default: String,
-    modes: BTreeMap<String, String>,
+    pub modes: BTreeMap<String, String>,
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Unit {
-    mac: MacAddr6,
-    kind: StationKind,
-    group: u8,
-    row: u8,
-    col: u8,
-    action: String,
-}
-
-impl Unit {
-    fn ip(&self) -> Ipv4Addr {
-        Ipv4Addr::new(10, self.group, self.row, self.col)
-    }
-}
-
-#[derive(Debug)]
-struct Machines {
-    inner: Vec<Unit>,
-    map: BTreeMap<MacAddr6, usize>,
-}
-
-impl Machines {
-    fn new(inner: Vec<Unit>) -> Self {
-        let map = inner.iter().enumerate().map(|(i, x)| (x.mac, i)).collect();
-        Self { inner, map }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct BootString(String);
-
-#[derive(Clone, Debug)]
-struct StorageDir(PathBuf);
-
-#[derive(Clone, Debug)]
-struct RegisteredFile(PathBuf);
-
-#[derive(Clone, Debug)]
-struct Groups(BTreeMap<String, u8>);
 
 fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
     struct Zombie {
@@ -148,12 +106,7 @@ fn find_interface_ip(peer_ip: Ipv4Addr) -> Result<Ipv4Addr, Box<dyn Error>> {
 }
 
 #[get("/boot.ipxe")]
-async fn boot(
-    req: HttpRequest,
-    boot_config: Data<BootConfig>,
-    machines: Data<RwLock<Machines>>,
-    config: Data<Config>,
-) -> Result<impl Responder, Box<dyn Error>> {
+async fn boot(req: HttpRequest, state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
     let peer_mac = match req.peer_addr() {
         Some(ip) => find_mac(ip.ip())?,
         _ => {
@@ -164,14 +117,17 @@ async fn boot(
         }
     };
 
-    let Machines { inner, map } = &*machines
+    let units = state
+        .units
         .read()
         .map_err(|_| anyhow!("machines mutex is poisoned"))?;
-    let unit = map.get(&peer_mac).copied();
+    let unit = units.iter().find(|x| x.mac == peer_mac);
     let mode: &str = unit
-        .map(|unit| &inner[unit].action)
-        .unwrap_or(&boot_config.unregistered);
-    let cmd = boot_config
+        .map(|unit| &unit.action)
+        .unwrap_or(&state.config.boot.unregistered);
+    let cmd = state
+        .config
+        .boot
         .modes
         .get(mode)
         .ok_or_else(|| anyhow!("mode {} does not exists", mode))?;
@@ -180,11 +136,14 @@ async fn boot(
     };
     let cmd = cmd
         .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
-        .replace("<server_port>", &config.listen_on.port().to_string());
+        .replace(
+            "<server_port>",
+            &state.config.http.listen_on.port().to_string(),
+        );
     let cmd = match unit {
         Some(unit) => cmd.replace(
             "<image>",
-            match inner[unit].kind {
+            match unit.kind {
                 StationKind::Worker => "worker",
                 StationKind::Contestant => "contestant",
             },
@@ -197,17 +156,15 @@ async fn boot(
 #[get("/action/{mac}/{value}")]
 async fn action(
     path: Path<(String, String)>,
-    boot_config: Data<BootConfig>,
-    machines: Data<RwLock<Machines>>,
-    groups: Data<Groups>,
-    registered_file: Data<RegisteredFile>,
+    state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
-    let Machines { inner, map } = &mut *machines
+    let units = &mut **state
+        .units
         .write()
         .map_err(|_| anyhow!("machines mutex is poisoned"))?;
 
     let value = &path.1;
-    if boot_config.modes.get(value).is_none() {
+    if state.config.boot.modes.get(value).is_none() {
         return Ok(format!("Unknown action {}", value)
             .customize()
             .with_status(StatusCode::BAD_REQUEST));
@@ -216,29 +173,26 @@ async fn action(
     let mut updated = 0usize;
 
     if let Ok(mac) = path.0.parse() {
-        if let Some(&unit) = map.get(&mac) {
-            inner[unit].action = value.clone();
-            updated += 1;
-        } else {
-            return Ok("Unknown MAC address"
-                .to_owned()
-                .customize()
-                .with_status(StatusCode::BAD_REQUEST));
+        for unit in units.iter_mut() {
+            if unit.mac == mac {
+                unit.action = value.clone();
+                updated += 1;
+            }
         }
     } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
-        for unit in &mut *inner {
+        for unit in units.iter_mut() {
             if unit.ip() == ip {
                 unit.action = value.clone();
                 updated += 1;
             }
         }
     } else if path.0 == "all" {
-        for unit in inner.iter_mut() {
+        for unit in units.iter_mut() {
             unit.action = value.clone();
             updated += 1;
         }
-    } else if let Some(&group) = groups.0.get(&path.0) {
-        for unit in inner.iter_mut() {
+    } else if let Some(&group) = state.config.groups.get(&path.0) {
+        for unit in units.iter_mut() {
             if unit.group == group {
                 unit.action = value.clone();
                 updated += 1;
@@ -251,7 +205,7 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
+    fs::write(&state.registered_file(), serde_json::to_string(units)?)?;
     Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
@@ -259,16 +213,15 @@ async fn action(
 async fn register(
     req: HttpRequest,
     body: Bytes,
-    boot_config: Data<BootConfig>,
-    hint: Data<Mutex<Station>>,
-    machines: Data<RwLock<Machines>>,
-    registered_file: Data<RegisteredFile>,
-    dnsmasq_handle: Data<Mutex<DnsmasqHandle>>,
+    state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
-            let mut guard = hint.lock().map_err(|_| anyhow!("hint mutex is poisoned"))?;
+            let mut guard = state
+                .hint
+                .lock()
+                .map_err(|_| anyhow!("hint mutex is poisoned"))?;
             *guard = Station {
                 kind: data.kind,
                 row: data.row,
@@ -279,33 +232,37 @@ async fn register(
             let peer_ip = req.peer_addr().context("could not get peer ip")?.ip();
             let peer_mac = find_mac(peer_ip)?;
 
-            let Machines { inner, map } = &mut *machines
+            let units = &mut *state
+                .units
                 .write()
                 .map_err(|_| anyhow!("machines mutex is poisoned"))?;
 
-            let &mut unit = map
-                .entry(peer_mac)
-                .and_modify(|&mut unit| {
-                    inner[unit].kind = data.kind;
-                    inner[unit].group = data.group;
-                    inner[unit].row = data.row;
-                    inner[unit].col = data.col;
+            let unit = units
+                .iter_mut()
+                .position(|x| x.mac == peer_mac)
+                .map(|unit| {
+                    units[unit].kind = data.kind;
+                    units[unit].group = data.group;
+                    units[unit].row = data.row;
+                    units[unit].col = data.col;
+                    unit
                 })
-                .or_insert_with(|| {
-                    inner.push(Unit {
+                .unwrap_or_else(|| {
+                    units.push(Unit {
                         mac: peer_mac,
                         kind: data.kind,
                         group: data.group,
                         row: data.row,
                         col: data.col,
-                        action: boot_config.default.clone(),
+                        action: state.config.boot.default.clone(),
                     });
-                    inner.len() - 1
+                    units.len() - 1
                 });
 
-            let ip = inner[unit].ip();
+            let ip = units[unit].ip();
 
-            let mut dnsmasq_lock = dnsmasq_handle
+            let mut dnsmasq_lock = state
+                .dnsmasq_handle
                 .lock()
                 .map_err(|_| anyhow!("dnsmasq_handle mutex is poisoned"))?;
             dnsmasq_lock
@@ -313,7 +270,7 @@ async fn register(
                 .context("writing hosts file")?;
             dnsmasq_lock.send_sighup().context("sending sighup")?;
 
-            fs::write(&registered_file.0, serde_json::to_string(&inner)?)?;
+            fs::write(&state.registered_file(), serde_json::to_string(&units)?)?;
             return Ok("".customize());
         }
     }
@@ -324,14 +281,17 @@ async fn register(
 }
 
 #[get("/register_hint")]
-async fn register_hint(hint: Data<Mutex<Station>>) -> Result<impl Responder, Box<dyn Error>> {
-    let data = *hint.lock().map_err(|_| anyhow!("Mutex is poisoned"))?;
+async fn register_hint(state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
+    let data = *state
+        .hint
+        .lock()
+        .map_err(|_| anyhow!("Mutex is poisoned"))?;
     Ok(Json(data))
 }
 
 #[get("/has_chunk/{hash}")]
-async fn has_chunk(hash: Path<String>, storage_dir: Data<StorageDir>) -> impl Responder {
-    let path = storage_dir.0.join("chunks").join(&*hash);
+async fn has_chunk(hash: Path<String>, state: Data<State>) -> impl Responder {
+    let path = state.storage_dir.join("chunks").join(&*hash);
     if path.exists() {
         "pass"
     } else {
@@ -343,10 +303,10 @@ async fn has_chunk(hash: Path<String>, storage_dir: Data<StorageDir>) -> impl Re
 async fn upload_chunk(
     body: Bytes,
     hash: Path<String>,
-    storage_dir: Data<StorageDir>,
+    state: Data<State>,
 ) -> io::Result<impl Responder> {
-    let path = storage_dir.0.join("chunks").join(&*hash);
-    let tmp_file = Temp::new_file_in(storage_dir.0.join("tmp"))
+    let path = state.storage_dir.join("chunks").join(&*hash);
+    let tmp_file = Temp::new_file_in(state.storage_dir.join("tmp"))
         .expect("failed to create tmp file")
         .release();
     let body = body.to_vec();
@@ -359,19 +319,16 @@ async fn upload_chunk(
 async fn upload_image(
     name: Path<String>,
     body: Bytes,
-    storage_dir: Data<StorageDir>,
+    state: Data<State>,
 ) -> io::Result<impl Responder> {
     let body = body.to_vec();
-    let path = storage_dir.0.join("images").join(&*name);
+    let path = state.storage_dir.join("images").join(&*name);
     fs::write(path, body)?;
     Ok("")
 }
 
 #[get("/chunk/{hash}")]
-async fn get_chunk(
-    hash: Path<String>,
-    storage_dir: Data<StorageDir>,
-) -> io::Result<impl Responder> {
+async fn get_chunk(hash: Path<String>, state: Data<State>) -> io::Result<impl Responder> {
     static CONN: AtomicUsize = AtomicUsize::new(0);
 
     struct Handle;
@@ -393,49 +350,26 @@ async fn get_chunk(
     }
 
     match Handle::new(12) {
-        Some(_handle) => Ok(fs::read(storage_dir.0.join("chunks").join(&*hash))?.customize()),
+        Some(_handle) => Ok(fs::read(state.storage_dir.join("chunks").join(&*hash))?.customize()),
         None => Ok(Vec::new().customize().with_status(StatusCode::IM_A_TEAPOT)),
     }
 }
 
-pub async fn main(
-    storage_dir: &path::Path,
-    config: Config,
-    boot_config: BootConfig,
-    units: Vec<Unit>,
-    groups: BTreeMap<String, u8>,
-    mut dnsmasq_handle: DnsmasqHandle,
-) -> Result<()> {
-    let static_files = storage_dir.join("httpstatic");
-    let images = storage_dir.join("images");
-    let registered_file = RegisteredFile(storage_dir.join("registered.json"));
-    let storage_dir = StorageDir(storage_dir.into());
-    let hint = Data::new(Mutex::new(Station::default()));
-    let machines = Machines::new(units);
-    for (i, unit) in machines.inner.iter().enumerate() {
-        dnsmasq_handle.write_host(i, unit.mac, unit.ip())?;
-        if boot_config.modes.get(&unit.action).is_none() {
-            bail!("Unknown mode {}", unit.action);
-        }
-    }
-    dnsmasq_handle.send_sighup()?;
-    let dnsmasq_handle = Data::new(Mutex::new(dnsmasq_handle));
-    let machines = Data::new(RwLock::new(machines));
-    let groups = Data::new(Groups(groups));
-    let config_data = Data::new(config.clone());
+pub async fn main(state: Arc<State>) -> Result<()> {
+    let Config {
+        max_payload,
+        listen_on,
+    } = state.config.http;
+
+    let static_files = state.storage_dir.join("httpstatic");
+    let images = state.storage_dir.join("images");
+    let data: Data<_> = state.into();
 
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
-            .app_data(PayloadConfig::new(config.max_payload))
-            .app_data(Data::new(boot_config.clone()))
-            .app_data(Data::new(registered_file.clone()))
-            .app_data(Data::new(storage_dir.clone()))
-            .app_data(config_data.clone())
-            .app_data(hint.clone())
-            .app_data(machines.clone())
-            .app_data(groups.clone())
-            .app_data(dnsmasq_handle.clone())
+            .app_data(PayloadConfig::new(max_payload))
+            .app_data(data.clone())
             .service(has_chunk)
             .service(upload_chunk)
             .service(upload_image)
@@ -447,7 +381,7 @@ pub async fn main(
             .service(register_hint)
             .service(action)
     })
-    .bind(config.listen_on)?
+    .bind(listen_on)?
     .run()
     .await?;
 
