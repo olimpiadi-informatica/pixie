@@ -138,6 +138,7 @@ async fn handle_requests(
                 .unwrap_or(&state.config.boot.unregistered);
             let mode = mode.as_bytes();
             socket.send_to(mode, addr).await?;
+
         } else if buf.starts_with(b"RB") && (buf.len() - 2) % 32 == 0 {
             for hash in buf[2..].chunks(32) {
                 tx.send(hash.try_into().unwrap()).await?;
