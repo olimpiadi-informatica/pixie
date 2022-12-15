@@ -19,13 +19,12 @@ use actix_web::{
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, Context, Result};
-use interfaces::Interface;
 use mktemp::Temp;
 use serde::Deserialize;
 
 use pixie_shared::{Station, StationKind};
 
-use crate::{State, Unit, find_mac};
+use crate::{find_interface_ip, find_mac, State, Unit};
 
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub struct Config {
@@ -40,37 +39,12 @@ pub struct BootConfig {
     pub modes: BTreeMap<String, String>,
 }
 
-fn find_interface_ip(peer_ip: Ipv4Addr) -> Result<Ipv4Addr, Box<dyn Error>> {
-    for interface in Interface::get_all()? {
-        for address in &interface.addresses {
-            let Some(IpAddr::V4(addr)) = address.addr.map(|x| x.ip()) else {
-                continue;
-            };
-            let Some(IpAddr::V4(mask)) = address.mask.map(|x| x.ip()) else {
-                continue;
-            };
-            if (u32::from_ne_bytes(addr.octets()) ^ u32::from_ne_bytes(peer_ip.octets()))
-                & u32::from_ne_bytes(mask.octets())
-                == 0
-            {
-                return Ok(addr);
-            }
-        }
-    }
-    Err(anyhow!("Could not find the corresponding ip"))?
-}
-
 #[get("/boot.ipxe")]
 async fn boot(req: HttpRequest, state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
-    let peer_mac = match req.peer_addr() {
-        Some(ip) => find_mac(ip.ip())?,
-        _ => {
-            return Ok("Specify an IPv4 address"
-                .to_owned()
-                .customize()
-                .with_status(StatusCode::BAD_REQUEST))
-        }
+    let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
+        Err(anyhow!("IPv6 is not supported"))?
     };
+    let peer_mac = find_mac(peer_ip)?;
 
     let units = state
         .units
@@ -86,9 +60,6 @@ async fn boot(req: HttpRequest, state: Data<State>) -> Result<impl Responder, Bo
         .modes
         .get(mode)
         .ok_or_else(|| anyhow!("mode {} does not exists", mode))?;
-    let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
-        Err(anyhow!("IPv6 is not supported"))?
-    };
     let cmd = cmd
         .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
         .replace(
@@ -184,7 +155,9 @@ async fn register(
                 group: data.group,
             };
 
-            let peer_ip = req.peer_addr().context("could not get peer ip")?.ip();
+            let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
+                Err(anyhow!("IPv6 is not supported"))?
+            };
             let peer_mac = find_mac(peer_ip)?;
 
             let units = &mut *state

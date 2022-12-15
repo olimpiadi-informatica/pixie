@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{net::SocketAddrV4, path::PathBuf};
 
 use blake3::OUT_LEN;
 use serde_derive::{Deserialize, Serialize};
@@ -60,3 +60,20 @@ pub struct Station {
 pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Action {
+    Reboot,
+    Register {
+        server: SocketAddrV4,
+    },
+    Push {
+        image: String,
+    },
+    Pull {
+        image: String,
+        listen_on: SocketAddrV4,
+        udp_server: SocketAddrV4,
+    },
+    Wait,
+}

@@ -1,4 +1,11 @@
-use std::{collections::BTreeSet, fmt::Write, fs, net::SocketAddrV4, ops::Bound, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fmt::Write,
+    fs,
+    net::{IpAddr, Ipv4Addr, SocketAddrV4},
+    ops::Bound,
+    sync::Arc,
+};
 
 use tokio::{
     net::UdpSocket,
@@ -9,9 +16,9 @@ use tokio::{
 use anyhow::{anyhow, ensure, Result};
 use serde::Deserialize;
 
-use pixie_shared::{BODY_LEN, PACKET_LEN};
+use pixie_shared::{Action, StationKind, BODY_LEN, PACKET_LEN};
 
-use crate::{find_mac, State};
+use crate::{find_interface_ip, find_mac, State};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -127,7 +134,10 @@ async fn handle_requests(
         let (len, addr) = socket.recv_from(&mut buf).await?;
         let buf = &buf[..len];
         if buf == b"GA" {
-            let peer_mac = find_mac(addr.ip())?;
+            let IpAddr::V4(peer_ip) = addr.ip() else {
+                Err(anyhow!("IPv6 is not supported"))?
+            };
+            let peer_mac = find_mac(peer_ip)?;
             let units = state
                 .units
                 .read()
@@ -136,9 +146,44 @@ async fn handle_requests(
             let mode: &str = unit
                 .map(|unit| &unit.action)
                 .unwrap_or(&state.config.boot.unregistered);
-            let mode = mode.as_bytes();
-            socket.send_to(mode, addr).await?;
 
+            let server_ip = find_interface_ip(peer_ip)?;
+            let server_port = state.config.udp.listen_on.port();
+            let server_loc = SocketAddrV4::new(server_ip, server_port);
+            let action = match mode {
+                "reboot" => Action::Reboot,
+                "register" => Action::Register { server: server_loc },
+                "push" => Action::Push {
+                    image: format!(
+                        "http://{}/image/{}",
+                        server_loc,
+                        match unit.unwrap().kind {
+                            StationKind::Worker => "worker",
+                            StationKind::Contestant => "contestant",
+                        }
+                    ),
+                },
+                "pull" => Action::Pull {
+                    image: format!(
+                        "http://{}/image/{}",
+                        server_loc,
+                        match unit.unwrap().kind {
+                            StationKind::Worker => "worker",
+                            StationKind::Contestant => "contestant",
+                        }
+                    ),
+                    listen_on: SocketAddrV4::new(
+                        Ipv4Addr::new(0, 0, 0, 0),
+                        state.config.udp.dest_addr.port(),
+                    ),
+                    udp_server: SocketAddrV4::new(server_ip, state.config.udp.listen_on.port()),
+                },
+                "wait" => Action::Wait,
+                _ => unreachable!(),
+            };
+
+            let msg = serde_json::to_vec(&action)?;
+            socket.send_to(&msg, addr).await?;
         } else if buf.starts_with(b"RB") && (buf.len() - 2) % 32 == 0 {
             for hash in buf[2..].chunks(32) {
                 tx.send(hash.try_into().unwrap()).await?;
