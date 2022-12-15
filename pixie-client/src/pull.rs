@@ -23,9 +23,9 @@ use pixie_shared::{Segment, BODY_LEN, CHUNK_SIZE, HEADER_LEN, PACKET_LEN};
 struct Options {
     #[clap(short, long, value_parser)]
     source: String,
-    #[clap(short, long, value_parser, default_value = "0.0.0.0:4041")]
+    #[clap(short, long, value_parser)]
     listen_on: SocketAddrV4,
-    #[clap(short, long, value_parser, default_value = "192.168.12.100:4040")]
+    #[clap(short, long, value_parser)]
     udp_server: SocketAddrV4,
 }
 

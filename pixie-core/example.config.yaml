@@ -5,6 +5,10 @@ dnsmasq:
 http:
   listen_on: 0.0.0.0:8080
   max_payload: 10000000
+udp:
+  listen_on: 0.0.0.0:4040
+  dest_addr: 192.168.1.255:4041
+  bits_per_second: 52428800
 groups:
   asdf: 0
   qwer: 1
@@ -25,7 +29,7 @@ boot:
       boot
     pull: |
       #!ipxe
-      kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> ip=dhcp quiet
+      kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> listen_on=0.0.0.0:4041 udp_server=192.168.1.100:4040 ip=dhcp quiet
       boot
     cmd: |
       #!ipxe

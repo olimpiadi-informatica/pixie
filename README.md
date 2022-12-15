@@ -8,7 +8,6 @@ A system to boot multiple computers, supporting rsync-like updates
 
 ## TODO
 * progress bar per up/download
-* supporto a broadcasting dei chunk
 * versioning delle immagini
 * supporto ad altri FS (fat, swap, btrfs, ?)
 * UI
