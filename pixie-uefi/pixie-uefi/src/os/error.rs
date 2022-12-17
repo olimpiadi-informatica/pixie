@@ -1,13 +1,18 @@
 use alloc::{borrow::ToOwned, string::String};
-use smoltcp::socket::tcp::{ConnectError, RecvError, SendError};
+use smoltcp::socket::{
+    tcp::{self, ConnectError, RecvError},
+    udp::{self, BindError},
+};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
     Connect(ConnectError),
-    Send(SendError),
+    TcpSend(tcp::SendError),
+    UdpSend(udp::SendError),
     Recv(RecvError),
+    Bind(BindError),
     Generic(String),
 }
 
@@ -23,14 +28,26 @@ impl From<ConnectError> for Error {
     }
 }
 
-impl From<SendError> for Error {
-    fn from(c: SendError) -> Self {
-        Error::Send(c)
+impl From<tcp::SendError> for Error {
+    fn from(c: tcp::SendError) -> Self {
+        Error::TcpSend(c)
+    }
+}
+
+impl From<udp::SendError> for Error {
+    fn from(c: udp::SendError) -> Self {
+        Error::UdpSend(c)
     }
 }
 
 impl From<RecvError> for Error {
     fn from(c: RecvError) -> Self {
         Error::Recv(c)
+    }
+}
+
+impl From<BindError> for Error {
+    fn from(c: BindError) -> Self {
+        Error::Bind(c)
     }
 }

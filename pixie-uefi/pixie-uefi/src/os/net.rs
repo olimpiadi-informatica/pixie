@@ -11,6 +11,8 @@ use smoltcp::{
     socket::{
         dhcpv4::{Event, Socket as Dhcpv4Socket},
         tcp::{Socket as TcpSocket, State},
+        udp,
+        udp::Socket as UdpSocket,
     },
     storage::RingBuffer,
     time::{Duration, Instant},
@@ -335,7 +337,7 @@ impl TcpStream {
             let socket = net.socket_set.get_mut::<TcpSocket>(handle);
             let sent = socket.send_slice(&data[pos..]);
             if sent.is_err() {
-                return Poll::Ready(Err(Error::Send(sent.unwrap_err())));
+                return Poll::Ready(Err(Error::TcpSend(sent.unwrap_err())));
             }
             pos += sent.unwrap();
             if pos < data.len() {
@@ -405,5 +407,99 @@ impl TcpStream {
                 .abort();
         }
         self.wait_until_closed().await;
+    }
+}
+
+pub struct UdpHandle {
+    handle: SocketHandle,
+    os: UefiOS,
+}
+
+impl UdpHandle {
+    pub async fn new(os: UefiOS, listen_port: Option<u16>) -> Result<UdpHandle> {
+        os.wait_for_ip().await;
+        const UDP_BUF_SIZE: usize = 1 << 22;
+        const UDP_PACKET_BUF_SIZE: usize = 1 << 10;
+        let rx_buffer = udp::PacketBuffer::new(
+            vec![udp::PacketMetadata::EMPTY; UDP_PACKET_BUF_SIZE],
+            vec![0; UDP_BUF_SIZE],
+        );
+        let tx_buffer = udp::PacketBuffer::new(
+            vec![udp::PacketMetadata::EMPTY; UDP_PACKET_BUF_SIZE],
+            vec![0; UDP_BUF_SIZE],
+        );
+
+        let mut udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
+        let sport = if let Some(p) = listen_port {
+            p
+        } else {
+            os.net().get_ephemeral_port()
+        };
+        udp_socket.bind(sport)?;
+
+        let handle = os.net().socket_set.add(udp_socket);
+
+        let ret = UdpHandle { handle, os };
+        Ok(ret)
+    }
+
+    pub async fn send(&self, ip: (u8, u8, u8, u8), port: u16, data: &[u8]) -> Result<()> {
+        let endpoint = IpEndpoint {
+            addr: IpAddress::Ipv4(Ipv4Address::new(ip.0, ip.1, ip.2, ip.3)),
+            port,
+        };
+
+        let handle = self.handle.clone();
+        let os = self.os.clone();
+
+        let mut pos = 0;
+        Ok(poll_fn(move |cx| {
+            let mut net = os.net();
+            let socket = net.socket_set.get_mut::<UdpSocket>(handle);
+            if !socket.can_send() {
+                socket.register_send_waker(cx.waker());
+                Poll::Pending
+            } else {
+                let status = socket.send_slice(&data[pos..], endpoint);
+                Poll::Ready(status)
+            }
+        })
+        .await?)
+    }
+
+    pub async fn recv<F, T>(&self, mut callback: F) -> T
+    where
+        F: FnMut(&[u8], (u8, u8, u8, u8), u16) -> T,
+    {
+        let handle = self.handle.clone();
+        let os = self.os.clone();
+
+        let mut buf = [0; PACKET_SIZE];
+
+        poll_fn(move |cx| {
+            let mut net = os.net();
+            let socket = net.socket_set.get_mut::<UdpSocket>(handle);
+            if !socket.can_recv() {
+                socket.register_recv_waker(cx.waker());
+                Poll::Pending
+            } else {
+                // Cannot fail if can_recv() returned true.
+                let recvd = socket.recv_slice(&mut buf).unwrap();
+                let ip = (recvd.1).addr.as_bytes();
+                let ip = (ip[0], ip[1], ip[2], ip[3]);
+                let port = (recvd.1).port;
+                Poll::Ready(callback(&buf[..recvd.0], ip, port))
+            }
+        })
+        .await
+    }
+
+    pub fn close(self) {
+        self.os
+            .net()
+            .socket_set
+            .get_mut::<UdpSocket>(self.handle)
+            .close();
+        self.os.net().socket_set.remove(self.handle);
     }
 }

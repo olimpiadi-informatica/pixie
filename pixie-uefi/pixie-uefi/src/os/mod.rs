@@ -19,7 +19,7 @@ use uefi::{
 
 use self::{
     executor::Executor,
-    net::{NetworkInterface, TcpStream},
+    net::{NetworkInterface, TcpStream, UdpHandle},
     rng::Rng,
     timer::Timer,
 };
@@ -171,6 +171,10 @@ impl UefiOS {
 
     pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
         TcpStream::new(*self, ip, port).await
+    }
+
+    pub async fn udp_bind(&self, port: Option<u16>) -> Result<UdpHandle> {
+        UdpHandle::new(*self, port).await
     }
 
     /// Spawn a new task.
