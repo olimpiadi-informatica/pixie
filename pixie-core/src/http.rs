@@ -39,46 +39,6 @@ pub struct BootConfig {
     pub modes: BTreeMap<String, String>,
 }
 
-#[get("/boot.ipxe")]
-async fn boot(req: HttpRequest, state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
-    let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
-        Err(anyhow!("IPv6 is not supported"))?
-    };
-    let peer_mac = find_mac(peer_ip)?;
-
-    let units = state
-        .units
-        .read()
-        .map_err(|_| anyhow!("units mutex is poisoned"))?;
-    let unit = units.iter().find(|unit| unit.mac == peer_mac);
-    let mode: &str = unit
-        .map(|unit| &unit.action)
-        .unwrap_or(&state.config.boot.unregistered);
-    let cmd = state
-        .config
-        .boot
-        .modes
-        .get(mode)
-        .ok_or_else(|| anyhow!("mode {} does not exists", mode))?;
-    let cmd = cmd
-        .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
-        .replace(
-            "<server_port>",
-            &state.config.http.listen_on.port().to_string(),
-        );
-    let cmd = match unit {
-        Some(unit) => cmd.replace(
-            "<image>",
-            match unit.kind {
-                StationKind::Worker => "worker",
-                StationKind::Contestant => "contestant",
-            },
-        ),
-        None => cmd,
-    };
-    Ok(cmd.customize())
-}
-
 #[get("/action/{mac}/{value}")]
 async fn action(
     path: Path<(String, String)>,
@@ -289,7 +249,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         listen_on,
     } = state.config.http;
 
-    let static_files = state.storage_dir.join("httpstatic");
     let images = state.storage_dir.join("images");
     let data: Data<_> = state.into();
 
@@ -301,10 +260,8 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(has_chunk)
             .service(upload_chunk)
             .service(upload_image)
-            .service(Files::new("/static", &static_files))
             .service(Files::new("/image", &images))
             .service(get_chunk)
-            .service(boot)
             .service(register)
             .service(register_hint)
             .service(action)

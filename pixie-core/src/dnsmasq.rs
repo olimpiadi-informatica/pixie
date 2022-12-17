@@ -92,8 +92,7 @@ impl DnsmasqHandle {
 {magic_line}
 dhcp-range=set:net{netid},10.0.0.0,static
 dhcp-hostsfile={storage_str}/hosts
-dhcp-boot=tag:pxe,tag:net{netid},ipxe.efi,,{ip}
-dhcp-boot=tag:ipxe,tag:net{netid},http://{ip}:{server_port}/boot.ipxe
+dhcp-boot=uefi_app.efi,,{ip}
 interface={name}
 except-interface=lo
 user=root
@@ -108,14 +107,6 @@ enable-tftp
 
 ## PXE prompt and timeout
 pxe-prompt="pixie",1
-
-## PXE kind recognition
-# BC_UEFI (00007)
-dhcp-vendorclass=set:pxe,PXEClient:Arch:00007
-# UEFI x86-64 (00009)
-dhcp-vendorclass=set:pxe,PXEClient:Arch:00009
-# iPXE
-dhcp-userclass=set:ipxe,iPXE
 "#
         )?;
 

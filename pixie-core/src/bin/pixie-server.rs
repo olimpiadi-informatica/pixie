@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
         "storage dir must be valid utf8"
     );
 
-    for file_path in [["tftpboot", "ipxe.efi"], ["httpstatic", "reboot.efi"]] {
+    for file_path in [["tftpboot", "uefi_app.efi"]] {
         let mut path = options.storage_dir.clone();
         for path_piece in file_path {
             path = path.join(path_piece);

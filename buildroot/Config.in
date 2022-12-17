@@ -1,1 +1,0 @@
-source "$BR2_EXTERNAL_PIXIE2_PATH/package/pixie-client/Config.in"
