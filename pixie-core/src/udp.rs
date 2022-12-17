@@ -148,7 +148,7 @@ async fn handle_requests(
                 .unwrap_or(&state.config.boot.unregistered);
 
             let server_ip = find_interface_ip(peer_ip)?;
-            let server_port = state.config.udp.listen_on.port();
+            let server_port = state.config.http.listen_on.port();
             let server_loc = SocketAddrV4::new(server_ip, server_port);
             let action = match mode {
                 "reboot" => Action::Reboot,
