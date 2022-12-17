@@ -1,7 +1,10 @@
-use std::{net::SocketAddrV4, path::PathBuf};
+#![no_std]
 
+extern crate alloc;
+
+use alloc::{string::String, vec::Vec};
 use blake3::OUT_LEN;
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 pub const CHUNK_SIZE: usize = 1 << 22;
 
@@ -38,7 +41,6 @@ pub struct Segment {
 /// A file is stored as a list of chunks and offsets.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
-    pub name: PathBuf,
     pub chunks: Vec<Segment>,
 }
 
@@ -61,19 +63,27 @@ pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Address {
+    pub ip: (u8, u8, u8, u8),
+    pub port: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     Reboot,
     Register {
-        server: SocketAddrV4,
+        server: Address,
     },
     Push {
-        image: String,
+        http_server: Address,
+        path: String,
     },
     Pull {
-        image: String,
-        listen_on: SocketAddrV4,
-        udp_server: SocketAddrV4,
+        http_server: Address,
+        path: String,
+        udp_recv_port: u16,
+        udp_server: Address,
     },
     Wait,
 }

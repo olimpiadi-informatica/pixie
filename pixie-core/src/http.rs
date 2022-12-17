@@ -22,9 +22,9 @@ use anyhow::{anyhow, Context, Result};
 use mktemp::Temp;
 use serde::Deserialize;
 
-use pixie_shared::{Station, StationKind};
+use pixie_shared::Station;
 
-use crate::{find_interface_ip, find_mac, State, Unit};
+use crate::{find_mac, State, Unit};
 
 #[derive(Clone, Debug, Deserialize, Copy)]
 pub struct Config {

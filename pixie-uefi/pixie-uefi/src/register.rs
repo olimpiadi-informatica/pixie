@@ -1,3 +1,12 @@
+use pixie_shared::Address;
+
+use crate::os::UefiOS;
+
+pub async fn register(os: UefiOS, server_address: Address) -> ! {
+    todo!();
+}
+
+/*
 use std::io::{self, BufRead, Write};
 
 use anyhow::{bail, ensure, Result};
@@ -84,3 +93,4 @@ pub fn main() -> Result<()> {
 
     Ok(())
 }
+*/

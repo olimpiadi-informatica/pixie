@@ -57,7 +57,7 @@ pub struct DnsmasqHandle {
 }
 
 impl DnsmasqHandle {
-    pub fn from_config(storage_dir: &Path, cfg: &Config, http_cfg: &http::Config) -> Result<Self> {
+    pub fn from_config(storage_dir: &Path, cfg: &Config, _http_cfg: &http::Config) -> Result<Self> {
         let storage_str = storage_dir.to_str().unwrap();
 
         ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");
@@ -65,7 +65,6 @@ impl DnsmasqHandle {
 
         let name = &net.interface;
         let netid = 0;
-        let server_port = http_cfg.listen_on.port();
 
         let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
         let hosts = File::create(storage_dir.join("hosts"))?;

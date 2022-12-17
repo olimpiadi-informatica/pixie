@@ -1,3 +1,19 @@
+use alloc::string::String;
+use pixie_shared::Address;
+
+use crate::os::UefiOS;
+
+pub async fn pull(
+    os: UefiOS,
+    server_address: Address,
+    server_path: String,
+    udp_recv_port: u16,
+    udp_server: Address,
+) -> ! {
+    todo!();
+}
+
+/*
 use std::{
     collections::HashMap,
     fs::{self, File as StdFile},
@@ -284,3 +300,4 @@ pub async fn main() -> Result<()> {
 
     Ok(())
 }
+*/

@@ -452,7 +452,6 @@ impl UdpHandle {
         let handle = self.handle.clone();
         let os = self.os.clone();
 
-        let mut pos = 0;
         Ok(poll_fn(move |cx| {
             let mut net = os.net();
             let socket = net.socket_set.get_mut::<UdpSocket>(handle);
@@ -460,7 +459,7 @@ impl UdpHandle {
                 socket.register_send_waker(cx.waker());
                 Poll::Pending
             } else {
-                let status = socket.send_slice(&data[pos..], endpoint);
+                let status = socket.send_slice(data, endpoint);
                 Poll::Ready(status)
             }
         })

@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     fmt::Write,
     fs,
-    net::{IpAddr, Ipv4Addr, SocketAddrV4},
+    net::{IpAddr, SocketAddrV4},
     ops::Bound,
     sync::Arc,
 };
@@ -16,7 +16,7 @@ use tokio::{
 use anyhow::{anyhow, ensure, Result};
 use serde::Deserialize;
 
-use pixie_shared::{Action, StationKind, BODY_LEN, PACKET_LEN};
+use pixie_shared::{Action, Address, StationKind, BODY_LEN, PACKET_LEN};
 
 use crate::{find_interface_ip, find_mac, State};
 
@@ -149,14 +149,22 @@ async fn handle_requests(
 
             let server_ip = find_interface_ip(peer_ip)?;
             let server_port = state.config.http.listen_on.port();
-            let server_loc = SocketAddrV4::new(server_ip, server_port);
+            let server_loc = Address {
+                ip: (
+                    server_ip.octets()[0],
+                    server_ip.octets()[1],
+                    server_ip.octets()[2],
+                    server_ip.octets()[3],
+                ),
+                port: server_port,
+            };
             let action = match mode {
                 "reboot" => Action::Reboot,
                 "register" => Action::Register { server: server_loc },
                 "push" => Action::Push {
-                    image: format!(
-                        "http://{}/image/{}",
-                        server_loc,
+                    http_server: server_loc,
+                    path: format!(
+                        "/image/{}",
                         match unit.unwrap().kind {
                             StationKind::Worker => "worker",
                             StationKind::Contestant => "contestant",
@@ -164,19 +172,19 @@ async fn handle_requests(
                     ),
                 },
                 "pull" => Action::Pull {
-                    image: format!(
-                        "http://{}/image/{}",
-                        server_loc,
+                    http_server: server_loc,
+                    path: format!(
+                        "/image/{}",
                         match unit.unwrap().kind {
                             StationKind::Worker => "worker",
                             StationKind::Contestant => "contestant",
                         }
                     ),
-                    listen_on: SocketAddrV4::new(
-                        Ipv4Addr::new(0, 0, 0, 0),
-                        state.config.udp.dest_addr.port(),
-                    ),
-                    udp_server: SocketAddrV4::new(server_ip, state.config.udp.listen_on.port()),
+                    udp_recv_port: state.config.udp.dest_addr.port(),
+                    udp_server: Address {
+                        ip: server_loc.ip,
+                        port: state.config.udp.listen_on.port(),
+                    },
                 },
                 "wait" => Action::Wait,
                 _ => unreachable!(),
