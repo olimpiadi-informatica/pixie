@@ -20,6 +20,7 @@ use uefi::{
 };
 
 use self::{
+    boot_options::BootOptions,
     error::Error,
     executor::Executor,
     net::{NetworkInterface, TcpStream, UdpHandle},
@@ -27,6 +28,7 @@ use self::{
     timer::Timer,
 };
 
+mod boot_options;
 pub mod error;
 mod executor;
 mod net;
@@ -215,6 +217,10 @@ impl UefiOS {
             .set_variable(name, vendor, attrs, data)
             .map_err(|e| Error::Generic(format!("Error setting variable: {:?}", e)))?;
         Ok(())
+    }
+
+    pub fn boot_options(&self) -> BootOptions {
+        BootOptions { os: *self }
     }
 
     pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
