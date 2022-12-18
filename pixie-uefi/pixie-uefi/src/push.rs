@@ -1,9 +1,9 @@
 use alloc::string::String;
 use pixie_shared::Address;
 
-use crate::os::UefiOS;
+use crate::os::{error::Result, UefiOS};
 
-pub async fn push(os: UefiOS, server_address: Address, server_path: String) -> ! {
+pub async fn push(os: UefiOS, server_address: Address, server_path: String) -> Result<!> {
     todo!();
 }
 

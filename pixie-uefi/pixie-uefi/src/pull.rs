@@ -1,7 +1,7 @@
 use alloc::string::String;
 use pixie_shared::Address;
 
-use crate::os::UefiOS;
+use crate::os::{error::Result, UefiOS};
 
 pub async fn pull(
     os: UefiOS,
@@ -9,7 +9,7 @@ pub async fn pull(
     server_path: String,
     udp_recv_port: u16,
     udp_server: Address,
-) -> ! {
+) -> Result<!> {
     todo!();
 }
 

@@ -2,6 +2,8 @@
 #![no_std]
 #![feature(negative_impls)]
 #![feature(abi_efiapi)]
+#![feature(never_type)]
+#![deny(unused_must_use)]
 
 use os::UefiOS;
 
@@ -29,12 +31,12 @@ async fn run(os: UefiOS) -> Result<()> {
     // Local port does not matter.
     let udp = os.udp_bind(None).await?;
 
-    udp.send((255, 255, 255, 255), 25640, b"GA").await?;
-
     loop {
-        let mut command = None;
+        udp.send((255, 255, 255, 255), 25640, b"GA").await?;
 
-        udp.recv(|data, ip, port| {
+        let mut command = None;
+        // TODO(veluca): add a timeout.
+        udp.recv(|data, _ip, _port| {
             command = Some(serde_json::from_slice::<Action>(data));
         })
         .await;
@@ -49,16 +51,17 @@ async fn run(os: UefiOS) -> Result<()> {
                     const WAIT_SECS: u64 = 5;
                     info!("Waiting {WAIT_SECS}s for another command...");
                     os.sleep_us(WAIT_SECS * 1_000_000).await;
+                    continue;
                 }
-                Action::Reboot => reboot_to_os(os).await,
-                Action::Register { server } => register(os, server).await,
-                Action::Push { http_server, path } => push(os, http_server, path).await,
+                Action::Reboot => reboot_to_os(os).await?,
+                Action::Register { server } => register(os, server).await?,
+                Action::Push { http_server, path } => push(os, http_server, path).await?,
                 Action::Pull {
                     http_server,
                     path,
                     udp_recv_port,
                     udp_server,
-                } => pull(os, http_server, path, udp_recv_port, udp_server).await,
+                } => pull(os, http_server, path, udp_recv_port, udp_server).await?,
             }
         }
     }

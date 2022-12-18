@@ -8,6 +8,7 @@ use core::{
     task::{Context, Poll},
 };
 
+use alloc::vec::Vec;
 use uefi::{
     prelude::{BootServices, RuntimeServices},
     table::{
@@ -31,6 +32,8 @@ mod rng;
 mod timer;
 
 use error::Result;
+
+pub use net::HttpMethod;
 
 struct UefiOSImpl {
     boot_services: &'static BootServices,
@@ -175,6 +178,16 @@ impl UefiOS {
 
     pub async fn udp_bind(&self, port: Option<u16>) -> Result<UdpHandle> {
         UdpHandle::new(*self, port).await
+    }
+
+    pub async fn http(
+        &self,
+        ip: (u8, u8, u8, u8),
+        port: u16,
+        method: HttpMethod<'_>,
+        path: &[u8],
+    ) -> Result<Vec<u8>> {
+        net::http(*self, ip, port, method, path).await
     }
 
     /// Spawn a new task.

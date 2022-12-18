@@ -13,6 +13,7 @@ pub enum Error {
     UdpSend(udp::SendError),
     Recv(RecvError),
     Bind(BindError),
+    Serde(serde_json::Error),
     Generic(String),
 }
 
@@ -49,5 +50,11 @@ impl From<RecvError> for Error {
 impl From<BindError> for Error {
     fn from(c: BindError) -> Self {
         Error::Bind(c)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(c: serde_json::Error) -> Self {
+        Error::Serde(c)
     }
 }
