@@ -204,7 +204,11 @@ impl NetworkInterface {
     }
 
     pub fn has_ip(&self) -> bool {
-        self.interface.ipv4_addr().is_some()
+        self.ip().is_some()
+    }
+
+    pub fn ip(&self) -> Option<Ipv4Address> {
+        self.interface.ipv4_addr()
     }
 
     pub(super) fn poll(&mut self, timer: &Timer) -> bool {

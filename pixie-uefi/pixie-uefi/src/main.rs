@@ -26,10 +26,16 @@ mod register;
 extern crate alloc;
 
 async fn run(os: UefiOS) -> Result<()> {
-    info!("Started");
+    info!("DHCP...");
+
+    os.wait_for_ip().await;
+
+    info!("Connected, IP is {:?}", os.net().ip().unwrap());
 
     // Local port does not matter.
     let udp = os.udp_bind(None).await?;
+
+    info!("Sending request for command");
 
     loop {
         udp.send((255, 255, 255, 255), 25640, b"GA").await?;

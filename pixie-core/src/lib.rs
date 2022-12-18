@@ -77,25 +77,36 @@ pub fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
 
     let s = ip.to_string();
 
-    let mut child = Zombie {
-        inner: Command::new("ip")
-            .arg("neigh")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?,
-    };
-    let stdout = child.inner.stdout.take().unwrap();
-    let lines = BufReader::new(stdout).lines();
+    // Repeat twice, sending a ping if looking at ip neigh the first time fails.
+    for _ in 0..2 {
+        let mut child = Zombie {
+            inner: Command::new("ip")
+                .arg("neigh")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()?,
+        };
+        let stdout = child.inner.stdout.take().unwrap();
+        let lines = BufReader::new(stdout).lines();
 
-    for line in lines {
-        let line = line?;
-        let mut parts = line.split(' ');
+        for line in lines {
+            let line = line?;
+            let mut parts = line.split(' ');
 
-        if parts.next() == Some(&s) {
-            let mac = parts.nth(3).unwrap();
-            return Ok(mac.parse().unwrap());
+            if parts.next() == Some(&s) {
+                let mac = parts.nth(3).unwrap();
+                if let Ok(mac) = mac.parse() {
+                    return Ok(mac);
+                }
+            }
         }
+
+        let _ = Command::new("ping")
+            .args(&[&s, "-c", "1", "-W", "0.1"])
+            .stdout(Stdio::null())
+            .spawn()?
+            .wait();
     }
 
     bail!("Mac address not found");
