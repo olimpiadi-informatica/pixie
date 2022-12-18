@@ -13,12 +13,14 @@ use uefi::{
     prelude::{BootServices, RuntimeServices},
     table::{
         boot::{EventType, Tpl},
+        runtime::{VariableAttributes, VariableVendor},
         Boot, SystemTable,
     },
-    Event, Status,
+    CStr16, Event, Status,
 };
 
 use self::{
+    error::Error,
     executor::Executor,
     net::{NetworkInterface, TcpStream, UdpHandle},
     rng::Rng,
@@ -170,6 +172,49 @@ impl UefiOS {
                 Poll::Pending
             }
         })
+    }
+
+    pub fn get_variable(
+        &self,
+        name: &str,
+        vendor: &VariableVendor,
+    ) -> Result<(Vec<u8>, VariableAttributes)> {
+        // name.len() should be enough, but...
+        let mut name_buf = vec![0u16; name.len() * 2 + 16];
+        let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
+        let size = self
+            .os()
+            .borrow_mut()
+            .runtime_services
+            .get_variable_size(name, vendor)
+            .map_err(|e| Error::Generic(format!("Error getting variable: {:?}", e)))?;
+
+        let mut var_buf = vec![0u8; size];
+        let (var, attrs) = self
+            .os()
+            .borrow_mut()
+            .runtime_services
+            .get_variable(name, vendor, &mut var_buf)
+            .map_err(|e| Error::Generic(format!("Error getting variable: {:?}", e)))?;
+        Ok((var.to_vec(), attrs))
+    }
+
+    pub fn set_variable(
+        &self,
+        name: &str,
+        vendor: &VariableVendor,
+        attrs: VariableAttributes,
+        data: &[u8],
+    ) -> Result<()> {
+        // name.len() should be enough, but...
+        let mut name_buf = vec![0u16; name.len() * 2 + 16];
+        let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
+        self.os()
+            .borrow_mut()
+            .runtime_services
+            .set_variable(name, vendor, attrs, data)
+            .map_err(|e| Error::Generic(format!("Error setting variable: {:?}", e)))?;
+        Ok(())
     }
 
     pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
