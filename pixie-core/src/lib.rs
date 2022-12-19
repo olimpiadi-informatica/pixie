@@ -17,7 +17,7 @@ use interfaces::Interface;
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 
-use pixie_shared::{Station, StationKind};
+use pixie_shared::Station;
 
 use dnsmasq::DnsmasqHandle;
 
@@ -49,11 +49,11 @@ impl FromStr for ActionKind {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Unit {
     pub mac: MacAddr6,
-    pub kind: StationKind,
     pub group: u8,
     pub row: u8,
     pub col: u8,
     pub action: ActionKind,
+    pub image: String,
 }
 
 impl Unit {
@@ -75,6 +75,7 @@ pub struct Config {
     pub udp: udp::Config,
     pub boot: BootConfig,
     pub groups: BTreeMap<String, u8>,
+    pub images: Vec<String>,
 }
 
 pub struct State {
@@ -82,7 +83,7 @@ pub struct State {
     pub config: Config,
     pub units: RwLock<Vec<Unit>>,
     pub dnsmasq_handle: Mutex<DnsmasqHandle>,
-    pub hint: Mutex<Station>,
+    pub last: Mutex<Station>,
 }
 
 impl State {
@@ -135,7 +136,7 @@ pub fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
         }
 
         let _ = Command::new("ping")
-            .args(&[&s, "-c", "1", "-W", "0.1"])
+            .args([&s, "-c", "1", "-W", "0.1"])
             .stdout(Stdio::null())
             .spawn()?
             .wait();

@@ -16,14 +16,15 @@ use tokio::{
 use anyhow::{anyhow, bail, ensure, Result};
 use serde::Deserialize;
 
-use pixie_shared::{Action, Address, BODY_LEN, PACKET_LEN};
+use pixie_shared::{Action, Address, Station, BODY_LEN, PACKET_LEN};
 
 use crate::{find_interface_ip, find_mac, ActionKind, State};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
     listen_on: SocketAddrV4,
-    dest_addr: SocketAddrV4,
+    chunk_broadcast: SocketAddrV4,
+    hint_broadcast: SocketAddrV4,
     bits_per_second: u32,
 }
 
@@ -35,8 +36,8 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-async fn broadcast(
-    state: Arc<State>,
+async fn broadcast_chunks(
+    state: &State,
     socket: &UdpSocket,
     mut rx: Receiver<[u8; 32]>,
 ) -> Result<()> {
@@ -97,7 +98,7 @@ async fn broadcast(
 
                 time::sleep_until(wait_for).await;
                 let sent_len = socket
-                    .send_to(&write_buf[..34 + len], state.config.udp.dest_addr)
+                    .send_to(&write_buf[..34 + len], state.config.udp.chunk_broadcast)
                     .await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
                 wait_for += 8 * (sent_len as u32) * Duration::from_secs(1)
@@ -112,7 +113,7 @@ async fn broadcast(
 
                 time::sleep_until(wait_for).await;
                 let sent_len = socket
-                    .send_to(&write_buf[..34 + len], state.config.udp.dest_addr)
+                    .send_to(&write_buf[..34 + len], state.config.udp.chunk_broadcast)
                     .await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
                 wait_for += 8 * (sent_len as u32) * Duration::from_secs(1)
@@ -124,11 +125,63 @@ async fn broadcast(
     Ok(())
 }
 
-async fn handle_requests(
-    state: Arc<State>,
-    socket: &UdpSocket,
-    tx: Sender<[u8; 32]>,
-) -> Result<()> {
+fn compute_hint(state: &State) -> Result<Station> {
+    let last = &*state
+        .last
+        .lock()
+        .map_err(|_| anyhow!("hint lock poisoned"))?;
+
+    let positions = state
+        .units
+        .read()
+        .map_err(|_| anyhow!("units lock poisoned"))?
+        .iter()
+        .filter(|unit| unit.group == last.group)
+        .map(|unit| (unit.row, unit.col))
+        .collect::<Vec<_>>();
+
+    let (mrow, mcol) = positions
+        .iter()
+        .fold((0, 0), |(r1, c1), &(r2, c2)| (r1.max(r2), c1.max(c2)));
+
+    let mut hole = None;
+    'find_hole: for row in 1..=mrow {
+        for col in 1..=mcol {
+            if positions.contains(&(row, col)) {
+                continue;
+            }
+
+            hole = Some((row, col));
+            break 'find_hole;
+        }
+    }
+
+    let (row, col) = hole.unwrap_or(match mrow {
+        0 => (1, 1),
+        1 => (1, mcol + 1),
+        _ => (mrow + 1, 1),
+    });
+
+    Ok(Station {
+        group: last.group,
+        row,
+        col,
+        image: last.image.clone(),
+    })
+}
+
+async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
+    loop {
+        let hint = compute_hint(state)?;
+        let data = serde_json::to_vec(&hint)?;
+        socket
+            .send_to(&data, state.config.udp.hint_broadcast)
+            .await?;
+        time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
     let mut buf = [0; PACKET_LEN];
     loop {
         let (len, addr) = socket.recv_from(&mut buf).await?;
@@ -143,7 +196,7 @@ async fn handle_requests(
                 .read()
                 .map_err(|_| anyhow!("units mutex is poisoned"))?;
             let unit = units.iter().find(|unit| unit.mac == peer_mac);
-            let mode = unit
+            let action_kind = unit
                 .map(|unit| unit.action)
                 .unwrap_or(state.config.boot.unregistered);
 
@@ -158,17 +211,17 @@ async fn handle_requests(
                 ),
                 port: server_port,
             };
-            let action = match mode {
+            let action = match action_kind {
                 ActionKind::Reboot => Action::Reboot,
                 ActionKind::Register => Action::Register { server: server_loc },
                 ActionKind::Push => Action::Push {
                     http_server: server_loc,
-                    path: format!("/image/{}", unit.unwrap().kind.as_str()),
+                    image: unit.unwrap().image.clone(),
                 },
                 ActionKind::Pull => Action::Pull {
                     http_server: server_loc,
-                    path: format!("/image/{}", unit.unwrap().kind.as_str()),
-                    udp_recv_port: state.config.udp.dest_addr.port(),
+                    image: unit.unwrap().image.clone(),
+                    udp_recv_port: state.config.udp.chunk_broadcast.port(),
                     udp_server: Address {
                         ip: server_loc.ip,
                         port: state.config.udp.listen_on.port(),
@@ -193,8 +246,9 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     socket.set_broadcast(true)?;
 
     tokio::try_join!(
-        broadcast(state.clone(), &socket, rx),
-        handle_requests(state, &socket, tx),
+        broadcast_chunks(&state, &socket, rx),
+        broadcast_hint(&state, &socket),
+        handle_requests(&state, &socket, tx),
     )?;
 
     Ok(())

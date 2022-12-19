@@ -31,28 +31,12 @@ pub struct File {
     pub chunks: Vec<Segment>,
 }
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
-pub enum StationKind {
-    #[default]
-    Worker,
-    Contestant,
-}
-
-impl StationKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            StationKind::Worker => "worker",
-            StationKind::Contestant => "contestant",
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Station {
-    pub kind: StationKind,
     pub group: u8,
     pub row: u8,
     pub col: u8,
+    pub image: String,
 }
 
 pub const PACKET_LEN: usize = 1436;
@@ -73,11 +57,11 @@ pub enum Action {
     },
     Push {
         http_server: Address,
-        path: String,
+        image: String,
     },
     Pull {
         http_server: Address,
-        path: String,
+        image: String,
         udp_recv_port: u16,
         udp_server: Address,
     },

@@ -24,4 +24,3 @@ actix-rt = "2.7.0"
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"
-version = "0.1.0"

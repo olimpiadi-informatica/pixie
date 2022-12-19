@@ -7,7 +7,8 @@ http:
   max_payload: 10000000
 udp:
   listen_on: 0.0.0.0:25640
-  dest_addr: 192.168.1.255:4041
+  chunk_broadcast: 192.168.1.255:4041
+  hint_broadcast: 192.168.1.255:4042
   bits_per_second: 52428800
 groups:
   asdf: 0
@@ -15,3 +16,6 @@ groups:
 boot:
   unregistered: register
   default: wait
+images:
+  - contestant
+  - worker

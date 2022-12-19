@@ -14,7 +14,7 @@ use actix_web::{
     http::StatusCode,
     middleware::Logger,
     post,
-    web::{Bytes, Data, Json, Path, PayloadConfig},
+    web::{Bytes, Data, Path, PayloadConfig},
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, Context, Result};
@@ -82,7 +82,7 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    fs::write(&state.registered_file(), serde_json::to_string(units)?)?;
+    fs::write(state.registered_file(), serde_json::to_string(units)?)?;
     Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
@@ -95,16 +95,17 @@ async fn register(
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
+            if !state.config.images.contains(&data.image) {
+                return Ok(format!("Unknown image: {}", data.image)
+                    .customize()
+                    .with_status(StatusCode::BAD_REQUEST));
+            }
+
             let mut guard = state
-                .hint
+                .last
                 .lock()
                 .map_err(|_| anyhow!("hint mutex is poisoned"))?;
-            *guard = Station {
-                kind: data.kind,
-                row: data.row,
-                col: data.col + 1,
-                group: data.group,
-            };
+            *guard = data.clone();
 
             let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
                 Err(anyhow!("IPv6 is not supported"))?
@@ -116,27 +117,28 @@ async fn register(
                 .write()
                 .map_err(|_| anyhow!("units mutex is poisoned"))?;
 
-            let unit = units
-                .iter_mut()
-                .position(|x| x.mac == peer_mac)
-                .map(|unit| {
-                    units[unit].kind = data.kind;
+            let unit = units.iter_mut().position(|x| x.mac == peer_mac);
+            let unit = match unit {
+                Some(unit) => {
                     units[unit].group = data.group;
                     units[unit].row = data.row;
                     units[unit].col = data.col;
+                    units[unit].image = data.image;
                     unit
-                })
-                .unwrap_or_else(|| {
-                    units.push(Unit {
+                }
+                None => {
+                    let unit = Unit {
                         mac: peer_mac,
-                        kind: data.kind,
                         group: data.group,
                         row: data.row,
                         col: data.col,
+                        image: data.image,
                         action: state.config.boot.default,
-                    });
+                    };
+                    units.push(unit);
                     units.len() - 1
-                });
+                }
+            };
 
             let ip = units[unit].ip();
 
@@ -149,23 +151,15 @@ async fn register(
                 .context("writing hosts file")?;
             dnsmasq_lock.send_sighup().context("sending sighup")?;
 
-            fs::write(&state.registered_file(), serde_json::to_string(&units)?)?;
-            return Ok("".customize());
+            fs::write(state.registered_file(), serde_json::to_string(&units)?)?;
+            return Ok("".to_owned().customize());
         }
     }
 
     Ok("Invalid payload"
+        .to_owned()
         .customize()
         .with_status(StatusCode::BAD_REQUEST))
-}
-
-#[get("/register_hint")]
-async fn register_hint(state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
-    let data = *state
-        .hint
-        .lock()
-        .map_err(|_| anyhow!("Mutex is poisoned"))?;
-    Ok(Json(data))
 }
 
 #[get("/has_chunk/{hash}")]
@@ -253,7 +247,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(Files::new("/image", &images))
             .service(get_chunk)
             .service(register)
-            .service(register_hint)
             .service(action)
     })
     .bind(listen_on)?

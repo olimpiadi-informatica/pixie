@@ -67,18 +67,21 @@ async fn main() -> Result<()> {
     }
     dnsmasq_handle.send_sighup()?;
 
-    let hint = Mutex::new(Station::default());
+    let last = Mutex::new(Station {
+        image: config.images[0].clone(),
+        ..Default::default()
+    });
 
     let state = Arc::new(State {
         storage_dir: options.storage_dir,
         config,
         units: RwLock::new(units),
         dnsmasq_handle: Mutex::new(dnsmasq_handle),
-        hint,
+        last,
     });
 
     tokio::select!(
-        x = http::main( state.clone(),) => x?,
+        x = http::main(state.clone()) => x?,
         x = udp::main(state) => x?,
     );
 

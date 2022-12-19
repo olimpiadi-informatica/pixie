@@ -7,7 +7,7 @@ use crate::os::{error::Result, UefiOS};
 pub async fn pull(
     _os: UefiOS,
     _server_address: Address,
-    _server_path: String,
+    _image: String,
     _udp_recv_port: u16,
     _udp_server: Address,
 ) -> Result<!> {
