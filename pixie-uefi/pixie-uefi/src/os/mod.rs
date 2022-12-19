@@ -8,11 +8,23 @@ use core::{
     task::{Context, Poll},
 };
 
-use alloc::vec::Vec;
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+    vec::Vec,
+};
 use uefi::{
     prelude::{BootServices, RuntimeServices},
+    proto::{
+        device_path::{
+            build::DevicePathBuilder,
+            text::{AllowShortcuts, DevicePathToText, DisplayOnly},
+            DevicePath,
+        },
+        Protocol,
+    },
     table::{
-        boot::{EventType, Tpl},
+        boot::{EventType, ScopedProtocol, Tpl},
         runtime::{VariableAttributes, VariableVendor},
         Boot, SystemTable,
     },
@@ -44,7 +56,7 @@ struct UefiOSImpl {
     runtime_services: &'static RuntimeServices,
     timer: Timer,
     rng: Rng,
-    net: NetworkInterface,
+    net: Option<NetworkInterface>,
 }
 
 static mut OS: Option<RefCell<UefiOSImpl>> = None;
@@ -95,10 +107,10 @@ impl UefiOS {
         let runtime_services = unsafe { transmute(system_table.runtime_services()) };
 
         let timer = Timer::new(boot_services);
-        let mut rng = Rng::new();
-        let net = NetworkInterface::new(boot_services, &mut rng);
+        let rng = Rng::new();
 
         OS_CONSTRUCTED.store(true, core::sync::atomic::Ordering::Relaxed);
+
         // SAFETY: we guarantee this is the only place we could be modifying OS from, and that
         // nothing can read it until we do so.
         unsafe {
@@ -107,8 +119,14 @@ impl UefiOS {
                 runtime_services,
                 timer,
                 rng,
-                net,
+                net: None,
             }))
+        }
+
+        let net = NetworkInterface::new(UefiOS {});
+
+        unsafe {
+            OS.as_mut().unwrap().borrow_mut().net = Some(net);
         }
 
         Executor::init();
@@ -120,7 +138,7 @@ impl UefiOS {
         os.spawn(poll_fn(|cx| {
             let os = UefiOS {}.os().borrow_mut();
             let (mut net, timer) = RefMut::map_split(os, |os| (&mut os.net, &mut os.timer));
-            net.poll(&timer);
+            net.as_mut().unwrap().poll(&timer);
             // TODO(veluca): figure out whether we can suspend the task.
             cx.waker().wake_by_ref();
             Poll::Pending
@@ -146,7 +164,7 @@ impl UefiOS {
     }
 
     pub fn net(&self) -> RefMut<'static, NetworkInterface> {
-        RefMut::map(self.os().borrow_mut(), |f| &mut f.net)
+        RefMut::map(self.os().borrow_mut(), |f| f.net.as_mut().unwrap())
     }
 
     pub fn wait_for_ip(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
@@ -221,6 +239,56 @@ impl UefiOS {
 
     pub fn boot_options(&self) -> BootOptions {
         BootOptions { os: *self }
+    }
+
+    pub fn device_path_to_string(&self, device: &DevicePath) -> String {
+        let os = self.os().borrow();
+        let handle = os
+            .boot_services
+            .get_handle_for_protocol::<DevicePathToText>()
+            .unwrap();
+        let device_path_to_text = os
+            .boot_services
+            .open_protocol_exclusive::<DevicePathToText>(handle)
+            .unwrap();
+        device_path_to_text
+            .convert_device_path_to_text(
+                os.boot_services,
+                device,
+                DisplayOnly(true),
+                AllowShortcuts(true),
+            )
+            .unwrap()
+            .to_string()
+    }
+
+    fn open_protocol_on_device<P: Protocol>(
+        &self,
+        device: &DevicePath,
+    ) -> &'static ScopedProtocol<'static, P> {
+        let os = self.os().borrow();
+        // Find the topmost device that implements this protocol.
+        let handle = {
+            let mut hdl = None;
+            for i in 0..device.node_iter().count() {
+                let mut buf = vec![];
+                let mut dev = DevicePathBuilder::with_vec(&mut buf);
+                for node in device.node_iter().take(i + 1) {
+                    dev = dev.push(&node).unwrap();
+                }
+                let mut dev = dev.finalize().unwrap();
+                if let Ok(h) = os.boot_services.locate_device_path::<P>(&mut dev) {
+                    hdl = Some(h);
+                    break;
+                }
+            }
+            hdl.unwrap()
+        };
+        Box::leak(Box::new(
+            os.boot_services
+                .open_protocol_exclusive::<P>(handle)
+                .unwrap(),
+        ))
     }
 
     pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {

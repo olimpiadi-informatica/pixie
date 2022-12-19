@@ -3,7 +3,7 @@ use pixie_shared::Address;
 
 use crate::os::{error::Result, UefiOS};
 
-pub async fn push(os: UefiOS, server_address: Address, server_path: String) -> Result<!> {
+pub async fn push(_os: UefiOS, _server_address: Address, _server_path: String) -> Result<!> {
     todo!();
 }
 

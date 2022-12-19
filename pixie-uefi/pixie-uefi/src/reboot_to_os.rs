@@ -1,5 +1,5 @@
-use log::info;
-use uefi::table::runtime::VariableVendor;
+
+
 
 use crate::os::{error::Result, UefiOS};
 

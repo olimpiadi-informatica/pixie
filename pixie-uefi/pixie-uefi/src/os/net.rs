@@ -3,11 +3,10 @@ use core::{future::poll_fn, task::Poll};
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
-    fmt::format,
     string::{String, ToString},
     vec::Vec,
 };
-use futures::future::{join, select, try_join};
+use futures::future::{select, try_join};
 use log::info;
 use managed::ManagedSlice;
 
@@ -26,13 +25,12 @@ use smoltcp::{
 };
 
 use uefi::{
-    prelude::BootServices,
     proto::network::snp::{ReceiveFlags, SimpleNetwork},
     table::boot::ScopedProtocol,
     Status,
 };
 
-use super::{rng::Rng, timer::Timer, UefiOS};
+use super::{timer::Timer, UefiOS};
 
 use super::error::{Error, Result};
 
@@ -161,26 +159,28 @@ pub struct NetworkInterface {
 }
 
 impl NetworkInterface {
-    pub fn new(boot_services: &'static BootServices, rng: &mut Rng) -> NetworkInterface {
-        let snp_handles = boot_services.find_handles::<SimpleNetwork>().unwrap();
-        let snp = Box::leak(Box::new(
-            boot_services
-                .open_protocol_exclusive::<SimpleNetwork>(snp_handles[0])
-                .unwrap(),
-        ));
-        let mut device = SNPDevice::new(snp);
+    pub fn new(os: UefiOS) -> NetworkInterface {
+        let bo = os.boot_options();
+        let curopt = bo.get(bo.current());
+        let (descr, device) = bo.boot_entry_info(&curopt[..]);
+        info!(
+            "Configuring network on interface used for booting ({} -- {})",
+            descr,
+            os.device_path_to_string(device)
+        );
+        let mut device = SNPDevice::new(os.open_protocol_on_device::<SimpleNetwork>(device));
 
         let routes = Routes::new(BTreeMap::new());
         let neighbor_cache = NeighborCache::new(BTreeMap::new());
         let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
-            &snp.mode().current_address.0[..6],
+            &device.snp.mode().current_address.0[..6],
         ));
 
         let interface = InterfaceBuilder::new()
             .hardware_addr(hw_addr)
             .routes(routes)
             .ip_addrs(vec![])
-            .random_seed(rng.rand_u64())
+            .random_seed(os.rng().rand_u64())
             .neighbor_cache(neighbor_cache)
             .finalize(&mut device);
 
@@ -193,7 +193,7 @@ impl NetworkInterface {
             dhcp_socket_handle,
             device,
             socket_set,
-            ephemeral_port_counter: rng.rand_u64(),
+            ephemeral_port_counter: os.rng().rand_u64(),
         }
     }
 

@@ -4,11 +4,11 @@ use pixie_shared::Address;
 use crate::os::{error::Result, UefiOS};
 
 pub async fn pull(
-    os: UefiOS,
-    server_address: Address,
-    server_path: String,
-    udp_recv_port: u16,
-    udp_server: Address,
+    _os: UefiOS,
+    _server_address: Address,
+    _server_path: String,
+    _udp_recv_port: u16,
+    _udp_server: Address,
 ) -> Result<!> {
     todo!();
 }
