@@ -8,10 +8,11 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     process::{Child, Command, Stdio},
+    str::FromStr,
     sync::{Mutex, RwLock},
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Error, Result};
 use interfaces::Interface;
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,31 @@ use pixie_shared::{Station, StationKind};
 
 use dnsmasq::DnsmasqHandle;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ActionKind {
+    Reboot,
+    Register,
+    Push,
+    Pull,
+    Wait,
+}
+
+impl FromStr for ActionKind {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "reboot" => Ok(ActionKind::Reboot),
+            "register" => Ok(ActionKind::Register),
+            "push" => Ok(ActionKind::Push),
+            "pull" => Ok(ActionKind::Pull),
+            "wait" => Ok(ActionKind::Wait),
+            _ => bail!("unknown action kind: {}", s),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Unit {
     pub mac: MacAddr6,
@@ -27,7 +53,7 @@ pub struct Unit {
     pub group: u8,
     pub row: u8,
     pub col: u8,
-    pub action: String,
+    pub action: ActionKind,
 }
 
 impl Unit {
@@ -36,12 +62,18 @@ impl Unit {
     }
 }
 
+#[derive(Debug, Deserialize, Clone, Copy)]
+pub struct BootConfig {
+    pub unregistered: ActionKind,
+    pub default: ActionKind,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub dnsmasq: dnsmasq::Config,
     pub http: http::Config,
     pub udp: udp::Config,
-    pub boot: http::BootConfig,
+    pub boot: BootConfig,
     pub groups: BTreeMap<String, u8>,
 }
 

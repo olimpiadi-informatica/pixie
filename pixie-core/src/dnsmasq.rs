@@ -1,9 +1,7 @@
 use std::{
-    collections::HashMap,
     fs::File,
     io::{Error, Seek, SeekFrom, Write},
     net::Ipv4Addr,
-    ops::Range,
     path::Path,
     process::{Child, Command},
     thread,
@@ -11,30 +9,11 @@ use std::{
 };
 
 use anyhow::{bail, ensure, Result};
-use interfaces::HardwareAddr;
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use serde_derive::Deserialize;
 
 use crate::http;
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct ClientInfo {
-    pub ip: Ipv4Addr,
-    pub hostname: String,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub struct FixedNet {
-    /// IP address to use for this network.
-    pub ip: Ipv4Net,
-    /// Automatic assignment of IP addresses to unknown clients.
-    pub dhcp_range: Range<Ipv4Addr>,
-    /// Known clients in this subnet.
-    pub clients: HashMap<HardwareAddr, ClientInfo>,
-    /// Hostname to expose over DNS for the IP of the server in this net.
-    pub hostname: String,
-}
 
 #[derive(Debug, Eq, PartialEq, Deserialize)]
 pub struct Net {

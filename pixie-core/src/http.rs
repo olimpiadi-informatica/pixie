@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     error::Error,
     fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
@@ -32,13 +31,6 @@ pub struct Config {
     pub listen_on: SocketAddrV4,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct BootConfig {
-    pub unregistered: String,
-    pub default: String,
-    pub modes: BTreeMap<String, String>,
-}
-
 #[get("/action/{mac}/{value}")]
 async fn action(
     path: Path<(String, String)>,
@@ -49,38 +41,37 @@ async fn action(
         .write()
         .map_err(|_| anyhow!("units mutex is poisoned"))?;
 
-    let value = &path.1;
-    if state.config.boot.modes.get(value).is_none() {
-        return Ok(format!("Unknown action {}", value)
+    let Ok(action) = path.1.parse() else {
+        return Ok(format!("Unknown action: {}", path.1)
             .customize()
             .with_status(StatusCode::BAD_REQUEST));
-    }
+    };
 
     let mut updated = 0usize;
 
     if let Ok(mac) = path.0.parse() {
         for unit in units.iter_mut() {
             if unit.mac == mac {
-                unit.action = value.clone();
+                unit.action = action;
                 updated += 1;
             }
         }
     } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
         for unit in units.iter_mut() {
             if unit.ip() == ip {
-                unit.action = value.clone();
+                unit.action = action;
                 updated += 1;
             }
         }
     } else if path.0 == "all" {
         for unit in units.iter_mut() {
-            unit.action = value.clone();
+            unit.action = action;
             updated += 1;
         }
     } else if let Some(&group) = state.config.groups.get(&path.0) {
         for unit in units.iter_mut() {
             if unit.group == group {
-                unit.action = value.clone();
+                unit.action = action;
                 updated += 1;
             }
         }

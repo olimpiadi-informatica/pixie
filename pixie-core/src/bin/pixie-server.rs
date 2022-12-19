@@ -4,7 +4,7 @@ use std::{
     sync::{Mutex, RwLock},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 
 use pixie_shared::Station;
@@ -64,9 +64,6 @@ async fn main() -> Result<()> {
 
     for (i, unit) in units.iter().enumerate() {
         dnsmasq_handle.write_host(i, unit.mac, unit.ip())?;
-        if config.boot.modes.get(&unit.action).is_none() {
-            bail!("Unknown mode {}", unit.action);
-        }
     }
     dnsmasq_handle.send_sighup()?;
 
@@ -82,7 +79,7 @@ async fn main() -> Result<()> {
 
     tokio::select!(
         x = http::main( state.clone(),) => x?,
-        x = udp::main(state.clone()) => x?,
+        x = udp::main(state) => x?,
     );
 
     Ok(())

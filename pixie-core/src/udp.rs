@@ -16,9 +16,9 @@ use tokio::{
 use anyhow::{anyhow, ensure, Result};
 use serde::Deserialize;
 
-use pixie_shared::{Action, Address, StationKind, BODY_LEN, PACKET_LEN};
+use pixie_shared::{Action, Address, BODY_LEN, PACKET_LEN};
 
-use crate::{find_interface_ip, find_mac, State};
+use crate::{find_interface_ip, find_mac, ActionKind, State};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -143,9 +143,9 @@ async fn handle_requests(
                 .read()
                 .map_err(|_| anyhow!("units mutex is poisoned"))?;
             let unit = units.iter().find(|unit| unit.mac == peer_mac);
-            let mode: &str = unit
-                .map(|unit| &unit.action)
-                .unwrap_or(&state.config.boot.unregistered);
+            let mode = unit
+                .map(|unit| unit.action)
+                .unwrap_or(state.config.boot.unregistered);
 
             let server_ip = find_interface_ip(peer_ip)?;
             let server_port = state.config.http.listen_on.port();
@@ -159,35 +159,22 @@ async fn handle_requests(
                 port: server_port,
             };
             let action = match mode {
-                "reboot" => Action::Reboot,
-                "register" => Action::Register { server: server_loc },
-                "push" => Action::Push {
+                ActionKind::Reboot => Action::Reboot,
+                ActionKind::Register => Action::Register { server: server_loc },
+                ActionKind::Push => Action::Push {
                     http_server: server_loc,
-                    path: format!(
-                        "/image/{}",
-                        match unit.unwrap().kind {
-                            StationKind::Worker => "worker",
-                            StationKind::Contestant => "contestant",
-                        }
-                    ),
+                    path: format!("/image/{}", unit.unwrap().kind.as_str()),
                 },
-                "pull" => Action::Pull {
+                ActionKind::Pull => Action::Pull {
                     http_server: server_loc,
-                    path: format!(
-                        "/image/{}",
-                        match unit.unwrap().kind {
-                            StationKind::Worker => "worker",
-                            StationKind::Contestant => "contestant",
-                        }
-                    ),
+                    path: format!("/image/{}", unit.unwrap().kind.as_str()),
                     udp_recv_port: state.config.udp.dest_addr.port(),
                     udp_server: Address {
                         ip: server_loc.ip,
                         port: state.config.udp.listen_on.port(),
                     },
                 },
-                "wait" => Action::Wait,
-                _ => unreachable!(),
+                ActionKind::Wait => Action::Wait,
             };
 
             let msg = serde_json::to_vec(&action)?;

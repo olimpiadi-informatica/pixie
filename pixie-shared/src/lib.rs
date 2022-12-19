@@ -8,19 +8,6 @@ use serde::{Deserialize, Serialize};
 
 pub const CHUNK_SIZE: usize = 1 << 22;
 
-#[derive(Serialize, Deserialize)]
-pub struct Group {
-    pub name: String,
-    pub shape: Option<(u8, u8)>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct RegistrationInfo {
-    pub groups: Vec<Group>,
-    pub candidate_group: String,
-    pub candidate_position: Vec<u8>,
-}
-
 /// The hash of a chunk of a file.
 ///
 /// This is stored as an array of bytes because [`blake3::Hash`] is not serializable.
@@ -49,6 +36,15 @@ pub enum StationKind {
     #[default]
     Worker,
     Contestant,
+}
+
+impl StationKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StationKind::Worker => "worker",
+            StationKind::Contestant => "contestant",
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
