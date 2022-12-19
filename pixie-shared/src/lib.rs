@@ -53,6 +53,7 @@ pub struct Address {
 pub enum Action {
     Reboot,
     Register {
+        hint_port: u16,
         server: Address,
     },
     Push {

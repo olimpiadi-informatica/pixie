@@ -213,7 +213,10 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
             };
             let action = match action_kind {
                 ActionKind::Reboot => Action::Reboot,
-                ActionKind::Register => Action::Register { server: server_loc },
+                ActionKind::Register => Action::Register {
+                    server: server_loc,
+                    hint_port: state.config.udp.hint_broadcast.port(),
+                },
                 ActionKind::Push => Action::Push {
                     http_server: server_loc,
                     image: unit.unwrap().image.clone(),

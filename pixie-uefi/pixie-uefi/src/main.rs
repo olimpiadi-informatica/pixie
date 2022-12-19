@@ -60,7 +60,7 @@ async fn run(os: UefiOS) -> Result<()> {
                     continue;
                 }
                 Action::Reboot => reboot_to_os(os).await?,
-                Action::Register { server } => register(os, server).await?,
+                Action::Register { server, hint_port } => register(os, hint_port, server).await?,
                 Action::Push { http_server, image } => push(os, http_server, image).await?,
                 Action::Pull {
                     http_server,
