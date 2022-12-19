@@ -168,7 +168,9 @@ impl NetworkInterface {
             descr,
             os.device_path_to_string(device)
         );
-        let mut device = SNPDevice::new(os.open_protocol_on_device::<SimpleNetwork>(device));
+        let mut device = SNPDevice::new(Box::leak(Box::new(
+            os.open_protocol_on_device::<SimpleNetwork>(device).unwrap(),
+        )));
 
         let routes = Routes::new(BTreeMap::new());
         let neighbor_cache = NeighborCache::new(BTreeMap::new());

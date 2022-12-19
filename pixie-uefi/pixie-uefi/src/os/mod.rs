@@ -9,7 +9,6 @@ use core::{
 };
 
 use alloc::{
-    boxed::Box,
     string::{String, ToString},
     vec::Vec,
 };
@@ -28,11 +27,12 @@ use uefi::{
         runtime::{VariableAttributes, VariableVendor},
         Boot, SystemTable,
     },
-    CStr16, Event, Status,
+    CStr16, Event, Handle, Status,
 };
 
 use self::{
     boot_options::BootOptions,
+    disk::Disk,
     error::Error,
     executor::Executor,
     net::{NetworkInterface, TcpStream, UdpHandle},
@@ -41,6 +41,7 @@ use self::{
 };
 
 mod boot_options;
+mod disk;
 pub mod error;
 mod executor;
 mod net;
@@ -262,33 +263,45 @@ impl UefiOS {
             .to_string()
     }
 
+    /// Find the topmost device that implements this protocol.
+    fn handle_on_device<P: Protocol>(&self, device: &DevicePath) -> Handle {
+        let os = self.os().borrow();
+        for i in 0..device.node_iter().count() {
+            let mut buf = vec![];
+            let mut dev = DevicePathBuilder::with_vec(&mut buf);
+            for node in device.node_iter().take(i + 1) {
+                dev = dev.push(&node).unwrap();
+            }
+            let mut dev = dev.finalize().unwrap();
+            if let Ok(h) = os.boot_services.locate_device_path::<P>(&mut dev) {
+                return h;
+            }
+        }
+        // TODO(veluca): bubble up errors.
+        panic!("handle not found");
+    }
+
+    fn all_handles<P: Protocol>(&self) -> Result<Vec<Handle>> {
+        Ok(self.os().borrow().boot_services.find_handles::<P>()?)
+    }
+
+    fn open_handle<P: Protocol>(&self, handle: Handle) -> Result<ScopedProtocol<'static, P>> {
+        Ok(self
+            .os()
+            .borrow()
+            .boot_services
+            .open_protocol_exclusive::<P>(handle)?)
+    }
+
     fn open_protocol_on_device<P: Protocol>(
         &self,
         device: &DevicePath,
-    ) -> &'static ScopedProtocol<'static, P> {
-        let os = self.os().borrow();
-        // Find the topmost device that implements this protocol.
-        let handle = {
-            let mut hdl = None;
-            for i in 0..device.node_iter().count() {
-                let mut buf = vec![];
-                let mut dev = DevicePathBuilder::with_vec(&mut buf);
-                for node in device.node_iter().take(i + 1) {
-                    dev = dev.push(&node).unwrap();
-                }
-                let mut dev = dev.finalize().unwrap();
-                if let Ok(h) = os.boot_services.locate_device_path::<P>(&mut dev) {
-                    hdl = Some(h);
-                    break;
-                }
-            }
-            hdl.unwrap()
-        };
-        Box::leak(Box::new(
-            os.boot_services
-                .open_protocol_exclusive::<P>(handle)
-                .unwrap(),
-        ))
+    ) -> Result<ScopedProtocol<'static, P>> {
+        self.open_handle::<P>(self.handle_on_device::<P>(device))
+    }
+
+    pub fn open_first_disk(&self) -> Disk {
+        Disk::new(*self)
     }
 
     pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {

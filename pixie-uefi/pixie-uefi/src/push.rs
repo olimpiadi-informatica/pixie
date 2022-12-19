@@ -1,9 +1,13 @@
 use alloc::string::String;
+use log::info;
 use pixie_shared::Address;
 
 use crate::os::{error::Result, UefiOS};
 
-pub async fn push(_os: UefiOS, _server_address: Address, _server_path: String) -> Result<!> {
+pub async fn push(os: UefiOS, _server_address: Address, _server_path: String) -> Result<!> {
+    let disk = os.open_first_disk();
+    info!("Size: {} bytes", disk.size());
+
     todo!();
 }
 

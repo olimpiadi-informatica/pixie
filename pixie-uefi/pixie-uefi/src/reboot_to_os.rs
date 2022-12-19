@@ -1,6 +1,3 @@
-
-
-
 use crate::os::{error::Result, UefiOS};
 
 pub async fn reboot_to_os(os: UefiOS) -> Result<!> {

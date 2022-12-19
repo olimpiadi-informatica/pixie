@@ -3,8 +3,9 @@ use alloc::{
     vec::Vec,
 };
 use uefi::{
-    proto::device_path::{DevicePath},
-    table::runtime::{VariableAttributes, VariableVendor}, CString16,
+    proto::device_path::DevicePath,
+    table::runtime::{VariableAttributes, VariableVendor},
+    CString16,
 };
 
 use super::UefiOS;
