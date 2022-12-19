@@ -15,27 +15,3 @@ groups:
 boot:
   unregistered: register
   default: wait
-  modes:
-    reboot: |
-      #!ipxe
-      chain /static/reboot.efi
-    register: |
-      #!ipxe
-      kernel /static/bzImage register=<server_ip>:<server_port> ip=dhcp quiet
-      boot
-    push: |
-      #!ipxe
-      kernel /static/bzImage push=http://<server_ip>:<server_port>/image/<image> disk=/dev/nvme0n1 ip=dhcp quiet
-      boot
-    pull: |
-      #!ipxe
-      kernel /static/bzImage pull=http://<server_ip>:<server_port>/image/<image> listen_on=0.0.0.0:4041 udp_server=192.168.1.100:25640 ip=dhcp quiet
-      boot
-    cmd: |
-      #!ipxe
-      kernel /static/bzImage quiet
-      boot
-    wait: |
-      #!ipxe
-      sleep 5
-      chain /boot.ipxe
