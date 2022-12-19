@@ -15,6 +15,6 @@ popd
 mkdir -p storage/tftpboot
 cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
 
-mkdir -p storage/images storage/chunks storage/tmp
+mkdir -p storage/images storage/chunks
 
 [ -f storage/config.yaml ] || cp pixie-core/example.config.yaml storage/config.yaml

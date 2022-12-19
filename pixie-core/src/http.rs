@@ -133,7 +133,7 @@ async fn register(
                         group: data.group,
                         row: data.row,
                         col: data.col,
-                        action: state.config.boot.default.clone(),
+                        action: state.config.boot.default,
                     });
                     units.len() - 1
                 });
@@ -184,14 +184,14 @@ async fn upload_chunk(
     hash: Path<String>,
     state: Data<State>,
 ) -> io::Result<impl Responder> {
-    let path = state.storage_dir.join("chunks").join(&*hash);
-    let tmp_file = Temp::new_file_in(state.storage_dir.join("tmp"))
+    let chunks_path = state.storage_dir.join("chunks");
+    let path = chunks_path.join(&*hash);
+    let tmp_file = Temp::new_file_in(chunks_path)
         .expect("failed to create tmp file")
         .release();
-    let body = body.to_vec();
-    fs::write(&tmp_file, body).unwrap();
-    fs::rename(&tmp_file, path).unwrap();
-    Ok("".customize())
+    fs::write(&tmp_file, &body)?;
+    fs::rename(&tmp_file, &path)?;
+    Ok("")
 }
 
 #[post("/image/{name}")]
@@ -200,7 +200,6 @@ async fn upload_image(
     body: Bytes,
     state: Data<State>,
 ) -> io::Result<impl Responder> {
-    let body = body.to_vec();
     let path = state.storage_dir.join("images").join(&*name);
     fs::write(path, body)?;
     Ok("")

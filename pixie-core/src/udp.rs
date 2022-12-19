@@ -13,7 +13,7 @@ use tokio::{
     time::{self, Duration, Instant},
 };
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use serde::Deserialize;
 
 use pixie_shared::{Action, Address, BODY_LEN, PACKET_LEN};
@@ -135,7 +135,7 @@ async fn handle_requests(
         let buf = &buf[..len];
         if buf == b"GA" {
             let IpAddr::V4(peer_ip) = addr.ip() else {
-                Err(anyhow!("IPv6 is not supported"))?
+                bail!("IPv6 is not supported")
             };
             let peer_mac = find_mac(peer_ip)?;
             let units = state
