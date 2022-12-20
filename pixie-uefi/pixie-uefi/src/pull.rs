@@ -220,35 +220,11 @@ pub async fn pull(
 
     let bo = os.boot_options();
     let mut order = bo.order();
-    order[1] = image.boot_option_id;
+    order.retain(|&x| x != image.boot_option_id);
+    order.insert(1, image.boot_option_id);
     bo.set_order(&order);
     bo.set(image.boot_option_id, &image.boot_entry);
 
     os.sleep_us(10_000_000).await;
     os.reset();
 }
-
-/*
-
-pub fn set_boot_order() -> Result<()> {
-    let args = Options::parse();
-    ensure!(!args.boot_order_path.is_empty(), "Specify a source");
-
-    let boot_order: BootOrder = serde_json::from_str(&read_to_string(args.boot_order_path)?)?;
-
-    write_boot_option(boot_order.first_option.0, &boot_order.first_option.1)?;
-    write_boot_option(boot_order.second_option.0, &boot_order.second_option.1)?;
-
-    let boot_options = current_boot_options()?;
-    let opts = [boot_order.first_option.0, boot_order.second_option.0]
-        .into_iter()
-        .chain(
-            boot_options
-                .into_iter()
-                .filter(|x| *x != boot_order.first_option.0 && *x != boot_order.second_option.0),
-        )
-        .collect::<Vec<_>>();
-
-    set_boot_options(opts)
-}
-*/
