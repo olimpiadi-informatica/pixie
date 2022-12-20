@@ -30,11 +30,12 @@ use uefi::{
     Status,
 };
 
-use super::{timer::Timer, UefiOS};
+use pixie_shared::Address;
 
 use super::error::{Error, Result};
+use super::{timer::Timer, UefiOS};
 
-const PACKET_SIZE: usize = 1514;
+pub const PACKET_SIZE: usize = 1514;
 
 type SNP = &'static ScopedProtocol<'static, SimpleNetwork>;
 
@@ -478,16 +479,12 @@ impl UdpHandle {
         .await?)
     }
 
-    pub async fn recv<F, T>(&self, mut callback: F) -> T
-    where
-        F: FnMut(&[u8], (u8, u8, u8, u8), u16) -> T,
-    {
+    pub async fn recv<'a>(&self, buf: &'a mut [u8; PACKET_SIZE]) -> (&'a mut [u8], Address) {
         let handle = self.handle.clone();
         let os = self.os.clone();
 
-        let mut buf = [0; PACKET_SIZE];
-
-        poll_fn(move |cx| {
+        let buf2 = &mut *buf;
+        let (len, addr) = poll_fn(move |cx| {
             let mut net = os.net();
             let socket = net.socket_set.get_mut::<UdpSocket>(handle);
             if !socket.can_recv() {
@@ -495,14 +492,16 @@ impl UdpHandle {
                 Poll::Pending
             } else {
                 // Cannot fail if can_recv() returned true.
-                let recvd = socket.recv_slice(&mut buf).unwrap();
+                let recvd = socket.recv_slice(buf2).unwrap();
                 let ip = (recvd.1).addr.as_bytes();
                 let ip = (ip[0], ip[1], ip[2], ip[3]);
                 let port = (recvd.1).port;
-                Poll::Ready(callback(&buf[..recvd.0], ip, port))
+                Poll::Ready((recvd.0, Address { ip, port }))
             }
         })
-        .await
+        .await;
+
+        (&mut buf[..len], addr)
     }
 
     pub fn close(self) {

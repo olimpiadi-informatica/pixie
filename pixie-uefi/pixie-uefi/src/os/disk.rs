@@ -89,6 +89,12 @@ impl Disk {
             .read_disk(self.block.media().media_id(), offset, buf)?)
     }
 
+    pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        Ok(self
+            .disk
+            .write_disk(self.block.media().media_id(), offset, buf)?)
+    }
+
     pub fn partitions(&mut self) -> Result<Vec<DiskPartition>> {
         let block_size = self.block_size().to_u64();
         let get_gpt_partitions = |d: &mut Disk| {

@@ -10,7 +10,7 @@ use os::UefiOS;
 use pixie_shared::Action;
 use uefi::prelude::*;
 
-use os::error::Result;
+use os::{error::Result, PACKET_SIZE};
 
 use log::info;
 
@@ -40,14 +40,11 @@ async fn run(os: UefiOS) -> Result<()> {
     loop {
         udp.send((255, 255, 255, 255), 25640, b"GA").await?;
 
-        let mut command = None;
+        let mut buf = [0; PACKET_SIZE];
         // TODO(veluca): add a timeout.
-        udp.recv(|data, _ip, _port| {
-            command = Some(serde_json::from_slice::<Action>(data));
-        })
-        .await;
-
-        let command = command.unwrap();
+        let (buf, _) = udp.recv(&mut buf).await;
+        let command = serde_json::from_slice::<Action>(buf);
+        info!("Command: {:?}", command);
 
         if let Err(e) = command {
             info!("Invalid action received: {}", e);

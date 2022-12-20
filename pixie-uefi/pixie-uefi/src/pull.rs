@@ -1,62 +1,22 @@
-use alloc::string::String;
-
-use pixie_shared::Address;
-
-use crate::os::{error::Result, UefiOS};
-
-pub async fn pull(
-    _os: UefiOS,
-    _server_address: Address,
-    _image: String,
-    _udp_recv_port: u16,
-    _udp_server: Address,
-) -> Result<!> {
-    todo!();
-}
-
-/*
-use std::{
-    collections::HashMap,
-    fs::{self, File as StdFile},
-    io::{self, BufWriter, Read, Seek, SeekFrom, Write},
-    net::{SocketAddrV4, UdpSocket},
-    sync::Arc,
-    time::Duration,
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    string::{String, ToString},
+    vec::Vec,
 };
+use core::mem;
 
-use tokio::{
-    fs::File,
-    io::{AsyncSeekExt, AsyncWriteExt},
-    sync::Mutex,
+use futures::future::{select, Either};
+use log::info;
+
+use miniz_oxide::inflate::decompress_to_vec;
+
+use pixie_shared::{Address, Image, BODY_LEN, HEADER_LEN, PACKET_LEN};
+
+use crate::os::{
+    error::{Error, Result},
+    HttpMethod, UefiOS, PACKET_SIZE,
 };
-
-use anyhow::{ensure, Result};
-use clap::Parser;
-use zstd::bulk;
-
-use pixie_shared::{Segment, BODY_LEN, CHUNK_SIZE, HEADER_LEN, PACKET_LEN};
-
-#[derive(Parser, Debug)]
-struct Options {
-    #[clap(short, long, value_parser)]
-    source: String,
-    #[clap(short, long, value_parser)]
-    listen_on: SocketAddrV4,
-    #[clap(short, long, value_parser)]
-    udp_server: SocketAddrV4,
-}
-
-fn fetch_image(url: String) -> Result<Vec<pixie_shared::File>> {
-    let resp = reqwest::blocking::get(&url)?;
-    ensure!(
-        resp.status().is_success(),
-        "failed to fetch image: status ({}) is not success",
-        resp.status().as_u16()
-    );
-    let body = resp.text()?;
-    let files = serde_json::from_str(&body)?;
-    Ok(files)
-}
 
 struct PartialChunk {
     data: Vec<u8>,
@@ -85,141 +45,81 @@ impl PartialChunk {
     }
 }
 
-async fn save_chunk(
-    mut pc: PartialChunk,
-    pos: Vec<(usize, usize)>,
-    files: Arc<[Mutex<File>]>,
-) -> Result<()> {
-    let mut xor = [[0; BODY_LEN]; 32];
-    for packet in 0..pc.missing_first.len() {
-        if !pc.missing_first[packet] {
-            let group = packet & 31;
-            pc.data[BODY_LEN * packet..]
-                .iter()
-                .zip(xor[group].iter_mut())
-                .for_each(|(a, b)| *b ^= a);
-        }
-    }
-    for packet in 0..pc.missing_first.len() {
-        if pc.missing_first[packet] {
-            let group = packet & 31;
-            pc.data[BODY_LEN * packet..]
-                .iter_mut()
-                .zip(xor[group].iter())
-                .for_each(|(a, b)| *a = *b);
-        }
-    }
-
-    let data = bulk::decompress(&pc.data[32 * BODY_LEN..], CHUNK_SIZE + 1)?;
-    for (file, offset) in pos {
-        let mut lock = files[file].lock().await;
-        lock.seek(SeekFrom::Start(offset as u64)).await?;
-        lock.write_all(&data).await?;
-    }
-    Ok(())
+async fn fetch_image(os: UefiOS, server_address: Address, image: &str) -> Result<Image> {
+    let resp = os
+        .http(
+            server_address.ip,
+            server_address.port,
+            HttpMethod::Get,
+            format!("/image/{}", image).as_bytes(),
+        )
+        .await?;
+    Ok(serde_json::from_slice(&resp)?)
 }
 
-#[tokio::main]
-pub async fn main() -> Result<()> {
-    let args = Options::parse();
+pub async fn pull(
+    os: UefiOS,
+    server_address: Address,
+    image: String,
+    udp_recv_port: u16,
+    udp_server: Address,
+) -> Result<!> {
+    let image = fetch_image(os, server_address, &image).await?;
 
-    ensure!(!args.source.is_empty(), "Specify a source");
+    let mut chunks_info = BTreeMap::new();
+    for chunk in &image.disk {
+        chunks_info
+            .entry(chunk.hash)
+            .or_insert((chunk.size, chunk.csize, Vec::new()))
+            .2
+            .push(chunk.start);
+    }
 
-    let stdout = io::stdout().lock();
-    let mut stdout = BufWriter::new(stdout);
-
-    let info = fetch_image(args.source)?;
-
-    let mut chunks_info = HashMap::new();
-
-    let mut stat_chunks = 0usize;
-
-    let mut files = info
-        .into_iter()
-        .enumerate()
-        .map(|(idx, pixie_shared::File { name, chunks })| {
-            if let Some(prefix) = name.parent() {
-                fs::create_dir_all(prefix)?;
-            }
-
-            for Segment {
-                hash,
-                start,
-                size,
-                csize,
-            } in chunks
-            {
-                chunks_info
-                    .entry(hash)
-                    .or_insert((size, csize, Vec::new()))
-                    .2
-                    .push((idx, start));
-                stat_chunks += 1;
-            }
-
-            Ok(StdFile::options()
-                .read(true)
-                .write(true)
-                .create(true)
-                .open(&name)?)
-        })
-        .collect::<Result<Vec<_>>>()?;
-
+    let stat_chunks = image.disk.len();
     let stat_unique = chunks_info.len();
-    write!(stdout, "Total chunks:     {stat_chunks}\n")?;
-    write!(stdout, "Unique chunks:    {stat_unique}\n")?;
 
-    chunks_info.retain(|hash, &mut (size, _, ref pos)| {
+    let mut disk = os.open_first_disk();
+
+    for (hash, (size, csize, pos)) in mem::replace(&mut chunks_info, BTreeMap::new()) {
         let mut data = false;
         let mut buf = vec![0; size];
-        for &(file, offset) in pos {
-            files[file].seek(SeekFrom::Start(offset as u64)).unwrap();
-            match files[file].read_exact(&mut buf) {
-                Ok(()) => {
-                    if blake3::hash(&bulk::compress(&buf, 1).unwrap()).as_bytes() == hash {
-                        data = true;
-                        break;
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => (),
-                Err(e) => Err(e).unwrap(),
+        for &offset in &pos {
+            disk.read(offset as u64, &mut buf).await.unwrap();
+            if blake3::hash(&buf).as_bytes() == &hash {
+                data = true;
+                break;
             }
         }
         if data {
-            for &(file, offset) in pos {
-                files[file].seek(SeekFrom::Start(offset as u64)).unwrap();
-                files[file].write_all(&buf).unwrap();
+            for &offset in &pos {
+                disk.write(offset as u64, &buf).await.unwrap();
             }
+        } else {
+            chunks_info.insert(hash, (size, csize, pos));
         }
-        !data
-    });
-
-    let files: Arc<[_]> = files
-        .into_iter()
-        .map(|f| Mutex::new(File::from_std(f)))
-        .collect();
+    }
 
     let stat_fetch = chunks_info.len();
-    write!(stdout, "Chunks to fetch:  {stat_fetch}\n")?;
 
     let mut stat_recv = 0usize;
     let mut stat_requested = 0usize;
-    write!(stdout, "Chunks received:  {stat_recv}\n")?;
-    write!(stdout, "Chunks requested: {stat_requested}\n")?;
-    stdout.flush()?;
 
-    let socket = UdpSocket::bind(args.listen_on)?;
-    socket.set_read_timeout(Some(Duration::from_secs(1)))?;
-    let mut buf = [0; 1 << 13];
+    info!(
+        "Chunks: {} total, {} unique, {} to fetch, {} received, {} requested",
+        stat_chunks, stat_unique, stat_fetch, stat_recv, stat_requested
+    );
 
-    let mut received = HashMap::new();
+    let socket = os.udp_bind(Some(udp_recv_port)).await?;
+    let mut buf = [0; PACKET_SIZE];
 
-    let mut tasks = Vec::new();
+    let mut received = BTreeMap::new();
 
     while !chunks_info.is_empty() {
-        match socket.recv_from(&mut buf) {
-            Ok((bytes_recv, _)) => {
-                assert!(bytes_recv >= 34);
+        let recv = Box::pin(socket.recv(&mut buf));
+        let sleep = Box::pin(os.sleep_us(1000_000));
+        match select(recv, sleep).await {
+            Either::Left(((buf, _addr), _)) => {
+                assert!(buf.len() >= 34);
                 let hash: &[u8; 32] = buf[..32].try_into().unwrap();
                 let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
                 let csize = match chunks_info.get(hash) {
@@ -238,8 +138,8 @@ pub async fn main() -> Result<()> {
                 }
 
                 let start = rot_index * BODY_LEN;
-                pchunk.data[start..start + bytes_recv - HEADER_LEN]
-                    .clone_from_slice(&buf[HEADER_LEN..bytes_recv]);
+                pchunk.data[start..start + buf.len() - HEADER_LEN]
+                    .clone_from_slice(&buf[HEADER_LEN..]);
 
                 let group = index & 31;
                 match &mut pchunk.missing_second[group] {
@@ -260,20 +160,43 @@ pub async fn main() -> Result<()> {
                     }
                 }
 
-                let pc = received.remove(hash).unwrap();
+                let mut pc = received.remove(hash).unwrap();
                 let (_, _, pos) = chunks_info.remove(hash).unwrap();
 
-                let task = tokio::spawn(save_chunk(pc, pos, files.clone()));
-                tasks.push(task);
+                let mut xor = [[0; BODY_LEN]; 32];
+                for packet in 0..pc.missing_first.len() {
+                    if !pc.missing_first[packet] {
+                        let group = packet & 31;
+                        pc.data[BODY_LEN * packet..]
+                            .iter()
+                            .zip(xor[group].iter_mut())
+                            .for_each(|(a, b)| *b ^= a);
+                    }
+                }
+                for packet in 0..pc.missing_first.len() {
+                    if pc.missing_first[packet] {
+                        let group = packet & 31;
+                        pc.data[BODY_LEN * packet..]
+                            .iter_mut()
+                            .zip(xor[group].iter())
+                            .for_each(|(a, b)| *a = *b);
+                    }
+                }
+
+                let data = decompress_to_vec(&pc.data[32 * BODY_LEN..])
+                    .map_err(|e| Error::Generic(e.to_string()))?;
+                for offset in pos {
+                    disk.write(offset as u64, &data).await?;
+                }
 
                 stat_recv += 1;
-
-                write!(stdout, "\x1b[2A")?;
-                write!(stdout, "Chunks received:  {stat_recv}\n")?;
-                write!(stdout, "Chunks requested: {stat_requested}\n")?;
-                stdout.flush()?;
+                info!(
+                    "Chunks: {} total, {} unique, {} to fetch, {} received, {} requested",
+                    stat_chunks, stat_unique, stat_fetch, stat_recv, stat_requested
+                );
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+            Either::Right(((), _sleep)) => {
+                let mut buf = [0; PACKET_LEN];
                 let mut len = 2;
                 buf[..2].copy_from_slice(b"RB");
                 for (hash, _) in chunks_info.iter() {
@@ -284,23 +207,28 @@ pub async fn main() -> Result<()> {
                     len += 32;
                     stat_requested += 1;
                 }
-                socket.send_to(&buf[..len], args.udp_server)?;
-
-                write!(stdout, "\x1b[2A")?;
-                write!(stdout, "Chunks received:  {stat_recv}\n")?;
-                write!(stdout, "Chunks requested: {stat_requested}\n")?;
-                stdout.flush()?;
+                socket
+                    .send(udp_server.ip, udp_server.port, &buf[..len])
+                    .await?;
+                info!(
+                    "Chunks: {} total, {} unique, {} to fetch, {} received, {} requested",
+                    stat_chunks, stat_unique, stat_fetch, stat_recv, stat_requested
+                );
             }
-            Err(e) => Err(e)?,
         }
     }
 
-    for task in tasks {
-        task.await??;
-    }
+    let bo = os.boot_options();
+    let mut order = bo.order();
+    order[1] = image.boot_option_id;
+    bo.set_order(&order);
+    bo.set(image.boot_option_id, &image.boot_entry);
 
-    Ok(())
+    os.sleep_us(10_000_000).await;
+    os.reset();
 }
+
+/*
 
 pub fn set_boot_order() -> Result<()> {
     let args = Options::parse();

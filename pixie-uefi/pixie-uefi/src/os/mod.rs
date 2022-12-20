@@ -50,7 +50,7 @@ mod timer;
 
 use error::Result;
 
-pub use net::HttpMethod;
+pub use net::{HttpMethod, PACKET_SIZE};
 
 struct UefiOSImpl {
     boot_services: &'static BootServices,

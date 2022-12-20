@@ -46,7 +46,7 @@ pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Address {
     pub ip: (u8, u8, u8, u8),
     pub port: u16,

@@ -1,16 +1,13 @@
 use log::info;
 use pixie_shared::{Address, Station};
 
-use crate::os::{error::Result, HttpMethod, UefiOS};
+use crate::os::{error::Result, HttpMethod, UefiOS, PACKET_SIZE};
 
 pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Result<!> {
     let udp = os.udp_bind(Some(hint_port)).await?;
-    let mut hint: Station = Default::default();
-    udp.recv(|data, _, _| -> Result<()> {
-        hint = serde_json::from_slice(data)?;
-        Ok(())
-    })
-    .await?;
+    let mut buf = [0; PACKET_SIZE];
+    let (buf, _) = udp.recv(&mut buf).await;
+    let hint: Station = serde_json::from_slice(buf)?;
 
     // TODO(veluca): actual registration.
 

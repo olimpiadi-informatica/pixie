@@ -71,6 +71,19 @@ impl BootOptions {
             .0
     }
 
+    pub fn set(&self, id: u16, data: &[u8]) {
+        self.os
+            .set_variable(
+                &format!("Boot{:04X}", id),
+                &VariableVendor::GLOBAL_VARIABLE,
+                VariableAttributes::NON_VOLATILE
+                    | VariableAttributes::BOOTSERVICE_ACCESS
+                    | VariableAttributes::RUNTIME_ACCESS,
+                data,
+            )
+            .unwrap();
+    }
+
     /// Boot entry *must* be valid (TODO).
     /// Returns boot option description and device path of the option.
     pub fn boot_entry_info<'a>(&self, entry: &'a [u8]) -> (String, &'a DevicePath) {
