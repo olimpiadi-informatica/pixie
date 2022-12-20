@@ -1,7 +1,8 @@
-use alloc::{borrow::ToOwned, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use log::info;
-use pixie_shared::{Address, ChunkHash, Image, Offset, Segment, CHUNK_SIZE};
+use pixie_shared::{Address, Image, Offset, Segment, CHUNK_SIZE};
 
+use blake3::Hash;
 use miniz_oxide::deflate::compress_to_vec;
 
 use crate::os::{disk::Disk, error::Result, HttpMethod, UefiOS};
@@ -133,31 +134,31 @@ async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
     Ok(Some(ans))
 }
 
-async fn save_chunk(os: UefiOS, server_address: Address, data: &[u8]) -> Result<ChunkHash> {
-    let hash = blake3::hash(data);
-    let hash_hex = hash.to_hex();
-
+async fn get_chunk_csize(
+    os: UefiOS,
+    server_address: Address,
+    hash: &Hash,
+) -> Result<Option<usize>> {
     let resp = os
         .http(
             server_address.ip,
             server_address.port,
             HttpMethod::Get,
-            format!("/has_chunk/{}", hash_hex).as_bytes(),
+            format!("/get_chunk_csize/{}", hash).as_bytes(),
         )
         .await?;
-    if resp == b"pass" {
-        return Ok(hash.as_bytes().to_owned());
-    }
+    Ok(serde_json::from_slice(&resp)?)
+}
 
+async fn save_chunk(os: UefiOS, server_address: Address, hash: &Hash, data: &[u8]) -> Result<()> {
     os.http(
         server_address.ip,
         server_address.port,
         HttpMethod::Post(data),
-        format!("/chunk/{}", hash_hex).as_bytes(),
+        format!("/chunk/{}", hash).as_bytes(),
     )
     .await?;
-
-    Ok(hash.as_bytes().to_owned())
+    Ok(())
 }
 
 async fn save_image(os: UefiOS, server_address: Address, image: &str, info: Image) -> Result<()> {
@@ -246,18 +247,24 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         info!("pushing chunk {idx} out of {total}; size {total_size}, csize {total_csize}");
         let mut data = vec![0; chnk.size];
         disk.read(chnk.start as u64, &mut data).await?;
-        // TODO(veluca): consider passing in the compression level.
-        // TODO(veluca): think about avoiding the compression step if the server already has the
-        // chunk.
-        let data = compress_to_vec(&data, 2);
-        let hash = save_chunk(os, server_address, &data).await?;
+        let hash = blake3::hash(&data);
+        let csize = match get_chunk_csize(os, server_address, &hash).await? {
+            Some(csize) => csize,
+            None => {
+                // TODO(veluca): consider passing in the compression level.
+                let cdata = compress_to_vec(&data, 2);
+                save_chunk(os, server_address, &hash, &cdata).await?;
+                cdata.len()
+            }
+        };
+
         total_size += chnk.size;
-        total_csize += data.len();
+        total_csize += csize;
         chunk_hashes.push(Segment {
-            hash,
+            hash: hash.into(),
             start: chnk.start,
             size: chnk.size,
-            csize: data.len(),
+            csize,
         })
     }
 
@@ -278,7 +285,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
     .await?;
 
     info!(
-        "image saved at {:?}/{}. Total size {total_size}, total csize {total_csize}",
+        "image saved at {:?}{}. Total size {total_size}, total csize {total_csize}",
         server_address, image
     );
 

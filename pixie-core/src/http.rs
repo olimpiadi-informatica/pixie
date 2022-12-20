@@ -162,14 +162,18 @@ async fn register(
         .with_status(StatusCode::BAD_REQUEST))
 }
 
-#[get("/has_chunk/{hash}")]
-async fn has_chunk(hash: Path<String>, state: Data<State>) -> impl Responder {
+#[get("/get_chunk_csize/{hash}")]
+async fn get_chunk_csize(
+    hash: Path<String>,
+    state: Data<State>,
+) -> Result<impl Responder, Box<dyn Error>> {
     let path = state.storage_dir.join("chunks").join(&*hash);
-    if path.exists() {
-        "pass"
-    } else {
-        "send"
-    }
+    let csize = match fs::metadata(path) {
+        Ok(meta) => Some(meta.len()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => Err(e)?,
+    };
+    Ok(serde_json::to_vec(&csize)?)
 }
 
 #[post("/chunk/{hash}")]
@@ -242,7 +246,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .wrap(Logger::default())
             .app_data(PayloadConfig::new(max_payload))
             .app_data(data.clone())
-            .service(has_chunk)
+            .service(get_chunk_csize)
             .service(upload_chunk)
             .service(upload_image)
             .service(Files::new("/image", &images))
