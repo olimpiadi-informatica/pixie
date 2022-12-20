@@ -42,21 +42,25 @@ async fn run(os: UefiOS) -> Result<()> {
 
         let mut buf = [0; PACKET_SIZE];
         // TODO(veluca): add a timeout.
-        let (buf, _) = udp.recv(&mut buf).await;
-        let command = serde_json::from_slice::<Action>(buf);
-        info!("Command: {:?}", command);
+        let (data, server) = udp.recv(&mut buf).await;
+        let command = serde_json::from_slice::<Action>(data);
 
         if let Err(e) = command {
             info!("Invalid action received: {}", e);
         } else {
-            match command.unwrap() {
+            let command = command.unwrap();
+            info!("Command: {:?}", command);
+            match command {
                 Action::Wait => {
                     const WAIT_SECS: u64 = 5;
                     info!("Waiting {WAIT_SECS}s for another command...");
                     os.sleep_us(WAIT_SECS * 1_000_000).await;
-                    continue;
                 }
-                Action::Reboot => reboot_to_os(os).await?,
+                Action::Reboot => {
+                    udp.send(server.ip, server.port, b"NA").await?;
+                    udp.recv(&mut buf).await;
+                    reboot_to_os(os).await;
+                }
                 Action::Register { server, hint_port } => register(os, hint_port, server).await?,
                 Action::Push { http_server, image } => push(os, http_server, image).await?,
                 Action::Pull {
@@ -67,6 +71,10 @@ async fn run(os: UefiOS) -> Result<()> {
                 } => pull(os, http_server, image, udp_recv_port, udp_server).await?,
             }
         }
+
+        // TODO: consider using tcp
+        udp.send(server.ip, server.port, b"NA").await?;
+        udp.recv(&mut buf).await;
     }
 }
 

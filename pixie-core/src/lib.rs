@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     str::FromStr,
-    sync::{Mutex, RwLock},
+    sync::Mutex,
 };
 
 use anyhow::{anyhow, bail, Error, Result};
@@ -52,7 +52,8 @@ pub struct Unit {
     pub group: u8,
     pub row: u8,
     pub col: u8,
-    pub action: ActionKind,
+    pub curr_action: Option<ActionKind>,
+    pub next_action: ActionKind,
     pub image: String,
 }
 
@@ -81,7 +82,7 @@ pub struct Config {
 pub struct State {
     pub storage_dir: PathBuf,
     pub config: Config,
-    pub units: RwLock<Vec<Unit>>,
+    pub units: Mutex<Vec<Unit>>,
     pub dnsmasq_handle: Mutex<DnsmasqHandle>,
     pub last: Mutex<Station>,
 }

@@ -38,7 +38,7 @@ async fn action(
 ) -> Result<impl Responder, Box<dyn Error>> {
     let units = &mut **state
         .units
-        .write()
+        .lock()
         .map_err(|_| anyhow!("units mutex is poisoned"))?;
 
     let Ok(action) = path.1.parse() else {
@@ -52,26 +52,26 @@ async fn action(
     if let Ok(mac) = path.0.parse() {
         for unit in units.iter_mut() {
             if unit.mac == mac {
-                unit.action = action;
+                unit.next_action = action;
                 updated += 1;
             }
         }
     } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
         for unit in units.iter_mut() {
             if unit.ip() == ip {
-                unit.action = action;
+                unit.next_action = action;
                 updated += 1;
             }
         }
     } else if path.0 == "all" {
         for unit in units.iter_mut() {
-            unit.action = action;
+            unit.next_action = action;
             updated += 1;
         }
     } else if let Some(&group) = state.config.groups.get(&path.0) {
         for unit in units.iter_mut() {
             if unit.group == group {
-                unit.action = action;
+                unit.next_action = action;
                 updated += 1;
             }
         }
@@ -114,7 +114,7 @@ async fn register(
 
             let units = &mut *state
                 .units
-                .write()
+                .lock()
                 .map_err(|_| anyhow!("units mutex is poisoned"))?;
 
             let unit = units.iter_mut().position(|x| x.mac == peer_mac);
@@ -133,7 +133,8 @@ async fn register(
                         row: data.row,
                         col: data.col,
                         image: data.image,
-                        action: state.config.boot.default,
+                        curr_action: None,
+                        next_action: state.config.boot.default,
                     };
                     units.push(unit);
                     units.len() - 1

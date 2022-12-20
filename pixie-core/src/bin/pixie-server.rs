@@ -1,8 +1,4 @@
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    sync::{Mutex, RwLock},
-};
+use std::{path::PathBuf, sync::Arc, sync::Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -75,7 +71,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(State {
         storage_dir: options.storage_dir,
         config,
-        units: RwLock::new(units),
+        units: Mutex::new(units),
         dnsmasq_handle: Mutex::new(dnsmasq_handle),
         last,
     });

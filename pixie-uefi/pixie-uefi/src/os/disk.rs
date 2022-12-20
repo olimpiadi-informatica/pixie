@@ -144,7 +144,7 @@ impl gpt_disk_io::BlockIo for &mut Disk {
             .block
             .read_blocks(self.block.media().media_id(), start_lba.0, dst)?)
     }
-    fn write_blocks(&mut self, start_lba: Lba, src: &[u8]) -> Result<()> {
+    fn write_blocks(&mut self, _start_lba: Lba, _src: &[u8]) -> Result<()> {
         unreachable!();
     }
     fn flush(&mut self) -> Result<()> {

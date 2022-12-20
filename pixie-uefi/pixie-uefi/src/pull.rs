@@ -63,7 +63,7 @@ pub async fn pull(
     image: String,
     udp_recv_port: u16,
     udp_server: Address,
-) -> Result<!> {
+) -> Result<()> {
     let image = fetch_image(os, server_address, &image).await?;
 
     let mut chunks_info = BTreeMap::new();
@@ -225,6 +225,5 @@ pub async fn pull(
     bo.set_order(&order);
     bo.set(image.boot_option_id, &image.boot_entry);
 
-    os.sleep_us(10_000_000).await;
-    os.reset();
+    Ok(())
 }

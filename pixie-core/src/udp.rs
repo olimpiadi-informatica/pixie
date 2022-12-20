@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use pixie_shared::{Action, Address, Station, BODY_LEN, PACKET_LEN};
 
-use crate::{find_interface_ip, find_mac, ActionKind, State};
+use crate::{find_interface_ip, find_mac, ActionKind, State, Unit};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -133,7 +133,7 @@ fn compute_hint(state: &State) -> Result<Station> {
 
     let positions = state
         .units
-        .read()
+        .lock()
         .map_err(|_| anyhow!("units lock poisoned"))?
         .iter()
         .filter(|unit| unit.group == last.group)
@@ -191,14 +191,26 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 bail!("IPv6 is not supported")
             };
             let peer_mac = find_mac(peer_ip)?;
-            let units = state
+            let mut units = state
                 .units
-                .read()
+                .lock()
                 .map_err(|_| anyhow!("units mutex is poisoned"))?;
-            let unit = units.iter().find(|unit| unit.mac == peer_mac);
-            let action_kind = unit
-                .map(|unit| unit.action)
-                .unwrap_or(state.config.boot.unregistered);
+            let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
+            let action_kind = match unit {
+                Some(Unit {
+                    curr_action: Some(action),
+                    ..
+                }) => *action,
+                Some(ref mut unit) => {
+                    let action = unit.next_action;
+                    unit.curr_action = Some(action);
+                    if matches!(unit.next_action, ActionKind::Push | ActionKind::Pull) {
+                        unit.next_action = ActionKind::Wait;
+                    }
+                    action
+                }
+                None => state.config.boot.unregistered,
+            };
 
             let server_ip = find_interface_ip(peer_ip)?;
             let server_port = state.config.http.listen_on.port();
@@ -235,6 +247,21 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 
             let msg = serde_json::to_vec(&action)?;
             socket.send_to(&msg, addr).await?;
+        } else if buf == b"NA" {
+            let IpAddr::V4(peer_ip) = addr.ip() else {
+                bail!("IPv6 is not supported")
+            };
+            let peer_mac = find_mac(peer_ip)?;
+            let mut units = state
+                .units
+                .lock()
+                .map_err(|_| anyhow!("units mutex is poisoned"))?;
+            let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                log::warn!("Got NA from unknown unit");
+                continue;
+            };
+            unit.curr_action = None;
+            socket.send_to(b"OK", addr).await?;
         } else if buf.starts_with(b"RB") && (buf.len() - 2) % 32 == 0 {
             for hash in buf[2..].chunks(32) {
                 tx.send(hash.try_into().unwrap()).await?;

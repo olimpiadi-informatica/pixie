@@ -3,7 +3,7 @@ use pixie_shared::{Address, Station};
 
 use crate::os::{error::Result, HttpMethod, UefiOS, PACKET_SIZE};
 
-pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Result<!> {
+pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Result<()> {
     let udp = os.udp_bind(Some(hint_port)).await?;
     let mut buf = [0; PACKET_SIZE];
     let (buf, _) = udp.recv(&mut buf).await;
@@ -20,6 +20,6 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
     .await?;
 
     info!("Registration successful! {:?}", hint);
-    os.sleep_us(10_000_000).await;
-    os.reset();
+
+    Ok(())
 }

@@ -172,14 +172,14 @@ async fn save_image(os: UefiOS, server_address: Address, image: &str, info: Imag
     Ok(())
 }
 
-pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<!> {
+pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<()> {
     let mut disk = os.open_first_disk();
     let disk_size = disk.size() as usize;
     let partitions = disk.partitions().expect("disk is not GPT");
 
     let mut pos = 0usize;
     let mut chunks = vec![];
-    for (id, partition) in partitions.iter().enumerate() {
+    for partition in partitions {
         let begin = partition.byte_start as usize;
         let end = partition.byte_end as usize;
 
@@ -289,6 +289,5 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         server_address, image
     );
 
-    os.sleep_us(10_000_000).await;
-    os.reset()
+    Ok(())
 }

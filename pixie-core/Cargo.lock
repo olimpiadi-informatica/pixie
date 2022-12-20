@@ -1017,6 +1017,7 @@ dependencies = [
  "interfaces",
  "ipnet",
  "libc",
+ "log 0.4.17",
  "macaddr",
  "mktemp",
  "pixie-shared",
