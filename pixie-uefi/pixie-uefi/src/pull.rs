@@ -301,4 +301,26 @@ pub async fn main() -> Result<()> {
 
     Ok(())
 }
+
+pub fn set_boot_order() -> Result<()> {
+    let args = Options::parse();
+    ensure!(!args.boot_order_path.is_empty(), "Specify a source");
+
+    let boot_order: BootOrder = serde_json::from_str(&read_to_string(args.boot_order_path)?)?;
+
+    write_boot_option(boot_order.first_option.0, &boot_order.first_option.1)?;
+    write_boot_option(boot_order.second_option.0, &boot_order.second_option.1)?;
+
+    let boot_options = current_boot_options()?;
+    let opts = [boot_order.first_option.0, boot_order.second_option.0]
+        .into_iter()
+        .chain(
+            boot_options
+                .into_iter()
+                .filter(|x| *x != boot_order.first_option.0 && *x != boot_order.second_option.0),
+        )
+        .collect::<Vec<_>>();
+
+    set_boot_options(opts)
+}
 */

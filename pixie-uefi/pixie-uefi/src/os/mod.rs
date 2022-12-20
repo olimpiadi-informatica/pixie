@@ -41,7 +41,7 @@ use self::{
 };
 
 mod boot_options;
-mod disk;
+pub mod disk;
 pub mod error;
 mod executor;
 mod net;

@@ -8,14 +8,14 @@ use serde::{Deserialize, Serialize};
 
 pub const CHUNK_SIZE: usize = 1 << 22;
 
-/// The hash of a chunk of a file.
+/// The hash of a chunk of a disk.
 ///
 /// This is stored as an array of bytes because [`blake3::Hash`] is not serializable.
 pub type ChunkHash = [u8; OUT_LEN];
-/// The offset of the chunk of a file.
+/// The offset of the chunk of a disk.
 pub type Offset = usize;
 
-/// Describes one segment from a file
+/// Describes one segment from a disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub hash: ChunkHash,
@@ -25,10 +25,13 @@ pub struct Segment {
     pub csize: usize,
 }
 
-/// A file is stored as a list of chunks and offsets.
+/// An image is given by the list of chunks of the disk, the index of the boot entry that boots it,
+/// and the contents of that boot entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct File {
-    pub chunks: Vec<Segment>,
+pub struct Image {
+    pub boot_option_id: u16,
+    pub boot_entry: Vec<u8>,
+    pub disk: Vec<Segment>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

@@ -13,6 +13,9 @@ core_detect = "1.0.0"
 futures = { version = "0.3.25", default-features = false, features = ["alloc"] }
 pixie-shared = { version = "0.1.0", path = "../../pixie-shared" }
 serde_json = { version = "1.0.90", default-features = false, features = ["alloc"] }
+gpt_disk_io = "0.14.0"
+miniz_oxide = { version = "0.6.2", features = ["simd"] }
+blake3 = { version = "1.3.3", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
 
 [dependencies.uefi]
 features = ["alloc", "logger"]

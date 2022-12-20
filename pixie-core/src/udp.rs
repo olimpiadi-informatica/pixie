@@ -219,7 +219,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 },
                 ActionKind::Push => Action::Push {
                     http_server: server_loc,
-                    image: unit.unwrap().image.clone(),
+                    image: format!("/image/{}", unit.unwrap().image),
                 },
                 ActionKind::Pull => Action::Pull {
                     http_server: server_loc,

@@ -1,43 +1,10 @@
-use alloc::string::String;
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 use log::info;
-use pixie_shared::Address;
+use pixie_shared::{Address, ChunkHash, Image, Offset, Segment, CHUNK_SIZE};
 
-use crate::os::{error::Result, UefiOS};
+use miniz_oxide::deflate::compress_to_vec;
 
-pub async fn push(os: UefiOS, _server_address: Address, _image: String) -> Result<!> {
-    let disk = os.open_first_disk();
-    info!("Size: {} bytes", disk.size());
-
-    todo!();
-}
-
-/*
-use std::{
-    fs::File,
-    io::{self, ErrorKind, Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-};
-
-use anyhow::{ensure, Context, Result};
-use clap::Parser;
-use gpt::GptConfig;
-use reqwest::{blocking::Client, Url};
-use zstd::bulk;
-
-use pixie_shared::{ChunkHash, Offset, Segment, CHUNK_SIZE};
-
-#[derive(Parser, Debug)]
-struct Options {
-    #[clap(short, long, value_parser)]
-    destination: String,
-    #[clap(last = true, value_parser)]
-    sources: Vec<String>,
-}
-
-trait FileSaver {
-    fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash>;
-    fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()>;
-}
+use crate::os::{disk::Disk, error::Result, HttpMethod, UefiOS};
 
 #[derive(Debug)]
 struct ChunkInfo {
@@ -45,110 +12,8 @@ struct ChunkInfo {
     size: usize,
 }
 
-struct LocalFileSaver {
-    path: String,
-}
-
-impl LocalFileSaver {
-    fn get_chunk_path(path: &str) -> PathBuf {
-        Path::new(path).join("chunks")
-    }
-
-    fn chunk_path(&self) -> PathBuf {
-        LocalFileSaver::get_chunk_path(&self.path)
-    }
-
-    fn new(path: &str) -> Result<LocalFileSaver> {
-        std::fs::create_dir_all(LocalFileSaver::get_chunk_path(path))?;
-        Ok(LocalFileSaver {
-            path: path.to_owned(),
-        })
-    }
-}
-
-impl FileSaver for LocalFileSaver {
-    fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
-        let hash = blake3::hash(data);
-        std::fs::write(self.chunk_path().join(hash.to_hex().as_str()), data)?;
-        Ok(hash.as_bytes().to_owned())
-    }
-
-    fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()> {
-        let info_path = Path::new(&self.path).join("info");
-        std::fs::write(info_path, serde_json::to_string(&info)?)?;
-        Ok(())
-    }
-}
-
-struct RemoteFileSaver {
-    url: String,
-}
-
-impl RemoteFileSaver {
-    fn new(url: String) -> Self {
-        Self { url }
-    }
-}
-
-impl FileSaver for RemoteFileSaver {
-    fn save_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
-        let hash = blake3::hash(data);
-        let hash_hex = hash.to_hex();
-
-        let client = Client::new();
-        let url = Url::parse(&self.url)?.join(&format!("/has_chunk/{}", hash_hex.as_str()))?;
-        let resp = client
-            .get(url)
-            .send()
-            .context("failed to check chunk existance")?;
-        ensure!(
-            resp.status().is_success(),
-            "failed to check chunk existance"
-        );
-
-        if &*resp.bytes()? == b"pass" {
-            return Ok(hash.as_bytes().to_owned());
-        }
-
-        let url = Url::parse(&self.url)?.join(&format!("/chunk/{}", hash_hex.as_str()))?;
-        let resp = client
-            .post(url)
-            .body(data.to_owned())
-            .send()
-            .with_context(|| {
-                format!(
-                    "failed to upload chunk to server, chunk size {}",
-                    data.len()
-                )
-            })?;
-        ensure!(
-            resp.status().is_success(),
-            "failed to upload chunk server, status {}, chunk size {}",
-            resp.status().as_u16(),
-            data.len()
-        );
-
-        Ok(hash.as_bytes().to_owned())
-    }
-
-    fn save_image(&self, info: Vec<pixie_shared::File>) -> Result<()> {
-        let client = Client::new();
-        let data = serde_json::to_string(&info)?;
-        let resp = client
-            .post(&self.url)
-            .body(data)
-            .send()
-            .context("failed to upload image to server")?;
-        ensure!(
-            resp.status().is_success(),
-            "failed to upload image to server, status ({})",
-            resp.status().as_u16(),
-        );
-        Ok(())
-    }
-}
-
-fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
+// Returns chunks *relative to the start of the partition*.
+async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
     fn le16(buf: &[u8], lo: usize) -> u16 {
         (0..2).map(|i| (buf[lo + i] as u16) << (8 * i)).sum()
     }
@@ -181,14 +46,13 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
         false
     }
 
-    let mut reader = File::open(path).unwrap();
-    let mut superblock = [0; 1024];
-    reader.seek(SeekFrom::Start(1024))?;
-    match reader.read_exact(&mut superblock) {
-        Ok(()) => {}
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => Err(e)?,
+    if start + 2048 > end {
+        // Not an ext4 partition.
+        return Ok(None);
     }
+    // Read superblock.
+    let mut superblock = [0; 1024];
+    disk.read(start + 1024, &mut superblock).await?;
 
     let magic = le16(&superblock, 0x38);
     if magic != 0xEF53 {
@@ -225,10 +89,11 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
 
     let mut group_descriptors = vec![0; (desc_size * groups) as usize];
     let mut bitmap = vec![0; block_size as usize];
-    reader
-        .seek(SeekFrom::Start(block_size * (first_data_block + 1)))
-        .unwrap();
-    reader.read_exact(&mut group_descriptors)?;
+    disk.read(
+        start + block_size * (first_data_block + 1),
+        &mut group_descriptors,
+    )
+    .await?;
 
     let mut ans = Vec::new();
 
@@ -250,10 +115,8 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
         } else {
             let block_bitmap = le64_32_32(group_descriptor, 0x0, 0x20);
 
-            reader
-                .seek(SeekFrom::Start(block_size * block_bitmap))
-                .unwrap();
-            reader.read_exact(&mut bitmap)?;
+            disk.read(start + block_size * block_bitmap, &mut bitmap)
+                .await?;
 
             for block in 0..8 * block_size as usize {
                 let is_used = bitmap[block / 8] >> (block % 8) & 1 != 0;
@@ -270,43 +133,71 @@ fn get_ext4_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     Ok(Some(ans))
 }
 
-fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
-    let disk_size = {
-        File::open(path)
-            .expect("File cannot be opened")
-            .seek(SeekFrom::End(0))
-            .expect("failed to seek disk") as usize
-    };
-    let cfg = GptConfig::new().writable(false);
-    let disk = cfg.open(path);
-    if disk.is_err() {
-        return Ok(None);
+async fn save_chunk(os: UefiOS, server_address: Address, data: &[u8]) -> Result<ChunkHash> {
+    let hash = blake3::hash(data);
+    let hash_hex = hash.to_hex();
+
+    let resp = os
+        .http(
+            server_address.ip,
+            server_address.port,
+            HttpMethod::Get,
+            format!("/has_chunk/{}", hash_hex).as_bytes(),
+        )
+        .await?;
+    if resp == b"pass" {
+        return Ok(hash.as_bytes().to_owned());
     }
-    let disk = disk.unwrap();
+
+    os.http(
+        server_address.ip,
+        server_address.port,
+        HttpMethod::Post(data),
+        format!("/chunk/{}", hash_hex).as_bytes(),
+    )
+    .await?;
+
+    Ok(hash.as_bytes().to_owned())
+}
+
+async fn save_image(os: UefiOS, server_address: Address, image: &str, info: Image) -> Result<()> {
+    os.http(
+        server_address.ip,
+        server_address.port,
+        HttpMethod::Post(&serde_json::to_vec(&info)?),
+        image.as_bytes(),
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<!> {
+    let mut disk = os.open_first_disk();
+    let disk_size = disk.size() as usize;
+    let partitions = disk.partitions().expect("disk is not GPT");
+
     let mut pos = 0usize;
-    let mut ans = vec![];
-    for (id, partition) in disk.partitions().iter().enumerate() {
-        let name = format!("{path}p{}", id + 1);
-        // lba 512 byte
-        let begin = (partition.1.first_lba * 512) as usize;
-        let end = ((partition.1.last_lba + 1) * 512) as usize;
+    let mut chunks = vec![];
+    for (id, partition) in partitions.iter().enumerate() {
+        let begin = partition.byte_start as usize;
+        let end = partition.byte_end as usize;
 
         if pos < begin {
-            ans.push(ChunkInfo {
+            chunks.push(ChunkInfo {
                 start: pos,
                 size: (begin - pos),
             });
         }
 
-        if let Some(chunks) = get_ext4_chunks(&name)? {
-            for ChunkInfo { start, size } in chunks {
-                ans.push(ChunkInfo {
+        if let Some(e4chunks) = get_ext4_chunks(&disk, begin as u64, end as u64).await? {
+            for ChunkInfo { start, size } in e4chunks {
+                chunks.push(ChunkInfo {
                     start: start + begin,
                     size,
                 });
             }
         } else {
-            ans.push(ChunkInfo {
+            chunks.push(ChunkInfo {
                 start: begin,
                 size: (end - begin),
             });
@@ -316,48 +207,28 @@ fn get_disk_chunks(path: &str) -> Result<Option<Vec<ChunkInfo>>> {
     }
 
     if pos < disk_size {
-        ans.push(ChunkInfo {
+        chunks.push(ChunkInfo {
             start: pos,
             size: disk_size - pos,
         });
     }
 
-    Ok(Some(ans))
-}
-
-fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
-    let chunks = {
-        let disk_chunks = get_disk_chunks(path)?;
-        if let Some(chunks) = disk_chunks {
-            chunks
-        } else {
-            let ext4_chunks = get_ext4_chunks(path)?;
-            if let Some(chunks) = ext4_chunks {
-                chunks
-            } else {
-                let mut file = File::open(path)?;
-                let size = file.seek(SeekFrom::End(0))? as usize;
-                let start = 0;
-                vec![ChunkInfo { start, size }]
-            }
-        }
-    };
-
-    let mut out = Vec::<ChunkInfo>::new();
+    // Split up chunks.
+    let mut final_chunks = Vec::<ChunkInfo>::new();
     for ChunkInfo { mut start, size } in chunks {
         let end = start + size;
 
-        if let Some(last) = out.last() {
+        if let Some(last) = final_chunks.last() {
             assert!(last.start + last.size <= start);
             if last.start + last.size == start {
                 start = last.start;
-                out.pop();
+                final_chunks.pop();
             }
         }
 
         while start < end {
             let split = end.min((start / CHUNK_SIZE + 1) * CHUNK_SIZE);
-            out.push(ChunkInfo {
+            final_chunks.push(ChunkInfo {
                 start,
                 size: split - start,
             });
@@ -365,166 +236,51 @@ fn get_file_chunks(path: &str) -> Result<Vec<ChunkInfo>> {
         }
     }
 
-    Ok(out)
-}
+    let total = final_chunks.len();
 
-pub fn main() -> Result<()> {
-    let args = Options::parse();
+    let mut total_size = 0;
+    let mut total_csize = 0;
 
-    ensure!(!args.sources.is_empty(), "Specify at least one source");
-    ensure!(!args.destination.is_empty(), "Specify a destination");
-
-    let file_saver: Box<dyn FileSaver> =
-        if args.destination.starts_with("http://") || args.destination.starts_with("https://") {
-            Box::new(RemoteFileSaver::new(args.destination))
-        } else {
-            Box::new(LocalFileSaver::new(&args.destination)?)
-        };
-
-    let mut stdout = io::stdout().lock();
-
-    let mut info = Vec::new();
-
-    // TODO(veluca): parallelize.
-    for s in args.sources {
-        let chunks = get_file_chunks(&s)?;
-
-        let total_size: usize = chunks.iter().map(|x| x.size).sum();
-        println!("Total size: {}", total_size);
-
-        let mut file = File::open(&s)?;
-
-        let total = chunks.len();
-
-        let chunks: Result<Vec<_>> = chunks
-            .into_iter()
-            .enumerate()
-            .map(|(idx, chnk)| {
-                write!(
-                    stdout,
-                    " pushing chunk {idx} out of {total} from file '{s}'\r"
-                )?;
-                stdout.flush()?;
-
-                file.seek(SeekFrom::Start(chnk.start as u64))?;
-                let mut data = vec![0; chnk.size];
-                file.read_exact(&mut data)?;
-                let data = bulk::compress(&data, 1)?;
-                let hash = file_saver.save_chunk(&data)?;
-                Ok(Segment {
-                    hash,
-                    start: chnk.start,
-                    size: chnk.size,
-                    csize: data.len(),
-                })
-            })
-            .collect();
-        writeln!(stdout)?;
-
-        info.push(pixie_shared::File {
-            name: Path::new(&s).to_owned(),
-            chunks: chunks?,
-        });
+    let mut chunk_hashes = vec![];
+    for (idx, chnk) in final_chunks.into_iter().enumerate() {
+        info!("pushing chunk {idx} out of {total}; size {total_size}, csize {total_csize}");
+        let mut data = vec![0; chnk.size];
+        disk.read(chnk.start as u64, &mut data).await?;
+        // TODO(veluca): consider passing in the compression level.
+        // TODO(veluca): think about avoiding the compression step if the server already has the
+        // chunk.
+        let data = compress_to_vec(&data, 2);
+        let hash = save_chunk(os, server_address, &data).await?;
+        total_size += chnk.size;
+        total_csize += data.len();
+        chunk_hashes.push(Segment {
+            hash,
+            start: chnk.start,
+            size: chnk.size,
+            csize: data.len(),
+        })
     }
 
-    file_saver.save_image(info)
+    let bo = os.boot_options();
+    let boid = bo.order()[1];
+    let bo_command = bo.get(boid);
+
+    save_image(
+        os,
+        server_address,
+        &image,
+        Image {
+            boot_option_id: boid,
+            boot_entry: bo_command,
+            disk: chunk_hashes,
+        },
+    )
+    .await?;
+
+    info!(
+        "image saved at {:?}/{}. Total size {total_size}, total csize {total_csize}",
+        server_address, image
+    );
+
+    os.reset()
 }
-
-
-// This is in push, but parts are used (differently) by pull, too.
-use std::fs::{read, read_to_string, File};
-
-use anyhow::{ensure, Result};
-use clap::Parser;
-use serde_derive::{Deserialize, Serialize};
-
-#[derive(Parser, Debug)]
-struct Options {
-    #[clap(short, long, value_parser)]
-    boot_order_path: String,
-}
-
-fn current_boot_options() -> Result<Vec<u16>> {
-    let current_bo =
-        read("/sys/firmware/efi/efivars/BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c")?;
-    current_bo[4..]
-        .chunks(2)
-        .map(|x| Ok(u16::from_le_bytes(x.try_into()?)))
-        .collect()
-}
-
-fn set_boot_options(bo: Vec<u16>) -> Result<()> {
-    let bo = b"\x07\0\0\0"
-        .into_iter()
-        .copied()
-        .chain(bo.into_iter().flat_map(|x| x.to_le_bytes().into_iter()))
-        .collect::<Vec<_>>();
-    std::fs::write(
-        "/sys/firmware/efi/efivars/BootOrder-8be4df61-93ca-11d2-aa0d-00e098032b8c",
-        &bo,
-    )?;
-    Ok(())
-}
-
-fn read_boot_option(opt: u16) -> Result<Vec<u8>> {
-    Ok(read(&format!(
-        "/sys/firmware/efi/efivars/Boot{:04X}-8be4df61-93ca-11d2-aa0d-00e098032b8c",
-        opt
-    ))?)
-}
-
-fn write_boot_option(opt: u16, data: &Vec<u8>) -> Result<()> {
-    Ok(std::fs::write(
-        &format!(
-            "/sys/firmware/efi/efivars/Boot{:04X}-8be4df61-93ca-11d2-aa0d-00e098032b8c",
-            opt
-        ),
-        data,
-    )?)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BootOrder {
-    first_option: (u16, Vec<u8>),
-    second_option: (u16, Vec<u8>),
-}
-
-pub fn save_boot_order() -> Result<()> {
-    let args = Options::parse();
-    ensure!(!args.boot_order_path.is_empty(), "Specify a source");
-    let boot_options = current_boot_options()?;
-
-    let boot_order = BootOrder {
-        first_option: (boot_options[0], read_boot_option(boot_options[0])?),
-        second_option: (boot_options[1], read_boot_option(boot_options[1])?),
-    };
-
-    Ok(serde_json::to_writer(
-        File::create(args.boot_order_path)?,
-        &boot_order,
-    )?)
-}
-
-pub fn set_boot_order() -> Result<()> {
-    let args = Options::parse();
-    ensure!(!args.boot_order_path.is_empty(), "Specify a source");
-
-    let boot_order: BootOrder = serde_json::from_str(&read_to_string(args.boot_order_path)?)?;
-
-    write_boot_option(boot_order.first_option.0, &boot_order.first_option.1)?;
-    write_boot_option(boot_order.second_option.0, &boot_order.second_option.1)?;
-
-    let boot_options = current_boot_options()?;
-    let opts = [boot_order.first_option.0, boot_order.second_option.0]
-        .into_iter()
-        .chain(
-            boot_options
-                .into_iter()
-                .filter(|x| *x != boot_order.first_option.0 && *x != boot_order.second_option.0),
-        )
-        .collect::<Vec<_>>();
-
-    set_boot_options(opts)
-}
-
-*/

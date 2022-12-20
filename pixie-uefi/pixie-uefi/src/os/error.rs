@@ -1,3 +1,5 @@
+use core::fmt::{Display, Formatter};
+
 use alloc::{borrow::ToOwned, string::String};
 use smoltcp::socket::{
     tcp::{self, ConnectError, RecvError},
@@ -63,5 +65,11 @@ impl From<serde_json::Error> for Error {
 impl From<uefi::Error> for Error {
     fn from(c: uefi::Error) -> Self {
         Error::Uefi(c)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> core::result::Result<(), core::fmt::Error> {
+        write!(fmt, "{:?}", self)
     }
 }

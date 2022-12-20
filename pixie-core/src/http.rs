@@ -194,6 +194,7 @@ async fn upload_image(
     body: Bytes,
     state: Data<State>,
 ) -> io::Result<impl Responder> {
+    // TODO(veluca): check the chunks for validity.
     let path = state.storage_dir.join("images").join(&*name);
     fs::write(path, body)?;
     Ok("")
