@@ -282,5 +282,6 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         server_address, image
     );
 
+    os.sleep_us(10_000_000).await;
     os.reset()
 }
