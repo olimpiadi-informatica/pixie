@@ -7,7 +7,7 @@
 
 use os::{MessageKind, UefiOS};
 
-use pixie_shared::Action;
+use pixie_shared::{Action, UdpRequest};
 use uefi::prelude::*;
 
 use os::{error::Result, PACKET_SIZE};
@@ -32,7 +32,8 @@ async fn run(os: UefiOS) -> Result<()> {
         os.set_ui_drawer(|_| {});
 
         os.append_message("Sending request for command".into(), MessageKind::Info);
-        udp.send((255, 255, 255, 255), 25640, b"GA").await?;
+        let msg = serde_json::to_vec(&UdpRequest::GetAction).unwrap();
+        udp.send((255, 255, 255, 255), 25640, &msg).await?;
 
         let mut buf = [0; PACKET_SIZE];
         // TODO(veluca): add a timeout.
@@ -57,7 +58,8 @@ async fn run(os: UefiOS) -> Result<()> {
                     }
                 }
                 Action::Reboot => {
-                    udp.send(server.ip, server.port, b"NA").await?;
+                    let msg = serde_json::to_vec(&UdpRequest::ActionComplete).unwrap();
+                    udp.send(server.ip, server.port, &msg).await?;
                     udp.recv(&mut buf).await;
                     reboot_to_os(os).await;
                 }
@@ -73,7 +75,8 @@ async fn run(os: UefiOS) -> Result<()> {
         }
 
         // TODO: consider using tcp
-        udp.send(server.ip, server.port, b"NA").await?;
+        let msg = serde_json::to_vec(&UdpRequest::ActionComplete).unwrap();
+        udp.send(server.ip, server.port, &msg).await?;
         udp.recv(&mut buf).await;
     }
 }

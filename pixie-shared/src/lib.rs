@@ -71,3 +71,10 @@ pub enum Action {
     },
     Wait,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UdpRequest {
+    GetAction,
+    ActionComplete,
+    RequestChunks(Vec<ChunkHash>),
+}

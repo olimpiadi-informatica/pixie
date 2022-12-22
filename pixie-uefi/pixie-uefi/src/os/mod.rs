@@ -1,7 +1,7 @@
 use core::{
     cell::{Ref, RefCell, RefMut},
     ffi::c_void,
-    fmt::Write,
+    fmt::{self, Display, Write},
     future::{poll_fn, Future, PollFn},
     mem::transmute,
     ptr::NonNull,
@@ -58,8 +58,8 @@ pub use net::{HttpMethod, PACKET_SIZE};
 
 struct BytesFmt(u64);
 
-impl core::fmt::Display for BytesFmt {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl Display for BytesFmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0 < (1 << 10) {
             write!(f, "{}B", self.0)
         } else if self.0 < (1 << 20) {

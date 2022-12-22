@@ -12,7 +12,7 @@ use futures::future::{select, Either};
 
 use miniz_oxide::inflate::decompress_to_vec;
 
-use pixie_shared::{Address, Image, BODY_LEN, HEADER_LEN, PACKET_LEN};
+use pixie_shared::{Address, Image, UdpRequest, BODY_LEN, HEADER_LEN, PACKET_LEN};
 
 use crate::os::{
     error::{Error, Result},
@@ -225,20 +225,10 @@ pub async fn pull(
                 stats.borrow_mut().recv += 1;
             }
             Either::Right(((), _sleep)) => {
-                let mut buf = [0; PACKET_LEN];
-                let mut len = 2;
-                buf[..2].copy_from_slice(b"RB");
-                for (hash, _) in chunks_info.iter() {
-                    if len + 32 > PACKET_LEN {
-                        break;
-                    }
-                    buf[len..len + 32].copy_from_slice(hash);
-                    len += 32;
-                    stats.borrow_mut().requested += 1;
-                }
-                socket
-                    .send(udp_server.ip, udp_server.port, &buf[..len])
-                    .await?;
+                // TODO(virv): compute the number of chunks to request
+                let chunks = chunks_info.iter().take(10).map(|(hash, _)| *hash).collect();
+                let msg = serde_json::to_vec(&UdpRequest::RequestChunks(chunks)).unwrap();
+                socket.send(udp_server.ip, udp_server.port, &msg).await?;
             }
         }
     }
