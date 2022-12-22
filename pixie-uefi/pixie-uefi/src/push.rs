@@ -1,11 +1,13 @@
-use alloc::{string::String, vec::Vec};
-use log::info;
+use core::cell::RefCell;
+
+use alloc::{string::String, sync::Arc, vec::Vec};
 use pixie_shared::{Address, Image, Offset, Segment, CHUNK_SIZE};
 
 use blake3::Hash;
 use miniz_oxide::deflate::compress_to_vec;
+use uefi::proto::console::text::Color;
 
-use crate::os::{disk::Disk, error::Result, HttpMethod, UefiOS};
+use crate::os::{disk::Disk, error::Result, HttpMethod, MessageKind, UefiOS};
 
 #[derive(Debug)]
 struct ChunkInfo {
@@ -172,7 +174,43 @@ async fn save_image(os: UefiOS, server_address: Address, image: &str, info: Imag
     Ok(())
 }
 
+enum State {
+    ReadingPartitions,
+    PushingChunks {
+        cur: usize,
+        total: usize,
+        tsize: usize,
+        tcsize: usize,
+    },
+}
+
 pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<()> {
+    let stats = Arc::new(RefCell::new(State::ReadingPartitions));
+
+    let stats2 = stats.clone();
+    os.set_ui_drawer(move |os| match &*stats2.borrow() {
+        State::ReadingPartitions => {
+            os.write_with_color("Reading partitions...", Color::White, Color::Black)
+        }
+        State::PushingChunks {
+            cur,
+            total,
+            tsize,
+            tcsize,
+        } => {
+            os.write_with_color(
+                &format!("Pushed {} out of {} chunks\n", cur, total),
+                Color::White,
+                Color::Black,
+            );
+            os.write_with_color(
+                &format!("total size {}, compressed {}\n", tsize, tcsize),
+                Color::White,
+                Color::Black,
+            );
+        }
+    });
+
     let mut disk = os.open_first_disk();
     let disk_size = disk.size() as usize;
     let partitions = disk.partitions().expect("disk is not GPT");
@@ -244,7 +282,12 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
 
     let mut chunk_hashes = vec![];
     for (idx, chnk) in final_chunks.into_iter().enumerate() {
-        info!("pushing chunk {idx} out of {total}; size {total_size}, csize {total_csize}");
+        stats.replace(State::PushingChunks {
+            cur: idx,
+            total,
+            tsize: total_size,
+            tcsize: total_csize,
+        });
         let mut data = vec![0; chnk.size];
         disk.read(chnk.start as u64, &mut data).await?;
         let hash = blake3::hash(&data);
@@ -284,9 +327,12 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
     )
     .await?;
 
-    info!(
-        "image saved at {:?}{}. Total size {total_size}, total csize {total_csize}",
-        server_address, image
+    os.append_message(
+        format!(
+            "image saved at {:?}{}. Total size {total_size}, total csize {total_csize}",
+            server_address, image,
+        ),
+        MessageKind::Info,
     );
 
     Ok(())

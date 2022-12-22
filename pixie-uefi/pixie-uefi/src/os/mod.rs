@@ -1,6 +1,7 @@
 use core::{
     cell::{Ref, RefCell, RefMut},
     ffi::c_void,
+    fmt::Write,
     future::{poll_fn, Future, PollFn},
     mem::transmute,
     ptr::NonNull,
@@ -9,12 +10,15 @@ use core::{
 };
 
 use alloc::{
+    boxed::Box,
+    collections::VecDeque,
     string::{String, ToString},
     vec::Vec,
 };
 use uefi::{
     prelude::{BootServices, RuntimeServices},
     proto::{
+        console::text::{Color, Input, Key, Output},
         device_path::{
             build::DevicePathBuilder,
             text::{AllowShortcuts, DevicePathToText, DisplayOnly},
@@ -57,9 +61,25 @@ struct UefiOSImpl {
     runtime_services: &'static RuntimeServices,
     timer: Timer,
     rng: Rng,
+    input: Option<ScopedProtocol<'static, Input>>,
+    output: Option<ScopedProtocol<'static, Output<'static>>>,
     net: Option<NetworkInterface>,
+    messages: VecDeque<(String, MessageKind)>,
 }
 
+impl UefiOSImpl {
+    pub fn write_with_color(&mut self, msg: &str, fg: Color, bg: Color) {
+        self.output.as_mut().unwrap().set_color(fg, bg).unwrap();
+        write!(&mut self.output.as_mut().unwrap(), "{}", msg).unwrap();
+        self.output
+            .as_mut()
+            .unwrap()
+            .set_color(Color::White, Color::Black)
+            .unwrap();
+    }
+}
+
+static mut UI_DRAWER: RefCell<Option<Box<dyn Fn(UefiOS) + 'static>>> = RefCell::new(None);
 static mut OS: Option<RefCell<UefiOSImpl>> = None;
 static OS_CONSTRUCTED: AtomicBool = AtomicBool::new(false);
 
@@ -120,14 +140,27 @@ impl UefiOS {
                 runtime_services,
                 timer,
                 rng,
+                input: None,
+                output: None,
                 net: None,
+                messages: VecDeque::new(),
             }))
         }
 
         let net = NetworkInterface::new(UefiOS {});
 
+        let input = UefiOS {}
+            .open_handle(UefiOS {}.all_handles::<Input>().unwrap()[0])
+            .unwrap();
+
+        let output = UefiOS {}
+            .open_handle(UefiOS {}.all_handles::<Output>().unwrap()[0])
+            .unwrap();
+
         unsafe {
             OS.as_mut().unwrap().borrow_mut().net = Some(net);
+            OS.as_mut().unwrap().borrow_mut().input = Some(input);
+            OS.as_mut().unwrap().borrow_mut().output = Some(output);
         }
 
         Executor::init();
@@ -144,6 +177,13 @@ impl UefiOS {
             cx.waker().wake_by_ref();
             Poll::Pending
         }));
+
+        os.spawn(async {
+            loop {
+                UefiOS {}.draw_ui();
+                UefiOS {}.sleep_us(1_000_000).await;
+            }
+        });
 
         Executor::run()
     }
@@ -322,6 +362,99 @@ impl UefiOS {
         net::http(*self, ip, port, method, path).await
     }
 
+    pub async fn read_key(&self) -> Result<Key> {
+        Ok(poll_fn(move |cx| {
+            let key = self.os().borrow_mut().input.as_mut().unwrap().read_key();
+            if let Err(e) = key {
+                return Poll::Ready(Err(e));
+            }
+            let key = key.unwrap();
+            if let Some(key) = key {
+                return Poll::Ready(Ok(key));
+            }
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        })
+        .await?)
+    }
+
+    pub fn write_with_color(&self, msg: &str, fg: Color, bg: Color) {
+        self.os().borrow_mut().write_with_color(msg, fg, bg);
+    }
+
+    fn draw_ui(&self) {
+        // Write the header.
+        {
+            let time = self.timer().micros() / 1_000_000;
+            let ip = self.net().ip();
+            let mut os = self.os().borrow_mut();
+            os.output.as_mut().unwrap().clear().unwrap();
+            os.write_with_color(
+                &format!("uptime: {:10}s      ", time),
+                Color::White,
+                Color::Black,
+            );
+            if let Some(ip) = ip {
+                os.write_with_color(
+                    &format!("Connected, IP is {:?}\n", ip),
+                    Color::Cyan,
+                    Color::Black,
+                );
+            } else {
+                os.write_with_color("DHCP...\n", Color::Yellow, Color::Black);
+            }
+
+            os.write_with_color("\n", Color::Black, Color::Black);
+
+            // TODO(veluca): find a better solution.
+            let messages: Vec<_> = os.messages.iter().cloned().collect();
+
+            for (line, kind) in messages {
+                let fg_color = match kind {
+                    MessageKind::Info => Color::Cyan,
+                    MessageKind::Warning => Color::Yellow,
+                    MessageKind::Error => Color::Red,
+                };
+                os.write_with_color(&line, fg_color, Color::Black);
+                os.write_with_color("\n", Color::Black, Color::Black);
+            }
+            os.write_with_color("\n", Color::Black, Color::Black);
+        }
+        // SAFETY: there are no threads, and UI_DRAWER can never be modified (only its contents
+        // can, and RefCell protects that).
+        let ui_drawer = unsafe { UI_DRAWER.borrow_mut() };
+        if let Some(ui) = &*ui_drawer {
+            ui(*self);
+        }
+    }
+
+    pub fn force_ui_redraw(&self) {
+        if self.os().borrow().output.is_none() {
+            return;
+        }
+        self.draw_ui()
+    }
+
+    pub fn set_ui_drawer<F: Fn(UefiOS) + 'static>(&self, f: F) {
+        let f: Option<Box<dyn Fn(UefiOS)>> = Some(Box::new(f));
+        // SAFETY: there are no threads, and UI_DRAWER is never modified.
+        unsafe {
+            UI_DRAWER.replace(f);
+        }
+    }
+
+    pub fn append_message(&self, msg: String, kind: MessageKind) {
+        {
+            let mut os = self.os().borrow_mut();
+            os.messages.push_back((msg, kind));
+            const MAX_MESSAGES: usize = 5;
+            if os.messages.len() > MAX_MESSAGES {
+                os.messages.pop_front();
+            }
+        }
+        self.force_ui_redraw();
+    }
+
     /// Spawn a new task.
     pub fn spawn<Fut>(&self, f: Fut)
     where
@@ -337,4 +470,11 @@ impl UefiOS {
             None,
         )
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum MessageKind {
+    Info,
+    Warning,
+    Error,
 }

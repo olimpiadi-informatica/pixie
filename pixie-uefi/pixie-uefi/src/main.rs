@@ -5,14 +5,12 @@
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
-use os::UefiOS;
+use os::{MessageKind, UefiOS};
 
 use pixie_shared::Action;
 use uefi::prelude::*;
 
 use os::{error::Result, PACKET_SIZE};
-
-use log::info;
 
 use crate::{pull::pull, push::push, reboot_to_os::reboot_to_os, register::register};
 
@@ -26,18 +24,15 @@ mod register;
 extern crate alloc;
 
 async fn run(os: UefiOS) -> Result<()> {
-    info!("DHCP...");
-
-    os.wait_for_ip().await;
-
-    info!("Connected, IP is {:?}", os.net().ip().unwrap());
-
     // Local port does not matter.
     let udp = os.udp_bind(None).await?;
 
-    info!("Sending request for command");
+    os.append_message("Sending request for command".into(), MessageKind::Info);
 
     loop {
+        // Clear any UI drawer.
+        os.set_ui_drawer(|_| {});
+
         udp.send((255, 255, 255, 255), 25640, b"GA").await?;
 
         let mut buf = [0; PACKET_SIZE];
@@ -46,14 +41,17 @@ async fn run(os: UefiOS) -> Result<()> {
         let command = serde_json::from_slice::<Action>(data);
 
         if let Err(e) = command {
-            info!("Invalid action received: {}", e);
+            os.append_message(format!("Error receiving action: {e}"), MessageKind::Warning);
         } else {
             let command = command.unwrap();
-            info!("Command: {:?}", command);
+            os.append_message(format!("Command: {:?}", command), MessageKind::Info);
             match command {
                 Action::Wait => {
                     const WAIT_SECS: u64 = 5;
-                    info!("Waiting {WAIT_SECS}s for another command...");
+                    os.append_message(
+                        format!("Waiting {WAIT_SECS}s for another command..."),
+                        MessageKind::Warning,
+                    );
                     os.sleep_us(WAIT_SECS * 1_000_000).await;
                 }
                 Action::Reboot => {

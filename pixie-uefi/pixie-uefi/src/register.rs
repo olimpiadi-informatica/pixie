@@ -1,7 +1,7 @@
-use log::info;
 use pixie_shared::{Address, Station};
+use uefi::proto::console::text::Color;
 
-use crate::os::{error::Result, HttpMethod, UefiOS, PACKET_SIZE};
+use crate::os::{error::Result, HttpMethod, MessageKind, UefiOS, PACKET_SIZE};
 
 pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Result<()> {
     let udp = os.udp_bind(Some(hint_port)).await?;
@@ -11,6 +11,17 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
 
     // TODO(veluca): actual registration.
 
+    let hint2 = hint.clone();
+    os.set_ui_drawer(move |os| {
+        os.write_with_color(
+            &format!("Press a key to accept the hint: {:?}", hint2),
+            Color::White,
+            Color::Black,
+        );
+    });
+
+    os.append_message(format!("{:?}", os.read_key().await), MessageKind::Info);
+
     os.http(
         server_address.ip,
         server_address.port,
@@ -19,7 +30,10 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
     )
     .await?;
 
-    info!("Registration successful! {:?}", hint);
+    os.append_message(
+        format!("Registration successful! {:?}", hint),
+        MessageKind::Info,
+    );
 
     Ok(())
 }

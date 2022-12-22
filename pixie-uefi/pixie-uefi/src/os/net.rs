@@ -7,7 +7,6 @@ use alloc::{
     vec::Vec,
 };
 use futures::future::{select, try_join};
-use log::info;
 use managed::ManagedSlice;
 
 use smoltcp::{
@@ -32,7 +31,10 @@ use uefi::{
 
 use pixie_shared::Address;
 
-use super::error::{Error, Result};
+use super::{
+    error::{Error, Result},
+    MessageKind,
+};
 use super::{timer::Timer, UefiOS};
 
 pub const PACKET_SIZE: usize = 1514;
@@ -164,10 +166,13 @@ impl NetworkInterface {
         let bo = os.boot_options();
         let curopt = bo.get(bo.current());
         let (descr, device) = bo.boot_entry_info(&curopt[..]);
-        info!(
-            "Configuring network on interface used for booting ({} -- {})",
-            descr,
-            os.device_path_to_string(device)
+        os.append_message(
+            format!(
+                "Configuring network on interface used for booting ({} -- {})",
+                descr,
+                os.device_path_to_string(device),
+            ),
+            MessageKind::Info,
         );
         let mut device = SNPDevice::new(Box::leak(Box::new(
             os.open_protocol_on_device::<SimpleNetwork>(device).unwrap(),
@@ -221,7 +226,7 @@ impl NetworkInterface {
             .poll(now, &mut self.device, &mut self.socket_set);
         if let Err(err) = status {
             if err != smoltcp::Error::Unrecognized {
-                info!("net error: {:?}", err);
+                UefiOS {}.append_message(format!("net error: {:?}", err), MessageKind::Warning);
             }
             return false;
         }

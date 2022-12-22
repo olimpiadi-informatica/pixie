@@ -722,7 +722,6 @@ dependencies = [
  "core_detect",
  "futures",
  "gpt_disk_io",
- "log",
  "managed",
  "miniz_oxide",
  "pixie-shared",

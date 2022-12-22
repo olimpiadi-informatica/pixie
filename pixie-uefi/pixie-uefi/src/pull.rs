@@ -2,12 +2,13 @@ use alloc::{
     boxed::Box,
     collections::BTreeMap,
     string::{String, ToString},
+    sync::Arc,
     vec::Vec,
 };
-use core::mem;
+use core::{cell::RefCell, mem};
+use uefi::proto::console::text::Color;
 
 use futures::future::{select, Either};
-use log::info;
 
 use miniz_oxide::inflate::decompress_to_vec;
 
@@ -57,6 +58,14 @@ async fn fetch_image(os: UefiOS, server_address: Address, image: &str) -> Result
     Ok(serde_json::from_slice(&resp)?)
 }
 
+struct Stats {
+    chunks: usize,
+    unique: usize,
+    fetch: usize,
+    recv: usize,
+    requested: usize,
+}
+
 pub async fn pull(
     os: UefiOS,
     server_address: Address,
@@ -75,8 +84,42 @@ pub async fn pull(
             .push(chunk.start);
     }
 
-    let stat_chunks = image.disk.len();
-    let stat_unique = chunks_info.len();
+    let stats = Arc::new(RefCell::new(Stats {
+        chunks: image.disk.len(),
+        unique: chunks_info.len(),
+        fetch: 0,
+        recv: 0,
+        requested: 0,
+    }));
+
+    let stats2 = stats.clone();
+    os.set_ui_drawer(move |os| {
+        os.write_with_color(
+            &format!("{} total chunks\n", stats2.borrow().chunks),
+            Color::White,
+            Color::Black,
+        );
+        os.write_with_color(
+            &format!("{} unique chunks\n", stats2.borrow().unique),
+            Color::White,
+            Color::Black,
+        );
+        os.write_with_color(
+            &format!("{} chunks to fetch\n", stats2.borrow().fetch),
+            Color::White,
+            Color::Black,
+        );
+        os.write_with_color(
+            &format!("{} chunks received\n", stats2.borrow().recv),
+            Color::White,
+            Color::Black,
+        );
+        os.write_with_color(
+            &format!("{} chunks requested\n", stats2.borrow().requested),
+            Color::White,
+            Color::Black,
+        );
+    });
 
     let mut disk = os.open_first_disk();
 
@@ -98,16 +141,6 @@ pub async fn pull(
             chunks_info.insert(hash, (size, csize, pos));
         }
     }
-
-    let stat_fetch = chunks_info.len();
-
-    let mut stat_recv = 0usize;
-    let mut stat_requested = 0usize;
-
-    info!(
-        "Chunks: {} total, {} unique, {} to fetch, {} received, {} requested",
-        stat_chunks, stat_unique, stat_fetch, stat_recv, stat_requested
-    );
 
     let socket = os.udp_bind(Some(udp_recv_port)).await?;
     let mut buf = [0; PACKET_SIZE];
@@ -189,11 +222,7 @@ pub async fn pull(
                     disk.write(offset as u64, &data).await?;
                 }
 
-                stat_recv += 1;
-                info!(
-                    "Chunks: {} total, {} unique, {} to fetch, {} received, {} requested",
-                    stat_chunks, stat_unique, stat_fetch, stat_recv, stat_requested
-                );
+                stats.borrow_mut().recv += 1;
             }
             Either::Right(((), _sleep)) => {
                 let mut buf = [0; PACKET_LEN];
@@ -205,15 +234,11 @@ pub async fn pull(
                     }
                     buf[len..len + 32].copy_from_slice(hash);
                     len += 32;
-                    stat_requested += 1;
+                    stats.borrow_mut().requested += 1;
                 }
                 socket
                     .send(udp_server.ip, udp_server.port, &buf[..len])
                     .await?;
-                info!(
-                    "Chunks: {} total, {} unique, {} to fetch, {} received, {} requested",
-                    stat_chunks, stat_unique, stat_fetch, stat_recv, stat_requested
-                );
             }
         }
     }
