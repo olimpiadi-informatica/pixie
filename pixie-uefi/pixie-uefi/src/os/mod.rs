@@ -27,7 +27,7 @@ use uefi::{
         Protocol,
     },
     table::{
-        boot::{EventType, ScopedProtocol, Tpl},
+        boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
         runtime::{VariableAttributes, VariableVendor},
         Boot, SystemTable,
     },
@@ -235,6 +235,18 @@ impl UefiOS {
         })
     }
 
+    /// WARNING: this function halts all tasks
+    pub fn strong_sleep_us(&self, us: u64) {
+        let bs = self.os().borrow().boot_services;
+        // SAFETY: we are not using a callback
+        let e = unsafe {
+            bs.create_event(EventType::TIMER, Tpl::NOTIFY, None, None)
+                .unwrap()
+        };
+        bs.set_timer(&e, TimerTrigger::Relative(10 * us)).unwrap();
+        bs.wait_for_event(&mut [e]).unwrap();
+    }
+
     pub fn get_variable(
         &self,
         name: &str,
@@ -396,7 +408,7 @@ impl UefiOS {
             );
             if let Some(ip) = ip {
                 os.write_with_color(
-                    &format!("Connected, IP is {:?}\n", ip),
+                    &format!("Connected, IP is {}\n", ip),
                     Color::Cyan,
                     Color::Black,
                 );

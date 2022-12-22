@@ -52,7 +52,10 @@ async fn run(os: UefiOS) -> Result<()> {
                         format!("Waiting {WAIT_SECS}s for another command..."),
                         MessageKind::Warning,
                     );
-                    os.sleep_us(WAIT_SECS * 1_000_000).await;
+                    for _ in 0..WAIT_SECS * 10 {
+                        os.strong_sleep_us(99_990);
+                        os.sleep_us(10).await;
+                    }
                 }
                 Action::Reboot => {
                     udp.send(server.ip, server.port, b"NA").await?;
