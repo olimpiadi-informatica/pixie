@@ -56,6 +56,22 @@ use error::Result;
 
 pub use net::{HttpMethod, PACKET_SIZE};
 
+struct BytesFmt(u64);
+
+impl core::fmt::Display for BytesFmt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0 < (1 << 10) {
+            write!(f, "{}B", self.0)
+        } else if self.0 < (1 << 20) {
+            write!(f, "{:.2}KiB", self.0 as f64 / 1024.0)
+        } else if self.0 < (1 << 30) {
+            write!(f, "{:.2}MiB", self.0 as f64 / (1 << 20) as f64)
+        } else {
+            write!(f, "{:.2}GiB", self.0 as f64 / (1 << 30) as f64)
+        }
+    }
+}
+
 struct UefiOSImpl {
     boot_services: &'static BootServices,
     runtime_services: &'static RuntimeServices,
@@ -174,6 +190,21 @@ impl UefiOS {
             cx.waker().wake_by_ref();
             Poll::Pending
         }));
+
+        os.spawn(async {
+            let mut prx = 0;
+            let mut ptx = 0;
+            loop {
+                {
+                    let mut net = UefiOS {}.net();
+                    net.vrx = net.rx - prx;
+                    prx = net.rx;
+                    net.vtx = net.tx - ptx;
+                    ptx = net.tx;
+                }
+                UefiOS {}.sleep_us(1_000_000).await;
+            }
+        });
 
         os.spawn(async {
             loop {
@@ -420,10 +451,10 @@ impl UefiOS {
                 .unwrap()
                 .set_cursor_position(2 * cols / 3, 0)
                 .unwrap();
-            let rx = os.net.as_ref().unwrap().rx;
-            let tx = os.net.as_ref().unwrap().tx;
+            let vrx = os.net.as_ref().unwrap().vrx;
+            let vtx = os.net.as_ref().unwrap().vtx;
             os.write_with_color(
-                &format!("rx: {}B tx: {}B", rx, tx),
+                &format!("rx: {}/s tx: {}/s", BytesFmt(vrx), BytesFmt(vtx)),
                 Color::White,
                 Color::Black,
             );

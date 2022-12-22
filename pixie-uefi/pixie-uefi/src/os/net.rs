@@ -161,6 +161,8 @@ pub struct NetworkInterface {
     ephemeral_port_counter: u64,
     pub(super) rx: u64,
     pub(super) tx: u64,
+    pub(super) vrx: u64,
+    pub(super) vtx: u64,
 }
 
 impl NetworkInterface {
@@ -206,6 +208,8 @@ impl NetworkInterface {
             ephemeral_port_counter: os.rng().rand_u64(),
             rx: 0,
             tx: 0,
+            vrx: 0,
+            vtx: 0,
         }
     }
 
