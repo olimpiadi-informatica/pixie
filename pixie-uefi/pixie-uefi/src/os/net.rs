@@ -159,6 +159,8 @@ pub struct NetworkInterface {
     socket_set: SocketSet<'static>,
     dhcp_socket_handle: SocketHandle,
     ephemeral_port_counter: u64,
+    pub(super) rx: u64,
+    pub(super) tx: u64,
 }
 
 impl NetworkInterface {
@@ -202,6 +204,8 @@ impl NetworkInterface {
             device,
             socket_set,
             ephemeral_port_counter: os.rng().rand_u64(),
+            rx: 0,
+            tx: 0,
         }
     }
 
@@ -360,8 +364,10 @@ impl TcpStream {
             pos += sent.unwrap();
             if pos < data.len() {
                 socket.register_send_waker(cx.waker());
+                net.tx += sent.unwrap() as u64;
                 Poll::Pending
             } else {
+                net.tx += sent.unwrap() as u64;
                 Poll::Ready(Ok(()))
             }
         });
@@ -395,6 +401,7 @@ impl TcpStream {
                 socket.register_recv_waker(cx.waker());
                 Poll::Pending
             } else {
+                net.rx += recvd.unwrap() as u64;
                 Poll::Ready(Ok(recvd.unwrap()))
             }
         })
@@ -478,6 +485,7 @@ impl UdpHandle {
                 Poll::Pending
             } else {
                 let status = socket.send_slice(data, endpoint);
+                net.tx = net.tx.wrapping_add(data.len() as u64);
                 Poll::Ready(status)
             }
         })
@@ -505,6 +513,8 @@ impl UdpHandle {
             }
         })
         .await;
+
+        os.net().rx += len as u64;
 
         (&mut buf[..len], addr)
     }

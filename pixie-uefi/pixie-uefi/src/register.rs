@@ -20,7 +20,7 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
         );
     });
 
-    os.append_message(format!("{:?}", os.read_key().await), MessageKind::Info);
+    os.append_message(format!("{:?}", os.read_key().await), MessageKind::Debug);
 
     os.http(
         server_address.ip,

@@ -69,13 +69,10 @@ struct UefiOSImpl {
 
 impl UefiOSImpl {
     pub fn write_with_color(&mut self, msg: &str, fg: Color, bg: Color) {
-        self.output.as_mut().unwrap().set_color(fg, bg).unwrap();
-        write!(&mut self.output.as_mut().unwrap(), "{}", msg).unwrap();
-        self.output
-            .as_mut()
-            .unwrap()
-            .set_color(Color::White, Color::Black)
-            .unwrap();
+        let output = self.output.as_mut().unwrap();
+        output.set_color(fg, bg).unwrap();
+        write!(output, "{}", msg).unwrap();
+        output.set_color(Color::White, Color::Black).unwrap();
     }
 }
 
@@ -400,30 +397,50 @@ impl UefiOS {
             let time = self.timer().micros() / 1_000_000;
             let ip = self.net().ip();
             let mut os = self.os().borrow_mut();
+
+            let mode = os.output.as_mut().unwrap().current_mode().unwrap().unwrap();
+            let (cols, rows) = (mode.columns(), mode.rows());
+
             os.output.as_mut().unwrap().clear().unwrap();
+            os.write_with_color(&format!("uptime: {:10}s", time), Color::White, Color::Black);
+
+            os.output
+                .as_mut()
+                .unwrap()
+                .set_cursor_position(cols / 3, 0)
+                .unwrap();
+            if let Some(ip) = ip {
+                os.write_with_color(&format!("IP: {}", ip), Color::White, Color::Black);
+            } else {
+                os.write_with_color("DHCP...", Color::Yellow, Color::Black);
+            }
+
+            os.output
+                .as_mut()
+                .unwrap()
+                .set_cursor_position(2 * cols / 3, 0)
+                .unwrap();
+            let rx = os.net.as_ref().unwrap().rx;
+            let tx = os.net.as_ref().unwrap().tx;
             os.write_with_color(
-                &format!("uptime: {:10}s      ", time),
+                &format!("rx: {}B tx: {}B", rx, tx),
                 Color::White,
                 Color::Black,
             );
-            if let Some(ip) = ip {
-                os.write_with_color(
-                    &format!("Connected, IP is {}\n", ip),
-                    Color::Cyan,
-                    Color::Black,
-                );
-            } else {
-                os.write_with_color("DHCP...\n", Color::Yellow, Color::Black);
-            }
 
-            os.write_with_color("\n", Color::Black, Color::Black);
+            os.output
+                .as_mut()
+                .unwrap()
+                .set_cursor_position(0, 2)
+                .unwrap();
 
             // TODO(veluca): find a better solution.
             let messages: Vec<_> = os.messages.iter().cloned().collect();
 
             for (line, kind) in messages {
                 let fg_color = match kind {
-                    MessageKind::Info => Color::Cyan,
+                    MessageKind::Debug => Color::LightGray,
+                    MessageKind::Info => Color::White,
                     MessageKind::Warning => Color::Yellow,
                     MessageKind::Error => Color::Red,
                 };
@@ -486,6 +503,7 @@ impl UefiOS {
 
 #[derive(Clone, Copy)]
 pub enum MessageKind {
+    Debug,
     Info,
     Warning,
     Error,

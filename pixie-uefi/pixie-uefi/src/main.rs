@@ -27,12 +27,11 @@ async fn run(os: UefiOS) -> Result<()> {
     // Local port does not matter.
     let udp = os.udp_bind(None).await?;
 
-    os.append_message("Sending request for command".into(), MessageKind::Info);
-
     loop {
         // Clear any UI drawer.
         os.set_ui_drawer(|_| {});
 
+        os.append_message("Sending request for command".into(), MessageKind::Info);
         udp.send((255, 255, 255, 255), 25640, b"GA").await?;
 
         let mut buf = [0; PACKET_SIZE];
