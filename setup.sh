@@ -4,8 +4,8 @@ set -xe
 cd "$(realpath "$(dirname "$0")")"
 
 pushd pixie-uefi/pixie-uefi
-cargo +nightly build --release --target x86_64-unknown-uefi
-upx --best  target/x86_64-unknown-uefi/release/uefi_app.efi
+cargo build --release
+upx --best target/x86_64-unknown-uefi/release/uefi_app.efi
 popd
 
 pushd pixie-core
