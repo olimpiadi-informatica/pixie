@@ -2,10 +2,7 @@ use std::{
     error::Error,
     fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use actix_files::Files;
@@ -205,34 +202,6 @@ async fn upload_image(
     Ok("")
 }
 
-#[get("/chunk/{hash}")]
-async fn get_chunk(hash: Path<String>, state: Data<State>) -> io::Result<impl Responder> {
-    static CONN: AtomicUsize = AtomicUsize::new(0);
-
-    struct Handle;
-
-    impl Handle {
-        fn new(limit: usize) -> Option<Self> {
-            CONN.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                (x < limit).then_some(x + 1)
-            })
-            .is_ok()
-            .then_some(Handle)
-        }
-    }
-
-    impl Drop for Handle {
-        fn drop(&mut self) {
-            CONN.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-
-    match Handle::new(12) {
-        Some(_handle) => Ok(fs::read(state.storage_dir.join("chunks").join(&*hash))?.customize()),
-        None => Ok(Vec::new().customize().with_status(StatusCode::IM_A_TEAPOT)),
-    }
-}
-
 pub async fn main(state: Arc<State>) -> Result<()> {
     let Config {
         max_payload,
@@ -251,7 +220,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(upload_chunk)
             .service(upload_image)
             .service(Files::new("/image", &images))
-            .service(get_chunk)
             .service(register)
             .service(action)
     })

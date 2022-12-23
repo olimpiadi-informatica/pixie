@@ -15,13 +15,13 @@ pub type ChunkHash = [u8; OUT_LEN];
 /// The offset of the chunk of a disk.
 pub type Offset = usize;
 
-/// Describes one segment from a disk.
+/// Describes one chunk from a disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Segment {
+pub struct Chunk {
     pub hash: ChunkHash,
     pub start: Offset,
     pub size: usize,
-    /// size after compression
+    /// Compressed size
     pub csize: usize,
 }
 
@@ -31,7 +31,7 @@ pub struct Segment {
 pub struct Image {
     pub boot_option_id: u16,
     pub boot_entry: Vec<u8>,
-    pub disk: Vec<Segment>,
+    pub disk: Vec<Chunk>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

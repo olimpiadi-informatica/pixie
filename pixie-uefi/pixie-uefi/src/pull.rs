@@ -142,6 +142,8 @@ pub async fn pull(
         }
     }
 
+    stats.borrow_mut().fetch = chunks_info.len();
+
     let socket = os.udp_bind(Some(udp_recv_port)).await?;
     let mut buf = [0; PACKET_SIZE];
 
@@ -226,7 +228,8 @@ pub async fn pull(
             }
             Either::Right(((), _sleep)) => {
                 // TODO(virv): compute the number of chunks to request
-                let chunks = chunks_info.iter().take(10).map(|(hash, _)| *hash).collect();
+                let chunks: Vec<_> = chunks_info.iter().take(10).map(|(hash, _)| *hash).collect();
+                stats.borrow_mut().requested += chunks.len();
                 let msg = serde_json::to_vec(&UdpRequest::RequestChunks(chunks)).unwrap();
                 socket.send(udp_server.ip, udp_server.port, &msg).await?;
             }

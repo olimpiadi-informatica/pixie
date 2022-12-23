@@ -13,8 +13,6 @@ use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use serde_derive::Deserialize;
 
-use crate::http;
-
 #[derive(Debug, Eq, PartialEq, Deserialize)]
 pub struct Net {
     /// IP range for dhcp server
@@ -36,7 +34,7 @@ pub struct DnsmasqHandle {
 }
 
 impl DnsmasqHandle {
-    pub fn from_config(storage_dir: &Path, cfg: &Config, _http_cfg: &http::Config) -> Result<Self> {
+    pub fn from_config(storage_dir: &Path, cfg: &Config) -> Result<Self> {
         let storage_str = storage_dir.to_str().unwrap();
 
         ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");

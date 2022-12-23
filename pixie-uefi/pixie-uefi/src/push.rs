@@ -1,12 +1,11 @@
 use core::cell::RefCell;
-
 use alloc::{string::String, sync::Arc, vec::Vec};
-use pixie_shared::{Address, Image, Offset, Segment, CHUNK_SIZE};
 
 use blake3::Hash;
 use miniz_oxide::deflate::compress_to_vec;
 use uefi::proto::console::text::Color;
 
+use pixie_shared::{Address, Image, Offset, Chunk, CHUNK_SIZE};
 use crate::os::{disk::Disk, error::Result, HttpMethod, MessageKind, UefiOS};
 
 #[derive(Debug)]
@@ -303,7 +302,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
 
         total_size += chnk.size;
         total_csize += csize;
-        chunk_hashes.push(Segment {
+        chunk_hashes.push(Chunk {
             hash: hash.into(),
             start: chnk.start,
             size: chnk.size,

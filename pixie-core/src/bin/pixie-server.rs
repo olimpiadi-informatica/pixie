@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, sync::Mutex};
+use std::{fs::File, path::PathBuf, sync::Arc, sync::Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -9,7 +9,8 @@ use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, Config, State, Unit};
 
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
-    /// Folder in which files will be stored. Must already contain a tftpboot/ipxe.efi file.
+    /// Directory in which files will be stored.
+    /// Must already contain files: tftpboot/uefi_app.efi, config.yaml
     #[clap(short, long, default_value = "./storage")]
     storage_dir: PathBuf,
 }
@@ -41,14 +42,13 @@ async fn main() -> Result<()> {
     }
 
     let config_path = options.storage_dir.join("config.yaml");
-    let config = std::fs::File::open(&config_path)
+    let config = File::open(&config_path)
         .with_context(|| format!("open config file: {}", config_path.display()))?;
     let config: Config = serde_yaml::from_reader(&config)
         .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
-    let mut dnsmasq_handle =
-        DnsmasqHandle::from_config(&options.storage_dir, &config.dnsmasq, &config.http)
-            .context("Error start dnsmasq")?;
+    let mut dnsmasq_handle = DnsmasqHandle::from_config(&options.storage_dir, &config.dnsmasq)
+        .context("Error start dnsmasq")?;
 
     let data = std::fs::read(options.storage_dir.join("registered.json"));
     let units: Vec<Unit> = data
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
 
     tokio::select!(
         x = http::main(state.clone()) => x?,
-        x = udp::main(state) => x?,
+        x = udp::main(&state) => x?,
     );
 
     Ok(())

@@ -4,7 +4,6 @@ name = "uefi_app"
 version = "0.1.0"
 
 [dependencies]
-uefi-services = { path = "../uefi-rs/uefi-services" }
 managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 rand = { version = "0.8.5", default-features = false }
 rand_xoshiro = { version = "0.6.0", default-features = false }
@@ -17,14 +16,25 @@ miniz_oxide = { version = "0.6.2", features = ["simd"] }
 blake3 = { version = "1.3.3", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
 
 [dependencies.uefi]
+version = "0.18.0"
 features = ["alloc"]
-path = "../uefi-rs/uefi" 
+# path = "../uefi-rs/uefi"
+
+[dependencies.uefi-services]
+version = "0.15.0"
+# path = "../uefi-rs/uefi-services"
 
 [dependencies.smoltcp]
-path = "../smoltcp"
+version = "0.8.1"
+# path = "../smoltcp"
 default-features = false
 features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async"]
 
 [profile.release]
 panic = "abort"
 opt-level = "s"
+
+[patch.crates-io]
+uefi = { path = "../uefi-rs/uefi" }
+uefi-services = { path = "../uefi-rs/uefi-services" }
+smoltcp = { path = "../smoltcp" }

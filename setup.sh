@@ -5,7 +5,7 @@ cd "$(realpath "$(dirname "$0")")"
 
 pushd pixie-uefi/pixie-uefi
 cargo +nightly build --release --target x86_64-unknown-uefi
-upx --best  ../target/x86_64-unknown-uefi/release/uefi_app.efi
+upx --best  target/x86_64-unknown-uefi/release/uefi_app.efi
 popd
 
 pushd pixie-core
@@ -13,7 +13,7 @@ cargo build --release
 popd
 
 mkdir -p storage/tftpboot
-cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
+cp pixie-uefi/pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
 
 mkdir -p storage/images storage/chunks
 

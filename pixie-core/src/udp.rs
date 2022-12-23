@@ -4,7 +4,6 @@ use std::{
     fs,
     net::{IpAddr, SocketAddrV4},
     ops::Bound,
-    sync::Arc,
 };
 
 use tokio::{
@@ -267,7 +266,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
                 for hash in chunks {
-                    tx.send(hash.try_into().unwrap()).await?;
+                    tx.send(hash).await?;
                 }
             }
             Err(e) => {
@@ -277,7 +276,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
     }
 }
 
-pub async fn main(state: Arc<State>) -> Result<()> {
+pub async fn main(state: &State) -> Result<()> {
     let (tx, rx) = mpsc::channel(128);
     let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
     socket.set_broadcast(true)?;
