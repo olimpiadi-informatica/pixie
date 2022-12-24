@@ -67,7 +67,7 @@ impl Disk {
                         return true;
                     }
                 }
-                return false;
+                false
             })
             .expect("Disk not found");
 

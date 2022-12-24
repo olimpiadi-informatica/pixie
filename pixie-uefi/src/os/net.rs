@@ -313,7 +313,7 @@ impl TcpStream {
 
         ret.wait_for_state(|state| match state {
             State::Established => Some(Ok(())),
-            State::Closed => return Some(Err(Error::msg("connection refused"))),
+            State::Closed => Some(Err(Error::msg("connection refused"))),
             _ => None,
         })
         .await?;
@@ -346,7 +346,7 @@ impl TcpStream {
 
     async fn fail_if_closed(&self) -> Result<()> {
         self.wait_until_closed().await;
-        return Err(Error::msg("connection closed"));
+        Err(Error::msg("connection closed"))
     }
 
     pub async fn send(&self, data: &[u8]) -> Result<()> {
@@ -362,8 +362,8 @@ impl TcpStream {
             let mut net = os.net();
             let socket = net.socket_set.get_mut::<TcpSocket>(handle);
             let sent = socket.send_slice(&data[pos..]);
-            if sent.is_err() {
-                return Poll::Ready(Err(Error::TcpSend(sent.unwrap_err())));
+            if let Err(err) = sent {
+                return Poll::Ready(Err(Error::TcpSend(err)));
             }
             pos += sent.unwrap();
             if pos < data.len() {
@@ -398,8 +398,8 @@ impl TcpStream {
             if recvd == Err(smoltcp::socket::tcp::RecvError::Finished) {
                 return Poll::Ready(Ok(0));
             }
-            if recvd.is_err() {
-                return Poll::Ready(Err(Error::Recv(recvd.unwrap_err())));
+            if let Err(err) = recvd {
+                return Poll::Ready(Err(Error::Recv(err)));
             }
             if recvd.unwrap() == 0 {
                 socket.register_recv_waker(cx.waker());
@@ -557,10 +557,8 @@ pub async fn http<'a>(
             HttpMethod::Post(data) => {
                 tcp.send(b"POST ").await?;
                 tcp.send(path).await?;
-                tcp.send(
-                    &format!(" HTTP/1.0\r\nContent-Length: {}\r\n\r\n", data.len()).as_bytes(),
-                )
-                .await?;
+                tcp.send(format!(" HTTP/1.0\r\nContent-Length: {}\r\n\r\n", data.len()).as_bytes())
+                    .await?;
                 tcp.send(data).await?;
             }
         }

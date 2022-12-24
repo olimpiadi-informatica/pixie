@@ -15,7 +15,7 @@ use tokio::{
 use anyhow::{anyhow, bail, ensure, Result};
 use serde::Deserialize;
 
-use pixie_shared::{Action, Address, Station, UdpRequest, BODY_LEN, PACKET_LEN};
+use pixie_shared::{Action, Address, HintPacket, Station, UdpRequest, BODY_LEN, PACKET_LEN};
 
 use crate::{find_interface_ip, find_mac, ActionKind, State, Unit};
 
@@ -171,7 +171,10 @@ fn compute_hint(state: &State) -> Result<Station> {
 
 async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
     loop {
-        let hint = compute_hint(state)?;
+        let hint = HintPacket {
+            station: compute_hint(state)?,
+            images: state.config.images.clone(),
+        };
         let data = serde_json::to_vec(&hint)?;
         socket
             .send_to(&data, state.config.udp.hint_broadcast)

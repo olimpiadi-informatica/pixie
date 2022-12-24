@@ -42,6 +42,12 @@ pub struct Station {
     pub image: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HintPacket {
+    pub station: Station,
+    pub images: Vec<String>,
+}
+
 pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;

@@ -12,7 +12,7 @@ use futures::future::{select, Either};
 
 use miniz_oxide::inflate::decompress_to_vec;
 
-use pixie_shared::{Address, Image, UdpRequest, BODY_LEN, HEADER_LEN, PACKET_LEN};
+use pixie_shared::{Address, Image, UdpRequest, BODY_LEN, HEADER_LEN};
 
 use crate::os::{
     error::{Error, Result},
@@ -123,7 +123,7 @@ pub async fn pull(
 
     let mut disk = os.open_first_disk();
 
-    for (hash, (size, csize, pos)) in mem::replace(&mut chunks_info, BTreeMap::new()) {
+    for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
         let mut data = false;
         let mut buf = vec![0; size];
         for &offset in &pos {
@@ -151,7 +151,7 @@ pub async fn pull(
 
     while !chunks_info.is_empty() {
         let recv = Box::pin(socket.recv(&mut buf));
-        let sleep = Box::pin(os.sleep_us(1000_000));
+        let sleep = Box::pin(os.sleep_us(1_000_000));
         match select(recv, sleep).await {
             Either::Left(((buf, _addr), _)) => {
                 assert!(buf.len() >= 34);

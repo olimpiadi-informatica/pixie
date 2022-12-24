@@ -430,7 +430,7 @@ impl UefiOS {
             let mut os = self.os().borrow_mut();
 
             let mode = os.output.as_mut().unwrap().current_mode().unwrap().unwrap();
-            let (cols, rows) = (mode.columns(), mode.rows());
+            let (cols, _rows) = (mode.columns(), mode.rows());
 
             os.output.as_mut().unwrap().clear().unwrap();
             os.write_with_color(&format!("uptime: {:10}s", time), Color::White, Color::Black);
