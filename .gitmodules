@@ -1,7 +1,0 @@
-[submodule "pixie-uefi/uefi-rs"]
-	path = pixie-uefi/uefi-rs
-	url = https://github.com/veluca93/uefi-rs
-	branch = snp
-[submodule "pixie-uefi/smoltcp"]
-	path = pixie-uefi/smoltcp
-	url = https://github.com/smoltcp-rs/smoltcp

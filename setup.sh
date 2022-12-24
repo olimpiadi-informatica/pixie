@@ -3,7 +3,7 @@ set -xe
 
 cd "$(realpath "$(dirname "$0")")"
 
-pushd pixie-uefi/pixie-uefi
+pushd pixie-uefi
 cargo build --release
 upx --best target/x86_64-unknown-uefi/release/uefi_app.efi
 popd
@@ -13,7 +13,7 @@ cargo build --release
 popd
 
 mkdir -p storage/tftpboot
-cp pixie-uefi/pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
+cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
 
 mkdir -p storage/images storage/chunks
 

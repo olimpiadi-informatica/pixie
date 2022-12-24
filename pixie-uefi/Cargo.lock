@@ -459,6 +459,7 @@ checksum = "14a5df39617d7c8558154693a1bb8157a4aab8179209540cc0b10e5dc24e0b18"
 [[package]]
 name = "smoltcp"
 version = "0.8.1"
+source = "git+https://github.com/smoltcp-rs/smoltcp?rev=0e614bc6cca8b97a1a11c27154f76221c5403739#0e614bc6cca8b97a1a11c27154f76221c5403739"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -506,6 +507,7 @@ dependencies = [
 [[package]]
 name = "uefi"
 version = "0.18.0"
+source = "git+https://github.com/veluca93/uefi-rs?branch=snp#56db749254f4452e8fdf9f3a20a04898866f7384"
 dependencies = [
  "bitflags",
  "log",
@@ -527,6 +529,7 @@ dependencies = [
 [[package]]
 name = "uefi-services"
 version = "0.15.0"
+source = "git+https://github.com/veluca93/uefi-rs?branch=snp#56db749254f4452e8fdf9f3a20a04898866f7384"
 dependencies = [
  "cfg-if",
  "log",
