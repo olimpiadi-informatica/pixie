@@ -3,86 +3,24 @@ pub mod http;
 pub mod udp;
 
 use std::{
-    collections::BTreeMap,
     io::{BufRead, BufReader},
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    str::FromStr,
     sync::Mutex,
 };
 
-use anyhow::{anyhow, bail, Error, Result};
+use anyhow::{anyhow, bail, Result};
 use interfaces::Interface;
 use macaddr::MacAddr6;
-use serde::{Deserialize, Serialize};
 
-use pixie_shared::Station;
+use pixie_shared::{ActionKind, PersistentServerState, Station};
 
 use dnsmasq::DnsmasqHandle;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ActionKind {
-    Reboot,
-    Register,
-    Push,
-    Pull,
-    Wait,
-}
-
-impl FromStr for ActionKind {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "reboot" => Ok(ActionKind::Reboot),
-            "register" => Ok(ActionKind::Register),
-            "push" => Ok(ActionKind::Push),
-            "pull" => Ok(ActionKind::Pull),
-            "wait" => Ok(ActionKind::Wait),
-            _ => bail!("unknown action kind: {}", s),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Unit {
-    pub mac: MacAddr6,
-    pub group: u8,
-    pub row: u8,
-    pub col: u8,
-    pub curr_action: Option<ActionKind>,
-    pub next_action: ActionKind,
-    pub image: String,
-}
-
-impl Unit {
-    pub fn ip(&self) -> Ipv4Addr {
-        Ipv4Addr::new(10, self.group, self.row, self.col)
-    }
-}
-
-#[derive(Debug, Deserialize, Clone, Copy)]
-pub struct BootConfig {
-    pub unregistered: ActionKind,
-    pub default: ActionKind,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    pub dnsmasq: dnsmasq::Config,
-    pub http: http::Config,
-    pub udp: udp::Config,
-    pub boot: BootConfig,
-    pub groups: BTreeMap<String, u8>,
-    pub images: Vec<String>,
-}
-
 pub struct State {
     pub storage_dir: PathBuf,
-    pub config: Config,
-    pub units: Mutex<Vec<Unit>>,
+    pub persistent: Mutex<PersistentServerState>,
     pub dnsmasq_handle: Mutex<DnsmasqHandle>,
     pub last: Mutex<Station>,
 }

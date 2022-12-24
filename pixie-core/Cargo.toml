@@ -25,3 +25,4 @@ tokio = { version = "1.22.0", features = ["macros"] }
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"
+features = ["std"]

@@ -1,32 +1,14 @@
 use std::{
     fs::File,
-    io::{Error, Seek, SeekFrom, Write},
-    net::Ipv4Addr,
+    io::{Error, Write},
     path::Path,
     process::{Child, Command},
-    thread,
     time::Duration,
 };
 
-use anyhow::{bail, ensure, Result};
-use ipnet::Ipv4Net;
-use macaddr::MacAddr6;
-use serde_derive::Deserialize;
+use anyhow::Result;
 
-#[derive(Debug, Eq, PartialEq, Deserialize)]
-pub struct Net {
-    /// IP range for dhcp server
-    pub netaddr: Option<Ipv4Net>,
-    /// Address for proxy-dhcp
-    pub proxy: Option<Ipv4Addr>,
-    /// Name of the interface this network is served on.
-    pub interface: String,
-}
-
-#[derive(Debug, Eq, PartialEq, Deserialize)]
-pub struct Config {
-    pub networks: Vec<Net>,
-}
+use pixie_shared::{DhcpConfig, DhcpMode, Unit, STATIC_IP_USERCLASS, UNASSIGNED_GROUP_ID};
 
 pub struct DnsmasqHandle {
     child: Child,
@@ -34,29 +16,19 @@ pub struct DnsmasqHandle {
 }
 
 impl DnsmasqHandle {
-    pub fn from_config(storage_dir: &Path, cfg: &Config) -> Result<Self> {
+    pub fn from_config(storage_dir: &Path, cfg: &DhcpConfig) -> Result<Self> {
         let storage_str = storage_dir.to_str().unwrap();
 
-        ensure!(cfg.networks.len() == 1, "Not implemented: >1 network");
-        let net = &cfg.networks[0];
-
-        let name = &net.interface;
-        let netid = 0;
+        let name = &cfg.interface;
 
         let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
         let hosts = File::create(storage_dir.join("hosts"))?;
 
-        let (ip, magic_line) = match (net.netaddr, net.proxy) {
-            (Some(net), None) => {
-                let begin = net.network();
-                let end = net.broadcast();
-                (
-                    net.addr(),
-                    format!("dhcp-range=set:net{netid},{begin},{end}"),
-                )
+        let dhcp_dynamic_conf = match cfg.mode {
+            DhcpMode::Static => {
+                format!("dhcp-range=10.{UNASSIGNED_GROUP_ID}.0.1,10.{UNASSIGNED_GROUP_ID}.0.100")
             }
-            (None, Some(ip)) => (ip, format!("dhcp-range=set:net{netid},{ip},proxy")),
-            _ => bail!("specify exactly one between netaddr or proxy"),
+            DhcpMode::Proxy(ip) => format!("dhcp-range={},proxy", ip),
         };
 
         write!(
@@ -65,10 +37,11 @@ impl DnsmasqHandle {
 ### Per-network configuration
 
 ## net0
-{magic_line}
-dhcp-range=set:net{netid},10.0.0.0,static
+{dhcp_dynamic_conf}
+dhcp-range=tag:staticip,10.0.0.0,static
+dhcp-userclass=set:staticip,{STATIC_IP_USERCLASS}
 dhcp-hostsfile={storage_str}/hosts
-dhcp-boot=uefi_app.efi,,{ip}
+dhcp-boot=uefi_app.efi
 interface={name}
 except-interface=lo
 user=root
@@ -92,22 +65,20 @@ pxe-prompt="pixie",1
             .arg("--no-daemon")
             .spawn()?;
 
-        // TODO: better check
-        // removing the sleep causes dnsmasq to die
-        thread::sleep(Duration::from_secs(1));
+        // Without this sleep line, dnsmasq does not produce any output.
+        std::thread::sleep(Duration::from_secs(1));
         assert!(child.try_wait()?.is_none());
 
         Ok(DnsmasqHandle { child, hosts })
     }
 
-    pub fn write_host(&mut self, idx: usize, mac: MacAddr6, ip: Ipv4Addr) -> Result<()> {
-        let size = 3 * 6 + 4 * 4;
-        self.hosts.seek(SeekFrom::Start((idx * size) as u64))?;
-        writeln!(self.hosts, "{},{:15}", mac, ip)?;
-        Ok(())
-    }
-
-    pub fn send_sighup(&mut self) -> Result<()> {
+    pub fn set_hosts(&mut self, hosts: &Vec<Unit>) -> Result<()> {
+        self.hosts.set_len(0)?;
+        for host in hosts {
+            let mac = host.mac;
+            let ip = host.static_ip();
+            writeln!(self.hosts, "tag:{STATIC_IP_USERCLASS},{},{}", mac, ip)?;
+        }
         let r = unsafe { libc::kill(self.child.id().try_into().unwrap(), libc::SIGHUP) };
         if r < 0 {
             return Err(Error::last_os_error().into());

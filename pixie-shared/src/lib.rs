@@ -1,10 +1,13 @@
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
 use blake3::OUT_LEN;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "std")]
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 pub const CHUNK_SIZE: usize = 1 << 22;
 
@@ -52,10 +55,23 @@ pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
+// TODO(veluca): make this a [u8; 4].
+pub type Ip = (u8, u8, u8, u8);
+
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Address {
-    pub ip: (u8, u8, u8, u8),
+    pub ip: Ip,
     pub port: u16,
+}
+
+#[cfg(feature = "std")]
+impl From<Address> for SocketAddrV4 {
+    fn from(addr: Address) -> Self {
+        SocketAddrV4::new(
+            Ipv4Addr::new(addr.ip.0, addr.ip.1, addr.ip.2, addr.ip.3),
+            addr.port,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,3 +100,9 @@ pub enum UdpRequest {
     ActionComplete,
     RequestChunks(Vec<ChunkHash>),
 }
+
+#[cfg(feature = "std")]
+pub mod config;
+
+#[cfg(feature = "std")]
+pub use config::*;

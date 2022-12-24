@@ -3,9 +3,9 @@ use std::{fs::File, path::PathBuf, sync::Arc, sync::Mutex};
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use pixie_shared::Station;
+use pixie_shared::{Config, PersistentServerState, Station, Unit};
 
-use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, Config, State, Unit};
+use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, State};
 
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     let config: Config = serde_yaml::from_reader(&config)
         .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
-    let mut dnsmasq_handle = DnsmasqHandle::from_config(&options.storage_dir, &config.dnsmasq)
+    let mut dnsmasq_handle = DnsmasqHandle::from_config(&options.storage_dir, &config.dhcp)
         .context("Error start dnsmasq")?;
 
     let data = std::fs::read(options.storage_dir.join("registered.json"));
@@ -58,10 +58,7 @@ async fn main() -> Result<()> {
         .context("invalid json at registered.json")?
         .unwrap_or_default();
 
-    for (i, unit) in units.iter().enumerate() {
-        dnsmasq_handle.write_host(i, unit.mac, unit.ip())?;
-    }
-    dnsmasq_handle.send_sighup()?;
+    dnsmasq_handle.set_hosts(&units)?;
 
     let last = Mutex::new(Station {
         image: config.images[0].clone(),
@@ -70,8 +67,7 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(State {
         storage_dir: options.storage_dir,
-        config,
-        units: Mutex::new(units),
+        persistent: Mutex::new(PersistentServerState { config, units }),
         dnsmasq_handle: Mutex::new(dnsmasq_handle),
         last,
     });

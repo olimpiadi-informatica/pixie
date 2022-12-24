@@ -15,28 +15,19 @@ use actix_web::{
     App, HttpRequest, HttpServer, Responder,
 };
 use anyhow::{anyhow, Context, Result};
+use macaddr::MacAddr6;
 use mktemp::Temp;
-use serde::Deserialize;
 
-use pixie_shared::Station;
+use pixie_shared::{HttpConfig, Station, Unit};
 
-use crate::{find_mac, State, Unit};
-
-#[derive(Clone, Debug, Deserialize, Copy)]
-pub struct Config {
-    pub max_payload: usize,
-    pub listen_on: SocketAddrV4,
-}
+use crate::{find_mac, State};
 
 #[get("/action/{mac}/{value}")]
 async fn action(
     path: Path<(String, String)>,
     state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
-    let units = &mut **state
-        .units
-        .lock()
-        .map_err(|_| anyhow!("units mutex is poisoned"))?;
+    let mut pcfg = state.persistent.lock().unwrap();
 
     let Ok(action) = path.1.parse() else {
         return Ok(format!("Unknown action: {}", path.1)
@@ -46,27 +37,27 @@ async fn action(
 
     let mut updated = 0usize;
 
-    if let Ok(mac) = path.0.parse() {
-        for unit in units.iter_mut() {
+    if let Ok(mac) = path.0.parse::<MacAddr6>() {
+        for unit in pcfg.units.iter_mut() {
             if unit.mac == mac {
                 unit.next_action = action;
                 updated += 1;
             }
         }
     } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
-        for unit in units.iter_mut() {
-            if unit.ip() == ip {
+        for unit in pcfg.units.iter_mut() {
+            if unit.static_ip() == ip {
                 unit.next_action = action;
                 updated += 1;
             }
         }
     } else if path.0 == "all" {
-        for unit in units.iter_mut() {
+        for unit in pcfg.units.iter_mut() {
             unit.next_action = action;
             updated += 1;
         }
-    } else if let Some(&group) = state.config.groups.get(&path.0) {
-        for unit in units.iter_mut() {
+    } else if let Some(&group) = pcfg.config.groups.get(&path.0) {
+        for unit in pcfg.units.iter_mut() {
             if unit.group == group {
                 unit.next_action = action;
                 updated += 1;
@@ -79,7 +70,7 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    fs::write(state.registered_file(), serde_json::to_string(units)?)?;
+    fs::write(state.registered_file(), serde_json::to_string(&pcfg.units)?)?;
     Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
@@ -89,10 +80,11 @@ async fn register(
     body: Bytes,
     state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
+    let mut pcfg = state.persistent.lock().unwrap();
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
-            if !state.config.images.contains(&data.image) {
+            if !pcfg.config.images.contains(&data.image) {
                 return Ok(format!("Unknown image: {}", data.image)
                     .customize()
                     .with_status(StatusCode::BAD_REQUEST));
@@ -109,19 +101,13 @@ async fn register(
             };
             let peer_mac = find_mac(peer_ip)?;
 
-            let units = &mut *state
-                .units
-                .lock()
-                .map_err(|_| anyhow!("units mutex is poisoned"))?;
-
-            let unit = units.iter_mut().position(|x| x.mac == peer_mac);
-            let unit = match unit {
+            let unit = pcfg.units.iter_mut().position(|x| x.mac == peer_mac);
+            match unit {
                 Some(unit) => {
-                    units[unit].group = data.group;
-                    units[unit].row = data.row;
-                    units[unit].col = data.col;
-                    units[unit].image = data.image;
-                    unit
+                    pcfg.units[unit].group = data.group;
+                    pcfg.units[unit].row = data.row;
+                    pcfg.units[unit].col = data.col;
+                    pcfg.units[unit].image = data.image;
                 }
                 None => {
                     let unit = Unit {
@@ -131,25 +117,20 @@ async fn register(
                         col: data.col,
                         image: data.image,
                         curr_action: None,
-                        next_action: state.config.boot.default,
+                        next_action: pcfg.config.boot.default,
                     };
-                    units.push(unit);
-                    units.len() - 1
+                    pcfg.units.push(unit);
                 }
             };
 
-            let ip = units[unit].ip();
-
-            let mut dnsmasq_lock = state
+            state
                 .dnsmasq_handle
                 .lock()
-                .map_err(|_| anyhow!("dnsmasq_handle mutex is poisoned"))?;
-            dnsmasq_lock
-                .write_host(unit, peer_mac, ip)
-                .context("writing hosts file")?;
-            dnsmasq_lock.send_sighup().context("sending sighup")?;
+                .unwrap()
+                .set_hosts(&pcfg.units)
+                .context("changing dnsmasq hosts")?;
 
-            fs::write(state.registered_file(), serde_json::to_string(&units)?)?;
+            fs::write(state.registered_file(), serde_json::to_string(&pcfg.units)?)?;
             return Ok("".to_owned().customize());
         }
     }
@@ -203,10 +184,10 @@ async fn upload_image(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let Config {
+    let HttpConfig {
         max_payload,
         listen_on,
-    } = state.config.http;
+    } = state.persistent.lock().unwrap().config.http;
 
     let images = state.storage_dir.join("images");
     let data: Data<_> = state.into();
@@ -223,7 +204,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(register)
             .service(action)
     })
-    .bind(listen_on)?
+    .bind(SocketAddrV4::from(listen_on))?
     .run()
     .await?;
 

@@ -5,4 +5,8 @@ edition = "2021"
 
 [dependencies]
 blake3 = { version = "1", default-features = false }
+macaddr = { version = "1.0.1", optional = true, features = ["serde"] }
 serde =  { version = "1.0.137", default-features = false, features = ["derive", "alloc"] }
+
+[features]
+std = ["macaddr", "serde/std"]
