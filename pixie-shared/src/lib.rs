@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+pub mod bijection;
+pub use bijection::Bijection;
+
 pub const CHUNK_SIZE: usize = 1 << 22;
 
 /// The hash of a chunk of a disk.
@@ -39,7 +42,7 @@ pub struct Image {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Station {
-    pub group: u8,
+    pub group: String,
     pub row: u8,
     pub col: u8,
     pub image: String,
@@ -49,6 +52,7 @@ pub struct Station {
 pub struct HintPacket {
     pub station: Station,
     pub images: Vec<String>,
+    pub groups: Bijection<String, u8>,
 }
 
 pub const PACKET_LEN: usize = 1436;

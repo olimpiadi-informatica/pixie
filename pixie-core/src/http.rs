@@ -12,7 +12,7 @@ use actix_web::{
     http::StatusCode,
     middleware::Logger,
     post,
-    web::{Bytes, Data, Path, PayloadConfig},
+    web::{Bytes, Data, Json, Path, PayloadConfig},
     App, HttpRequest, HttpServer, Responder,
 };
 use actix_web_httpauth::extractors::basic::BasicAuth;
@@ -58,7 +58,7 @@ async fn action(
             unit.next_action = action;
             updated += 1;
         }
-    } else if let Some(&group) = state.config.groups.get(&path.0) {
+    } else if let Some(&group) = state.config.groups.get_by_first(&path.0) {
         for unit in units.iter_mut() {
             if unit.group == group {
                 unit.next_action = action;
@@ -90,64 +90,61 @@ async fn register(
     state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
     let mut units = state.units.lock().unwrap();
-    let body = body.to_vec();
-    if let Ok(s) = std::str::from_utf8(&body) {
-        if let Ok(data) = serde_json::from_str::<Station>(s) {
-            if !state.config.images.contains(&data.image) {
-                return Ok(format!("Unknown image: {}", data.image)
-                    .customize()
-                    .with_status(StatusCode::BAD_REQUEST));
-            }
+    let body: Station = serde_json::from_slice(&body)?;
 
-            let mut guard = state
-                .last
-                .lock()
-                .map_err(|_| anyhow!("hint mutex is poisoned"))?;
-            *guard = data.clone();
-
-            let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
-                Err(anyhow!("IPv6 is not supported"))?
-            };
-            let peer_mac = find_mac(peer_ip)?;
-
-            let unit = units.iter_mut().position(|x| x.mac == peer_mac);
-            match unit {
-                Some(unit) => {
-                    units[unit].group = data.group;
-                    units[unit].row = data.row;
-                    units[unit].col = data.col;
-                    units[unit].image = data.image;
-                }
-                None => {
-                    let unit = Unit {
-                        mac: peer_mac,
-                        group: data.group,
-                        row: data.row,
-                        col: data.col,
-                        image: data.image,
-                        curr_action: None,
-                        next_action: state.config.boot.default,
-                    };
-                    units.push(unit);
-                }
-            };
-
-            state
-                .dnsmasq_handle
-                .lock()
-                .unwrap()
-                .set_hosts(&units)
-                .context("changing dnsmasq hosts")?;
-
-            fs::write(state.registered_file(), serde_json::to_string(&*units)?)?;
-            return Ok("".to_owned().customize());
-        }
+    if !state.config.images.contains(&body.image) {
+        return Ok(format!("Unknown image: {}", body.image)
+            .customize()
+            .with_status(StatusCode::BAD_REQUEST));
     }
+    let Some(&group) = state.config.groups.get_by_first(&body.group) else {
+        return Ok(format!("Unknown group: {}", body.group)
+            .customize()
+            .with_status(StatusCode::BAD_REQUEST));
+    };
 
-    Ok("Invalid payload"
-        .to_owned()
-        .customize()
-        .with_status(StatusCode::BAD_REQUEST))
+    let mut guard = state
+        .last
+        .lock()
+        .map_err(|_| anyhow!("hint mutex is poisoned"))?;
+    *guard = body.clone();
+
+    let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
+        Err(anyhow!("IPv6 is not supported"))?
+    };
+    let peer_mac = find_mac(peer_ip)?;
+
+    let unit = units.iter_mut().position(|x| x.mac == peer_mac);
+    match unit {
+        Some(unit) => {
+            units[unit].group = group;
+            units[unit].row = body.row;
+            units[unit].col = body.col;
+            units[unit].image = body.image;
+        }
+        None => {
+            let unit = Unit {
+                mac: peer_mac,
+                group,
+                row: body.row,
+                col: body.col,
+                curr_action: None,
+                next_action: state.config.boot.default,
+                image: body.image,
+            };
+            units.push(unit);
+        }
+    };
+
+    state
+        .dnsmasq_handle
+        .lock()
+        .unwrap()
+        .set_hosts(&units)
+        .context("changing dnsmasq hosts")?;
+
+    fs::write(state.registered_file(), serde_json::to_string(&*units)?)?;
+    Ok("".to_owned().customize())
 }
 
 #[get("/get_chunk_csize/{hash}")]

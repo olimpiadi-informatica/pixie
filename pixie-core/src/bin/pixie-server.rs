@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
     dnsmasq_handle.set_hosts(&units)?;
 
     let last = Mutex::new(Station {
+        group: config.groups.iter().next().unwrap().0.clone(),
         image: config.images[0].clone(),
         ..Default::default()
     });

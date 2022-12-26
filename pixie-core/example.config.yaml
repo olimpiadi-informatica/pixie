@@ -13,8 +13,8 @@ udp:
   hint_broadcast: 192.168.1.255:4042
   bits_per_second: 52428800
 groups:
-  asdf: 0
-  qwer: 1
+  - [asdf, 0]
+  - [qwer, 1]
 boot:
   unregistered: register
   default: wait

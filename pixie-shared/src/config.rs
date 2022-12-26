@@ -1,10 +1,12 @@
+use alloc::{format, string::String, vec::Vec};
 use core::str::FromStr;
 
-use alloc::{collections::BTreeMap, format, string::String, vec::Vec};
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 
 use std::net::{Ipv4Addr, SocketAddrV4};
+
+use crate::Bijection;
 
 pub const UNASSIGNED_GROUP_ID: u8 = 187;
 pub const STATIC_IP_USERCLASS: &str = "pixie-static-ip";
@@ -92,7 +94,7 @@ pub struct Config {
     pub admin: AdminConfig,
     pub udp: UdpConfig,
     pub boot: BootConfig,
-    pub groups: BTreeMap<String, u8>,
+    pub groups: Bijection<String, u8>,
     pub images: Vec<String>,
 }
 

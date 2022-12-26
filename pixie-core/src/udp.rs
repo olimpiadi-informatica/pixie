@@ -130,7 +130,7 @@ fn compute_hint(state: &State) -> Result<Station> {
         .lock()
         .unwrap()
         .iter()
-        .filter(|unit| unit.group == last.group)
+        .filter(|unit| unit.group == *state.config.groups.get_by_first(&last.group).unwrap())
         .map(|unit| (unit.row, unit.col))
         .collect::<Vec<_>>();
 
@@ -157,7 +157,7 @@ fn compute_hint(state: &State) -> Result<Station> {
     });
 
     Ok(Station {
-        group: last.group,
+        group: last.group.clone(),
         row,
         col,
         image: last.image.clone(),
@@ -169,6 +169,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
         let hint = HintPacket {
             station: compute_hint(state)?,
             images: state.config.images.clone(),
+            groups: state.config.groups.clone(),
         };
         let data = serde_json::to_vec(&hint)?;
         let hint_broadcast: SocketAddrV4 = state.config.udp.hint_broadcast.into();

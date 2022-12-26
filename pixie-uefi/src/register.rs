@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{boxed::Box, rc::Rc};
+use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use core::cell::RefCell;
 
 use futures::future::{select, Either};
@@ -66,7 +66,8 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
     let mut buf = [0; PACKET_SIZE];
 
     let mut hint = true;
-    let mut images = vec!["".into()];
+    let mut images = Vec::new();
+    let mut groups = Vec::new();
 
     loop {
         let key = if hint {
@@ -78,6 +79,7 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
                         let hint: HintPacket = serde_json::from_slice(buf)?;
                         data.borrow_mut().station = hint.station;
                         images = hint.images;
+                        groups = hint.groups.into_iter().map(|(k, _)| k).collect();
                         os.force_ui_redraw();
                     }
                     Either::Right((key, _)) => {
@@ -102,7 +104,16 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
         if key == Key::Special(ScanCode::LEFT) {
             let mut data = data.borrow_mut();
             match data.selected {
-                0 => data.station.group = data.station.group.wrapping_sub(1),
+                0 => {
+                    data.station.group = groups
+                        .iter()
+                        .rev()
+                        .cycle()
+                        .skip_while(|g| **g != data.station.group)
+                        .nth(1)
+                        .unwrap()
+                        .clone()
+                }
                 1 => data.station.row = data.station.row.wrapping_sub(1),
                 2 => data.station.col = data.station.col.wrapping_sub(1),
                 3 => {
@@ -121,7 +132,15 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
         if key == Key::Special(ScanCode::RIGHT) {
             let mut data = data.borrow_mut();
             match data.selected {
-                0 => data.station.group = data.station.group.wrapping_add(1),
+                0 => {
+                    data.station.group = groups
+                        .iter()
+                        .cycle()
+                        .skip_while(|g| **g != data.station.group)
+                        .nth(1)
+                        .unwrap()
+                        .clone()
+                }
                 1 => data.station.row = data.station.row.wrapping_add(1),
                 2 => data.station.col = data.station.col.wrapping_add(1),
                 3 => {
