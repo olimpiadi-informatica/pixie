@@ -42,6 +42,11 @@ pub struct HttpConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminConfig {
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UdpConfig {
     pub listen_on: SocketAddrV4,
     pub chunk_broadcast: SocketAddrV4,
@@ -84,7 +89,7 @@ pub struct BootConfig {
 pub struct Config {
     pub dhcp: DhcpConfig,
     pub http: HttpConfig,
-    pub admin_password: String,
+    pub admin: AdminConfig,
     pub udp: UdpConfig,
     pub boot: BootConfig,
     pub groups: BTreeMap<String, u8>,
@@ -106,10 +111,4 @@ impl Unit {
     pub fn static_ip(&self) -> Ipv4Addr {
         Ipv4Addr::new(10, self.group, self.row, self.col)
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PersistentServerState {
-    pub config: Config,
-    pub units: Vec<Unit>,
 }

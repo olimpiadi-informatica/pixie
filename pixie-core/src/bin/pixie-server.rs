@@ -3,7 +3,7 @@ use std::{fs::File, path::PathBuf, sync::Arc, sync::Mutex};
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use pixie_shared::{Config, PersistentServerState, Station, Unit};
+use pixie_shared::{Config, Station, Unit};
 
 use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, State};
 
@@ -67,7 +67,8 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(State {
         storage_dir: options.storage_dir,
-        persistent: Mutex::new(PersistentServerState { config, units }),
+        config,
+        units: Mutex::new(units),
         dnsmasq_handle: Mutex::new(dnsmasq_handle),
         last,
     });

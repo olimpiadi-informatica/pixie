@@ -14,13 +14,14 @@ use anyhow::{anyhow, bail, Result};
 use interfaces::Interface;
 use macaddr::MacAddr6;
 
-use pixie_shared::{ActionKind, PersistentServerState, Station};
+use pixie_shared::{ActionKind, Config, Station, Unit};
 
 use dnsmasq::DnsmasqHandle;
 
 pub struct State {
     pub storage_dir: PathBuf,
-    pub persistent: Mutex<PersistentServerState>,
+    pub config: Config,
+    pub units: Mutex<Vec<Unit>>,
     pub dnsmasq_handle: Mutex<DnsmasqHandle>,
     pub last: Mutex<Station>,
 }
