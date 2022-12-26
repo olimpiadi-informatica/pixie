@@ -201,7 +201,10 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     Some(ref mut unit) => {
                         let action = unit.next_action;
                         unit.curr_action = Some(action);
-                        if matches!(unit.next_action, ActionKind::Push | ActionKind::Pull) {
+                        if matches!(
+                            unit.next_action,
+                            ActionKind::Push | ActionKind::Pull | ActionKind::Register
+                        ) {
                             unit.next_action = ActionKind::Wait;
                         }
                         action
