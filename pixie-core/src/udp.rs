@@ -1,4 +1,10 @@
-use std::{collections::BTreeSet, fmt::Write, fs, net::IpAddr, ops::Bound};
+use std::{
+    collections::BTreeSet,
+    fmt::Write,
+    fs,
+    net::{IpAddr, SocketAddrV4},
+    ops::Bound,
+};
 
 use tokio::{
     net::UdpSocket,
@@ -8,7 +14,9 @@ use tokio::{
 
 use anyhow::{anyhow, bail, ensure, Result};
 
-use pixie_shared::{Action, Address, HintPacket, Station, UdpRequest, Unit, BODY_LEN, PACKET_LEN};
+use pixie_shared::{
+    Action, Address, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN, PACKET_LEN,
+};
 
 use crate::{find_interface_ip, find_mac, ActionKind, State};
 
@@ -228,7 +236,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                         udp_recv_port: state.config.udp.chunk_broadcast.port(),
                         udp_server: Address {
                             ip: server_loc.ip,
-                            port: state.config.udp.listen_on.port(),
+                            port: ACTION_PORT,
                         },
                     },
                     ActionKind::Wait => Action::Wait,
@@ -264,7 +272,8 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 
 pub async fn main(state: &State) -> Result<()> {
     let (tx, rx) = mpsc::channel(128);
-    let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
+    let socket =
+        UdpSocket::bind(SocketAddrV4::new(state.config.udp.listen_on, ACTION_PORT)).await?;
     socket.set_broadcast(true)?;
 
     tokio::try_join!(

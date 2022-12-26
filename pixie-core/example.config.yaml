@@ -8,7 +8,7 @@ http:
 admin:
   password: secret
 udp:
-  listen_on: 0.0.0.0:25640
+  listen_on: 0.0.0.0
   chunk_broadcast: 192.168.1.255:4041
   hint_broadcast: 192.168.1.255:4042
   bits_per_second: 52428800

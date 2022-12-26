@@ -51,7 +51,7 @@ pub struct AdminConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UdpConfig {
-    pub listen_on: SocketAddrV4,
+    pub listen_on: Ipv4Addr,
     pub chunk_broadcast: SocketAddrV4,
     pub hint_broadcast: SocketAddrV4,
     pub bits_per_second: u32,

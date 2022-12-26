@@ -14,6 +14,8 @@ pub use bijection::Bijection;
 
 pub const CHUNK_SIZE: usize = 1 << 22;
 
+pub const ACTION_PORT: u16 = 25640;
+
 /// The hash of a chunk of a disk.
 ///
 /// This is stored as an array of bytes because [`blake3::Hash`] is not serializable.

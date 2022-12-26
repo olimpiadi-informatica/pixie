@@ -33,7 +33,8 @@ async fn run(os: UefiOS) -> Result<()> {
 
         os.append_message("Sending request for command".into(), MessageKind::Info);
         let msg = serde_json::to_vec(&UdpRequest::GetAction).unwrap();
-        udp.send((255, 255, 255, 255), 25640, &msg).await?;
+        udp.send((255, 255, 255, 255), pixie_shared::ACTION_PORT, &msg)
+            .await?;
 
         let mut buf = [0; PACKET_SIZE];
         // TODO(veluca): add a timeout.
