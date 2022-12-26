@@ -8,12 +8,17 @@ cargo build --release
 upx --best target/x86_64-unknown-uefi/release/uefi_app.efi
 popd
 
+pushd pixie-web
+trunk build --release
+popd
+
 pushd pixie-core
 cargo build --release
 popd
 
 mkdir -p storage/tftpboot
 cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
+cp -r pixie-web/dist storage/admin/
 
 mkdir -p storage/images storage/chunks
 

@@ -24,7 +24,7 @@ use pixie_shared::{HttpConfig, Station, Unit};
 
 use crate::{find_mac, State};
 
-#[get("/action/{mac}/{value}")]
+#[get("/admin/action/{mac}/{value}")]
 async fn action(
     path: Path<(String, String)>,
     state: Data<State>,
@@ -189,7 +189,7 @@ async fn upload_image(
     Ok("")
 }
 
-#[get("/config")]
+#[get("/admin/config")]
 async fn get_config(
     auth: BasicAuth,
     state: Data<State>,
@@ -200,7 +200,7 @@ async fn get_config(
     Ok(serde_json::to_string(&state.config))
 }
 
-#[get("/units")]
+#[get("/admin/units")]
 async fn get_units(
     auth: BasicAuth,
     state: Data<State>,
@@ -218,6 +218,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     } = state.config.http;
 
     let images = state.storage_dir.join("images");
+    let admin = state.storage_dir.join("admin");
     let data: Data<_> = state.into();
 
     HttpServer::new(move || {
@@ -233,6 +234,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(action)
             .service(get_config)
             .service(get_units)
+            .service(Files::new("/", &admin).index_file("index.html"))
     })
     .bind(listen_on)?
     .run()

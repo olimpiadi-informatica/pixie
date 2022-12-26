@@ -1,4 +1,5 @@
 use alloc::{format, string::String, vec::Vec};
+use core::fmt::Display;
 use core::str::FromStr;
 
 use macaddr::MacAddr6;
@@ -81,6 +82,18 @@ impl FromStr for ActionKind {
     }
 }
 
+impl Display for ActionKind {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+        match self {
+            ActionKind::Reboot => write!(fmt, "reboot"),
+            ActionKind::Register => write!(fmt, "register"),
+            ActionKind::Push => write!(fmt, "push"),
+            ActionKind::Pull => write!(fmt, "pull"),
+            ActionKind::Wait => write!(fmt, "wait"),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub struct BootConfig {
     pub unregistered: ActionKind,
@@ -98,7 +111,7 @@ pub struct Config {
     pub images: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Unit {
     pub mac: MacAddr6,
     pub group: u8,
