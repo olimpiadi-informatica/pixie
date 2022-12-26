@@ -118,6 +118,7 @@ pub struct Unit {
     pub row: u8,
     pub col: u8,
     pub curr_action: Option<ActionKind>,
+    pub curr_progress: Option<(usize, usize)>,
     pub next_action: ActionKind,
     pub image: String,
 }

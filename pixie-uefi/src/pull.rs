@@ -72,6 +72,7 @@ pub async fn pull(
     image: String,
     udp_recv_port: u16,
     udp_server: Address,
+    progress_address: Address,
 ) -> Result<()> {
     let image = fetch_image(os, server_address, &image).await?;
 
@@ -225,6 +226,17 @@ pub async fn pull(
                 }
 
                 stats.borrow_mut().recv += 1;
+
+                socket
+                    .send(
+                        progress_address.ip,
+                        progress_address.port,
+                        &serde_json::to_vec(&UdpRequest::ActionProgress(
+                            stats.borrow().recv,
+                            stats.borrow().fetch,
+                        ))?,
+                    )
+                    .await?;
             }
             Either::Right(((), _sleep)) => {
                 // TODO(virv): compute the number of chunks to request

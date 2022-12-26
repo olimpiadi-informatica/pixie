@@ -29,9 +29,13 @@ fn send_req(url: String) {
 
 #[component(inline_props)]
 fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit) -> View<G> {
-    let fmt_ca = |curr_action: Option<ActionKind>| {
+    let fmt_ca = |curr_action: Option<ActionKind>, progress: Option<(usize, usize)>| {
         if let Some(a) = curr_action {
-            a.to_string()
+            if let Some((x, y)) = progress {
+                format!("{} ({}/{})", a, x, y)
+            } else {
+                a.to_string()
+            }
         } else {
             "".into()
         }
@@ -82,7 +86,7 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit) -> View<G> {
                     "re-register"
                 }
             }
-            td { (fmt_ca(unit.curr_action)) }
+            td { (fmt_ca(unit.curr_action, unit.curr_progress)) }
         }
     }
 }

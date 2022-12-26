@@ -1,12 +1,12 @@
-use core::cell::RefCell;
 use alloc::{string::String, sync::Arc, vec::Vec};
+use core::cell::RefCell;
 
 use blake3::Hash;
 use miniz_oxide::deflate::compress_to_vec;
 use uefi::proto::console::text::Color;
 
-use pixie_shared::{Address, Image, Offset, Chunk, CHUNK_SIZE};
 use crate::os::{disk::Disk, error::Result, HttpMethod, MessageKind, UefiOS};
+use pixie_shared::{Address, Chunk, Image, Offset, UdpRequest, CHUNK_SIZE};
 
 #[derive(Debug)]
 struct ChunkInfo {
@@ -183,8 +183,15 @@ enum State {
     },
 }
 
-pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<()> {
+pub async fn push(
+    os: UefiOS,
+    server_address: Address,
+    image: String,
+    progress_address: Address,
+) -> Result<()> {
     let stats = Arc::new(RefCell::new(State::ReadingPartitions));
+
+    let udp = os.udp_bind(None).await?;
 
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| match &*stats2.borrow() {
@@ -287,6 +294,14 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
             tsize: total_size,
             tcsize: total_csize,
         });
+
+        udp.send(
+            progress_address.ip,
+            progress_address.port,
+            &serde_json::to_vec(&UdpRequest::ActionProgress(idx, total))?,
+        )
+        .await?;
+
         let mut data = vec![0; chnk.size];
         disk.read(chnk.start as u64, &mut data).await?;
         let hash = blake3::hash(&data);

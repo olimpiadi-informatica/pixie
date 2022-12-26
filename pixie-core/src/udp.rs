@@ -248,6 +248,18 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 let msg = serde_json::to_vec(&action)?;
                 socket.send_to(&msg, addr).await?;
             }
+            Ok(UdpRequest::ActionProgress(frac, tot)) => {
+                let IpAddr::V4(peer_ip) = addr.ip() else {
+                    bail!("IPv6 is not supported")
+                };
+                let peer_mac = find_mac(peer_ip)?;
+                let mut units = state.units.lock().unwrap();
+                let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                    log::warn!("Got AP from unknown unit");
+                    continue;
+                };
+                unit.curr_progress = Some((frac, tot));
+            }
             Ok(UdpRequest::ActionComplete) => {
                 let IpAddr::V4(peer_ip) = addr.ip() else {
                     bail!("IPv6 is not supported")
@@ -259,6 +271,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     continue;
                 };
                 unit.curr_action = None;
+                unit.curr_progress = None;
                 socket.send_to(b"OK", addr).await?;
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {

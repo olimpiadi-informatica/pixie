@@ -129,6 +129,7 @@ async fn register(
                 row: body.row,
                 col: body.col,
                 curr_action: None,
+                curr_progress: None,
                 next_action: state.config.boot.default,
                 image: body.image,
             };

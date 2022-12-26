@@ -103,6 +103,7 @@ pub enum Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UdpRequest {
     GetAction,
+    ActionProgress(usize, usize),
     ActionComplete,
     RequestChunks(Vec<ChunkHash>),
 }
