@@ -523,13 +523,19 @@ impl UdpHandle {
         (&mut buf[..len], addr)
     }
 
-    pub fn close(self) {
+    pub fn close(&mut self) {
         self.os
             .net()
             .socket_set
             .get_mut::<UdpSocket>(self.handle)
             .close();
         self.os.net().socket_set.remove(self.handle);
+    }
+}
+
+impl Drop for UdpHandle {
+    fn drop(&mut self) {
+        self.close()
     }
 }
 

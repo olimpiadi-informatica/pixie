@@ -92,7 +92,6 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
             os.read_key().await?
         };
 
-        os.append_message(format!("{:?}", key), MessageKind::Debug);
         if key == Key::Special(ScanCode::DOWN) {
             let mut data = data.borrow_mut();
             data.selected = (data.selected + 1).min(3);
