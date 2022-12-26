@@ -65,6 +65,13 @@ async fn action(
                 updated += 1;
             }
         }
+    } else if state.config.images.contains(&path.0) {
+        for unit in units.iter_mut() {
+            if unit.image == path.0 {
+                unit.next_action = action;
+                updated += 1;
+            }
+        }
     } else {
         return Ok("Unknown PC"
             .to_owned()
