@@ -1,0 +1,34 @@
+[package]
+edition = "2021"
+name = "uefi_app"
+version = "0.1.0"
+
+[dependencies]
+blake3 = { version = "1.3.3", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
+core_detect = "1.0.0"
+futures = { version = "0.3.25", default-features = false, features = ["alloc"] }
+gpt_disk_io = "0.14.0"
+managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
+miniz_oxide = { version = "0.6.2", features = ["simd"] }
+rand = { version = "0.8.5", default-features = false }
+rand_xoshiro = { version = "0.6.0", default-features = false }
+serde_json = { version = "1.0.90", default-features = false, features = ["alloc"] }
+uefi = { version = "0.18.0", features = ["alloc"] }
+uefi-services = { version = "0.15.0", default-features = false, features = ["panic_handler"] }
+
+[dependencies.smoltcp]
+version = "0.8.1"
+default-features = false
+features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async"]
+
+[dependencies.pixie-shared]
+path = "../pixie-shared"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+
+[patch.crates-io]
+uefi = { git = "https://github.com/veluca93/uefi-rs", branch = "snp" }
+uefi-services = { git = "https://github.com/veluca93/uefi-rs", branch = "snp" }
+smoltcp = { git = "https://github.com/smoltcp-rs/smoltcp", rev = "0e614bc6cca8b97a1a11c27154f76221c5403739" }

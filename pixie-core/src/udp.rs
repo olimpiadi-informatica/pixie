@@ -2,9 +2,8 @@ use std::{
     collections::BTreeSet,
     fmt::Write,
     fs,
-    net::{IpAddr, Ipv4Addr, SocketAddrV4},
+    net::{IpAddr, SocketAddrV4},
     ops::Bound,
-    sync::Arc,
 };
 
 use tokio::{
@@ -13,19 +12,11 @@ use tokio::{
     time::{self, Duration, Instant},
 };
 
-use anyhow::{anyhow, ensure, Result};
-use serde::Deserialize;
+use anyhow::{anyhow, bail, ensure, Result};
 
-use pixie_shared::{Action, StationKind, BODY_LEN, PACKET_LEN};
+use pixie_shared::{Action, Address, HintPacket, Station, UdpRequest, Unit, BODY_LEN, PACKET_LEN};
 
-use crate::{find_interface_ip, find_mac, State};
-
-#[derive(Debug, Deserialize)]
-pub struct Config {
-    listen_on: SocketAddrV4,
-    dest_addr: SocketAddrV4,
-    bits_per_second: u32,
-}
+use crate::{find_interface_ip, find_mac, ActionKind, State};
 
 fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::new();
@@ -35,8 +26,8 @@ fn to_hex(bytes: &[u8]) -> String {
     s
 }
 
-async fn broadcast(
-    state: Arc<State>,
+async fn broadcast_chunks(
+    state: &State,
     socket: &UdpSocket,
     mut rx: Receiver<[u8; 32]>,
 ) -> Result<()> {
@@ -84,6 +75,9 @@ async fn broadcast(
 
             let mut xor = [[0; BODY_LEN]; 32];
 
+            let udp_config = &state.config.udp;
+            let chunk_broadcast: SocketAddrV4 = udp_config.chunk_broadcast.into();
+
             for index in 0..num_packets {
                 write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
                 let start = index * BODY_LEN;
@@ -96,12 +90,13 @@ async fn broadcast(
                 write_buf[34..34 + len].clone_from_slice(body);
 
                 time::sleep_until(wait_for).await;
+
                 let sent_len = socket
-                    .send_to(&write_buf[..34 + len], state.config.udp.dest_addr)
+                    .send_to(&write_buf[..34 + len], chunk_broadcast)
                     .await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
-                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1)
-                    / state.config.udp.bits_per_second;
+                wait_for +=
+                    8 * (sent_len as u32) * Duration::from_secs(1) / udp_config.bits_per_second;
             }
 
             for index in 0..32.min(num_packets) {
@@ -112,11 +107,11 @@ async fn broadcast(
 
                 time::sleep_until(wait_for).await;
                 let sent_len = socket
-                    .send_to(&write_buf[..34 + len], state.config.udp.dest_addr)
+                    .send_to(&write_buf[..34 + len], chunk_broadcast)
                     .await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
-                wait_for += 8 * (sent_len as u32) * Duration::from_secs(1)
-                    / state.config.udp.bits_per_second;
+                wait_for +=
+                    8 * (sent_len as u32) * Duration::from_secs(1) / udp_config.bits_per_second;
             }
         }
     }
@@ -124,82 +119,164 @@ async fn broadcast(
     Ok(())
 }
 
-async fn handle_requests(
-    state: Arc<State>,
-    socket: &UdpSocket,
-    tx: Sender<[u8; 32]>,
-) -> Result<()> {
+fn compute_hint(state: &State) -> Result<Station> {
+    let last = &*state
+        .last
+        .lock()
+        .map_err(|_| anyhow!("hint lock poisoned"))?;
+
+    let positions = state
+        .units
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|unit| unit.group == last.group)
+        .map(|unit| (unit.row, unit.col))
+        .collect::<Vec<_>>();
+
+    let (mrow, mcol) = positions
+        .iter()
+        .fold((0, 0), |(r1, c1), &(r2, c2)| (r1.max(r2), c1.max(c2)));
+
+    let mut hole = None;
+    'find_hole: for row in 1..=mrow {
+        for col in 1..=mcol {
+            if positions.contains(&(row, col)) {
+                continue;
+            }
+
+            hole = Some((row, col));
+            break 'find_hole;
+        }
+    }
+
+    let (row, col) = hole.unwrap_or(match mrow {
+        0 => (1, 1),
+        1 => (1, mcol + 1),
+        _ => (mrow + 1, 1),
+    });
+
+    Ok(Station {
+        group: last.group,
+        row,
+        col,
+        image: last.image.clone(),
+    })
+}
+
+async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
+    loop {
+        let hint = HintPacket {
+            station: compute_hint(state)?,
+            images: state.config.images.clone(),
+        };
+        let data = serde_json::to_vec(&hint)?;
+        let hint_broadcast: SocketAddrV4 = state.config.udp.hint_broadcast.into();
+        socket.send_to(&data, hint_broadcast).await?;
+        time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
     let mut buf = [0; PACKET_LEN];
     loop {
         let (len, addr) = socket.recv_from(&mut buf).await?;
-        let buf = &buf[..len];
-        if buf == b"GA" {
-            let IpAddr::V4(peer_ip) = addr.ip() else {
-                Err(anyhow!("IPv6 is not supported"))?
-            };
-            let peer_mac = find_mac(peer_ip)?;
-            let units = state
-                .units
-                .read()
-                .map_err(|_| anyhow!("units mutex is poisoned"))?;
-            let unit = units.iter().find(|unit| unit.mac == peer_mac);
-            let mode: &str = unit
-                .map(|unit| &unit.action)
-                .unwrap_or(&state.config.boot.unregistered);
-
-            let server_ip = find_interface_ip(peer_ip)?;
-            let server_port = state.config.udp.listen_on.port();
-            let server_loc = SocketAddrV4::new(server_ip, server_port);
-            let action = match mode {
-                "reboot" => Action::Reboot,
-                "register" => Action::Register { server: server_loc },
-                "push" => Action::Push {
-                    image: format!(
-                        "http://{}/image/{}",
-                        server_loc,
-                        match unit.unwrap().kind {
-                            StationKind::Worker => "worker",
-                            StationKind::Contestant => "contestant",
+        let req: serde_json::Result<UdpRequest> = serde_json::from_slice(&buf[..len]);
+        match req {
+            Ok(UdpRequest::GetAction) => {
+                let IpAddr::V4(peer_ip) = addr.ip() else {
+                    bail!("IPv6 is not supported")
+                };
+                let peer_mac = find_mac(peer_ip)?;
+                let mut units = state.units.lock().unwrap();
+                let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
+                let action_kind = match unit {
+                    Some(Unit {
+                        curr_action: Some(action),
+                        ..
+                    }) => *action,
+                    Some(ref mut unit) => {
+                        let action = unit.next_action;
+                        unit.curr_action = Some(action);
+                        if matches!(unit.next_action, ActionKind::Push | ActionKind::Pull) {
+                            unit.next_action = ActionKind::Wait;
                         }
-                    ),
-                },
-                "pull" => Action::Pull {
-                    image: format!(
-                        "http://{}/image/{}",
-                        server_loc,
-                        match unit.unwrap().kind {
-                            StationKind::Worker => "worker",
-                            StationKind::Contestant => "contestant",
-                        }
-                    ),
-                    listen_on: SocketAddrV4::new(
-                        Ipv4Addr::new(0, 0, 0, 0),
-                        state.config.udp.dest_addr.port(),
-                    ),
-                    udp_server: SocketAddrV4::new(server_ip, state.config.udp.listen_on.port()),
-                },
-                "wait" => Action::Wait,
-                _ => unreachable!(),
-            };
+                        action
+                    }
+                    None => state.config.boot.unregistered,
+                };
 
-            let msg = serde_json::to_vec(&action)?;
-            socket.send_to(&msg, addr).await?;
-        } else if buf.starts_with(b"RB") && (buf.len() - 2) % 32 == 0 {
-            for hash in buf[2..].chunks(32) {
-                tx.send(hash.try_into().unwrap()).await?;
+                let server_ip = find_interface_ip(peer_ip)?;
+                let server_port = state.config.http.listen_on.port();
+                let server_loc = Address {
+                    ip: (
+                        server_ip.octets()[0],
+                        server_ip.octets()[1],
+                        server_ip.octets()[2],
+                        server_ip.octets()[3],
+                    ),
+                    port: server_port,
+                };
+                let action = match action_kind {
+                    ActionKind::Reboot => Action::Reboot,
+                    ActionKind::Register => Action::Register {
+                        server: server_loc,
+                        hint_port: state.config.udp.hint_broadcast.port(),
+                    },
+                    ActionKind::Push => Action::Push {
+                        http_server: server_loc,
+                        image: format!("/image/{}", unit.unwrap().image),
+                    },
+                    ActionKind::Pull => Action::Pull {
+                        http_server: server_loc,
+                        image: unit.unwrap().image.clone(),
+                        udp_recv_port: state.config.udp.chunk_broadcast.port(),
+                        udp_server: Address {
+                            ip: server_loc.ip,
+                            port: state.config.udp.listen_on.port(),
+                        },
+                    },
+                    ActionKind::Wait => Action::Wait,
+                };
+
+                let msg = serde_json::to_vec(&action)?;
+                socket.send_to(&msg, addr).await?;
+            }
+            Ok(UdpRequest::ActionComplete) => {
+                let IpAddr::V4(peer_ip) = addr.ip() else {
+                    bail!("IPv6 is not supported")
+                };
+                let peer_mac = find_mac(peer_ip)?;
+                let mut units = state.units.lock().unwrap();
+                let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                    log::warn!("Got NA from unknown unit");
+                    continue;
+                };
+                unit.curr_action = None;
+                socket.send_to(b"OK", addr).await?;
+            }
+            Ok(UdpRequest::RequestChunks(chunks)) => {
+                for hash in chunks {
+                    tx.send(hash).await?;
+                }
+            }
+            Err(e) => {
+                log::warn!("Invalid request from {}: {}", addr, e);
             }
         }
     }
 }
 
-pub async fn main(state: Arc<State>) -> Result<()> {
+pub async fn main(state: &State) -> Result<()> {
     let (tx, rx) = mpsc::channel(128);
-    let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
+    let listen_on: SocketAddrV4 = state.config.udp.listen_on.into();
+    let socket = UdpSocket::bind(listen_on).await?;
     socket.set_broadcast(true)?;
 
     tokio::try_join!(
-        broadcast(state.clone(), &socket, rx),
-        handle_requests(state, &socket, tx),
+        broadcast_chunks(&state, &socket, rx),
+        broadcast_hint(&state, &socket),
+        handle_requests(&state, &socket, tx),
     )?;
 
     Ok(())

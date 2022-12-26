@@ -1,19 +1,16 @@
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    sync::{Mutex, RwLock},
-};
+use std::{fs::File, path::PathBuf, sync::Arc, sync::Mutex};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 
-use pixie_shared::Station;
+use pixie_shared::{Config, Station, Unit};
 
-use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, Config, State, Unit};
+use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, State};
 
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
-    /// Folder in which files will be stored. Must already contain a tftpboot/ipxe.efi file.
+    /// Directory in which files will be stored.
+    /// Must already contain files: tftpboot/uefi_app.efi, config.yaml
     #[clap(short, long, default_value = "./storage")]
     storage_dir: PathBuf,
 }
@@ -36,7 +33,7 @@ async fn main() -> Result<()> {
         "storage dir must be valid utf8"
     );
 
-    for file_path in [["tftpboot", "ipxe.efi"], ["httpstatic", "reboot.efi"]] {
+    for file_path in [["tftpboot", "uefi_app.efi"]] {
         let mut path = options.storage_dir.clone();
         for path_piece in file_path {
             path = path.join(path_piece);
@@ -45,14 +42,13 @@ async fn main() -> Result<()> {
     }
 
     let config_path = options.storage_dir.join("config.yaml");
-    let config = std::fs::File::open(&config_path)
+    let config = File::open(&config_path)
         .with_context(|| format!("open config file: {}", config_path.display()))?;
     let config: Config = serde_yaml::from_reader(&config)
         .with_context(|| format!("deserialize config from {}", config_path.display()))?;
 
-    let mut dnsmasq_handle =
-        DnsmasqHandle::from_config(&options.storage_dir, &config.dnsmasq, &config.http)
-            .context("Error start dnsmasq")?;
+    let mut dnsmasq_handle = DnsmasqHandle::from_config(&options.storage_dir, &config.dhcp)
+        .context("Error start dnsmasq")?;
 
     let data = std::fs::read(options.storage_dir.join("registered.json"));
     let units: Vec<Unit> = data
@@ -62,27 +58,24 @@ async fn main() -> Result<()> {
         .context("invalid json at registered.json")?
         .unwrap_or_default();
 
-    for (i, unit) in units.iter().enumerate() {
-        dnsmasq_handle.write_host(i, unit.mac, unit.ip())?;
-        if config.boot.modes.get(&unit.action).is_none() {
-            bail!("Unknown mode {}", unit.action);
-        }
-    }
-    dnsmasq_handle.send_sighup()?;
+    dnsmasq_handle.set_hosts(&units)?;
 
-    let hint = Mutex::new(Station::default());
+    let last = Mutex::new(Station {
+        image: config.images[0].clone(),
+        ..Default::default()
+    });
 
     let state = Arc::new(State {
         storage_dir: options.storage_dir,
         config,
-        units: RwLock::new(units),
+        units: Mutex::new(units),
         dnsmasq_handle: Mutex::new(dnsmasq_handle),
-        hint,
+        last,
     });
 
     tokio::select!(
-        x = http::main( state.clone(),) => x?,
-        x = udp::main(state.clone()) => x?,
+        x = http::main(state.clone()) => x?,
+        x = udp::main(&state) => x?,
     );
 
     Ok(())

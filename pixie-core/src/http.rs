@@ -1,126 +1,67 @@
 use std::{
-    collections::BTreeMap,
     error::Error,
     fs, io,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use actix_files::Files;
 use actix_web::{
+    error::ErrorUnauthorized,
     get,
     http::StatusCode,
     middleware::Logger,
     post,
-    web::{Bytes, Data, Json, Path, PayloadConfig},
+    web::{Bytes, Data, Path, PayloadConfig},
     App, HttpRequest, HttpServer, Responder,
 };
+use actix_web_httpauth::extractors::basic::BasicAuth;
 use anyhow::{anyhow, Context, Result};
+use macaddr::MacAddr6;
 use mktemp::Temp;
-use serde::Deserialize;
 
-use pixie_shared::{Station, StationKind};
+use pixie_shared::{HttpConfig, Station, Unit};
 
-use crate::{find_interface_ip, find_mac, State, Unit};
-
-#[derive(Clone, Debug, Deserialize, Copy)]
-pub struct Config {
-    pub max_payload: usize,
-    pub listen_on: SocketAddrV4,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct BootConfig {
-    pub unregistered: String,
-    pub default: String,
-    pub modes: BTreeMap<String, String>,
-}
-
-#[get("/boot.ipxe")]
-async fn boot(req: HttpRequest, state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
-    let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
-        Err(anyhow!("IPv6 is not supported"))?
-    };
-    let peer_mac = find_mac(peer_ip)?;
-
-    let units = state
-        .units
-        .read()
-        .map_err(|_| anyhow!("units mutex is poisoned"))?;
-    let unit = units.iter().find(|unit| unit.mac == peer_mac);
-    let mode: &str = unit
-        .map(|unit| &unit.action)
-        .unwrap_or(&state.config.boot.unregistered);
-    let cmd = state
-        .config
-        .boot
-        .modes
-        .get(mode)
-        .ok_or_else(|| anyhow!("mode {} does not exists", mode))?;
-    let cmd = cmd
-        .replace("<server_ip>", &find_interface_ip(peer_ip)?.to_string())
-        .replace(
-            "<server_port>",
-            &state.config.http.listen_on.port().to_string(),
-        );
-    let cmd = match unit {
-        Some(unit) => cmd.replace(
-            "<image>",
-            match unit.kind {
-                StationKind::Worker => "worker",
-                StationKind::Contestant => "contestant",
-            },
-        ),
-        None => cmd,
-    };
-    Ok(cmd.customize())
-}
+use crate::{find_mac, State};
 
 #[get("/action/{mac}/{value}")]
 async fn action(
     path: Path<(String, String)>,
     state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
-    let units = &mut **state
-        .units
-        .write()
-        .map_err(|_| anyhow!("units mutex is poisoned"))?;
+    let mut units = state.units.lock().unwrap();
 
-    let value = &path.1;
-    if state.config.boot.modes.get(value).is_none() {
-        return Ok(format!("Unknown action {}", value)
+    let Ok(action) = path.1.parse() else {
+        return Ok(format!("Unknown action: {}", path.1)
             .customize()
             .with_status(StatusCode::BAD_REQUEST));
-    }
+    };
 
     let mut updated = 0usize;
 
-    if let Ok(mac) = path.0.parse() {
+    if let Ok(mac) = path.0.parse::<MacAddr6>() {
         for unit in units.iter_mut() {
             if unit.mac == mac {
-                unit.action = value.clone();
+                unit.next_action = action;
                 updated += 1;
             }
         }
     } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
         for unit in units.iter_mut() {
-            if unit.ip() == ip {
-                unit.action = value.clone();
+            if unit.static_ip() == ip {
+                unit.next_action = action;
                 updated += 1;
             }
         }
     } else if path.0 == "all" {
         for unit in units.iter_mut() {
-            unit.action = value.clone();
+            unit.next_action = action;
             updated += 1;
         }
     } else if let Some(&group) = state.config.groups.get(&path.0) {
         for unit in units.iter_mut() {
             if unit.group == group {
-                unit.action = value.clone();
+                unit.next_action = action;
                 updated += 1;
             }
         }
@@ -131,7 +72,7 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    fs::write(&state.registered_file(), serde_json::to_string(units)?)?;
+    fs::write(state.registered_file(), serde_json::to_string(&*units)?)?;
     Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
@@ -141,90 +82,79 @@ async fn register(
     body: Bytes,
     state: Data<State>,
 ) -> Result<impl Responder, Box<dyn Error>> {
+    let mut units = state.units.lock().unwrap();
     let body = body.to_vec();
     if let Ok(s) = std::str::from_utf8(&body) {
         if let Ok(data) = serde_json::from_str::<Station>(s) {
+            if !state.config.images.contains(&data.image) {
+                return Ok(format!("Unknown image: {}", data.image)
+                    .customize()
+                    .with_status(StatusCode::BAD_REQUEST));
+            }
+
             let mut guard = state
-                .hint
+                .last
                 .lock()
                 .map_err(|_| anyhow!("hint mutex is poisoned"))?;
-            *guard = Station {
-                kind: data.kind,
-                row: data.row,
-                col: data.col + 1,
-                group: data.group,
-            };
+            *guard = data.clone();
 
             let IpAddr::V4(peer_ip) = req.peer_addr().unwrap().ip() else {
                 Err(anyhow!("IPv6 is not supported"))?
             };
             let peer_mac = find_mac(peer_ip)?;
 
-            let units = &mut *state
-                .units
-                .write()
-                .map_err(|_| anyhow!("units mutex is poisoned"))?;
-
-            let unit = units
-                .iter_mut()
-                .position(|x| x.mac == peer_mac)
-                .map(|unit| {
-                    units[unit].kind = data.kind;
+            let unit = units.iter_mut().position(|x| x.mac == peer_mac);
+            match unit {
+                Some(unit) => {
                     units[unit].group = data.group;
                     units[unit].row = data.row;
                     units[unit].col = data.col;
-                    unit
-                })
-                .unwrap_or_else(|| {
-                    units.push(Unit {
+                    units[unit].image = data.image;
+                }
+                None => {
+                    let unit = Unit {
                         mac: peer_mac,
-                        kind: data.kind,
                         group: data.group,
                         row: data.row,
                         col: data.col,
-                        action: state.config.boot.default.clone(),
-                    });
-                    units.len() - 1
-                });
+                        image: data.image,
+                        curr_action: None,
+                        next_action: state.config.boot.default,
+                    };
+                    units.push(unit);
+                }
+            };
 
-            let ip = units[unit].ip();
-
-            let mut dnsmasq_lock = state
+            state
                 .dnsmasq_handle
                 .lock()
-                .map_err(|_| anyhow!("dnsmasq_handle mutex is poisoned"))?;
-            dnsmasq_lock
-                .write_host(unit, peer_mac, ip)
-                .context("writing hosts file")?;
-            dnsmasq_lock.send_sighup().context("sending sighup")?;
+                .unwrap()
+                .set_hosts(&units)
+                .context("changing dnsmasq hosts")?;
 
-            fs::write(&state.registered_file(), serde_json::to_string(&units)?)?;
-            return Ok("".customize());
+            fs::write(state.registered_file(), serde_json::to_string(&*units)?)?;
+            return Ok("".to_owned().customize());
         }
     }
 
     Ok("Invalid payload"
+        .to_owned()
         .customize()
         .with_status(StatusCode::BAD_REQUEST))
 }
 
-#[get("/register_hint")]
-async fn register_hint(state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
-    let data = *state
-        .hint
-        .lock()
-        .map_err(|_| anyhow!("Mutex is poisoned"))?;
-    Ok(Json(data))
-}
-
-#[get("/has_chunk/{hash}")]
-async fn has_chunk(hash: Path<String>, state: Data<State>) -> impl Responder {
+#[get("/get_chunk_csize/{hash}")]
+async fn get_chunk_csize(
+    hash: Path<String>,
+    state: Data<State>,
+) -> Result<impl Responder, Box<dyn Error>> {
     let path = state.storage_dir.join("chunks").join(&*hash);
-    if path.exists() {
-        "pass"
-    } else {
-        "send"
-    }
+    let csize = match fs::metadata(path) {
+        Ok(meta) => Some(meta.len()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => Err(e)?,
+    };
+    Ok(serde_json::to_vec(&csize)?)
 }
 
 #[post("/chunk/{hash}")]
@@ -233,14 +163,14 @@ async fn upload_chunk(
     hash: Path<String>,
     state: Data<State>,
 ) -> io::Result<impl Responder> {
-    let path = state.storage_dir.join("chunks").join(&*hash);
-    let tmp_file = Temp::new_file_in(state.storage_dir.join("tmp"))
+    let chunks_path = state.storage_dir.join("chunks");
+    let path = chunks_path.join(&*hash);
+    let tmp_file = Temp::new_file_in(chunks_path)
         .expect("failed to create tmp file")
         .release();
-    let body = body.to_vec();
-    fs::write(&tmp_file, body).unwrap();
-    fs::rename(&tmp_file, path).unwrap();
-    Ok("".customize())
+    fs::write(&tmp_file, &body)?;
+    fs::rename(&tmp_file, &path)?;
+    Ok("")
 }
 
 #[post("/image/{name}")]
@@ -249,47 +179,40 @@ async fn upload_image(
     body: Bytes,
     state: Data<State>,
 ) -> io::Result<impl Responder> {
-    let body = body.to_vec();
+    // TODO(veluca): check the chunks for validity.
     let path = state.storage_dir.join("images").join(&*name);
     fs::write(path, body)?;
     Ok("")
 }
 
-#[get("/chunk/{hash}")]
-async fn get_chunk(hash: Path<String>, state: Data<State>) -> io::Result<impl Responder> {
-    static CONN: AtomicUsize = AtomicUsize::new(0);
-
-    struct Handle;
-
-    impl Handle {
-        fn new(limit: usize) -> Option<Self> {
-            CONN.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                (x < limit).then_some(x + 1)
-            })
-            .is_ok()
-            .then_some(Handle)
-        }
+#[get("/config")]
+async fn get_config(
+    auth: BasicAuth,
+    state: Data<State>,
+) -> Result<impl Responder, actix_web::Error> {
+    if Some(state.config.admin.password.as_str()) != auth.password() {
+        return Err(ErrorUnauthorized("password incorrect"));
     }
+    Ok(serde_json::to_string(&state.config))
+}
 
-    impl Drop for Handle {
-        fn drop(&mut self) {
-            CONN.fetch_sub(1, Ordering::SeqCst);
-        }
+#[get("/units")]
+async fn get_units(
+    auth: BasicAuth,
+    state: Data<State>,
+) -> Result<impl Responder, actix_web::Error> {
+    if Some(state.config.admin.password.as_str()) != auth.password() {
+        return Err(ErrorUnauthorized("password incorrect"));
     }
-
-    match Handle::new(12) {
-        Some(_handle) => Ok(fs::read(state.storage_dir.join("chunks").join(&*hash))?.customize()),
-        None => Ok(Vec::new().customize().with_status(StatusCode::IM_A_TEAPOT)),
-    }
+    Ok(serde_json::to_string(&*state.units.lock().unwrap()))
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let Config {
+    let HttpConfig {
         max_payload,
         listen_on,
     } = state.config.http;
 
-    let static_files = state.storage_dir.join("httpstatic");
     let images = state.storage_dir.join("images");
     let data: Data<_> = state.into();
 
@@ -298,18 +221,16 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .wrap(Logger::default())
             .app_data(PayloadConfig::new(max_payload))
             .app_data(data.clone())
-            .service(has_chunk)
+            .service(get_chunk_csize)
             .service(upload_chunk)
             .service(upload_image)
-            .service(Files::new("/static", &static_files))
             .service(Files::new("/image", &images))
-            .service(get_chunk)
-            .service(boot)
             .service(register)
-            .service(register_hint)
             .service(action)
+            .service(get_config)
+            .service(get_units)
     })
-    .bind(listen_on)?
+    .bind(SocketAddrV4::from(listen_on))?
     .run()
     .await?;
 
