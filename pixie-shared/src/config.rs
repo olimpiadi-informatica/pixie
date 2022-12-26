@@ -35,13 +35,13 @@ pub struct DhcpConfig {
 }
 
 // TODO(veluca): this should become TCPConfig.
-#[derive(Clone, Debug, Serialize, Deserialize, Copy)]
+#[derive(Clone, Debug, Serialize, Deserialize, Copy, PartialEq, Eq)]
 pub struct HttpConfig {
     pub max_payload: usize,
     pub listen_on: SocketAddrV4,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UdpConfig {
     pub listen_on: SocketAddrV4,
     pub chunk_broadcast: SocketAddrV4,
@@ -49,7 +49,7 @@ pub struct UdpConfig {
     pub bits_per_second: u32,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ActionKind {
     Reboot,
@@ -74,23 +74,24 @@ impl FromStr for ActionKind {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub struct BootConfig {
     pub unregistered: ActionKind,
     pub default: ActionKind,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Config {
     pub dhcp: DhcpConfig,
     pub http: HttpConfig,
+    pub admin_password: String,
     pub udp: UdpConfig,
     pub boot: BootConfig,
     pub groups: BTreeMap<String, u8>,
     pub images: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Unit {
     pub mac: MacAddr6,
     pub group: u8,
@@ -107,7 +108,7 @@ impl Unit {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistentServerState {
     pub config: Config,
     pub units: Vec<Unit>,

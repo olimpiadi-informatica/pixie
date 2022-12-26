@@ -7,18 +7,20 @@ use std::{
 
 use actix_files::Files;
 use actix_web::{
+    error::{ErrorNotImplemented, ErrorUnauthorized},
     get,
     http::StatusCode,
     middleware::Logger,
     post,
-    web::{Bytes, Data, Path, PayloadConfig},
+    web::{Bytes, Data, Json, Path, PayloadConfig},
     App, HttpRequest, HttpServer, Responder,
 };
+use actix_web_httpauth::extractors::basic::BasicAuth;
 use anyhow::{anyhow, Context, Result};
 use macaddr::MacAddr6;
 use mktemp::Temp;
 
-use pixie_shared::{HttpConfig, Station, Unit};
+use pixie_shared::{HttpConfig, PersistentServerState, Station, Unit};
 
 use crate::{find_mac, State};
 
@@ -183,6 +185,34 @@ async fn upload_image(
     Ok("")
 }
 
+#[get("/state")]
+async fn get_state(
+    auth: BasicAuth,
+    state: Data<State>,
+) -> Result<impl Responder, actix_web::Error> {
+    let config = state.persistent.lock().unwrap();
+    if Some(config.config.admin_password.as_str()) != auth.password() {
+        return Err(ErrorUnauthorized("password incorrect"));
+    }
+    Ok(serde_json::to_string(&*config))
+}
+
+#[post("/set_state")]
+async fn set_state(
+    auth: BasicAuth,
+    body: Json<PersistentServerState>,
+    state: Data<State>,
+) -> Result<impl Responder, actix_web::Error> {
+    let config = state.persistent.lock().unwrap();
+    if Some(config.config.admin_password.as_str()) != auth.password() {
+        return Err(ErrorUnauthorized("password incorrect"));
+    }
+    if *config == body.0 {
+        return Ok("");
+    }
+    return Err(ErrorNotImplemented("not yet implemented"));
+}
+
 pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
         max_payload,
@@ -203,6 +233,8 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(Files::new("/image", &images))
             .service(register)
             .service(action)
+            .service(get_state)
+            .service(set_state)
     })
     .bind(SocketAddrV4::from(listen_on))?
     .run()
