@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     fs, io,
-    net::{IpAddr, Ipv4Addr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr},
     sync::Arc,
 };
 
@@ -79,7 +79,7 @@ async fn action(
             .with_status(StatusCode::BAD_REQUEST));
     }
 
-    fs::write(state.registered_file(), serde_json::to_string(&*units)?)?;
+    fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
     Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
@@ -143,7 +143,7 @@ async fn register(
         .set_hosts(&units)
         .context("changing dnsmasq hosts")?;
 
-    fs::write(state.registered_file(), serde_json::to_string(&*units)?)?;
+    fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
     Ok("".to_owned().customize())
 }
 
@@ -158,7 +158,7 @@ async fn get_chunk_csize(
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => Err(e)?,
     };
-    Ok(serde_json::to_vec(&csize)?)
+    Ok(Json(csize))
 }
 
 #[post("/chunk/{hash}")]
@@ -234,7 +234,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(get_config)
             .service(get_units)
     })
-    .bind(SocketAddrV4::from(listen_on))?
+    .bind(listen_on)?
     .run()
     .await?;
 

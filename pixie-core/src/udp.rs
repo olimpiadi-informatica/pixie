@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    fmt::Write,
-    fs,
-    net::{IpAddr, SocketAddrV4},
-    ops::Bound,
-};
+use std::{collections::BTreeSet, fmt::Write, fs, net::IpAddr, ops::Bound};
 
 use tokio::{
     net::UdpSocket,
@@ -76,7 +70,7 @@ async fn broadcast_chunks(
             let mut xor = [[0; BODY_LEN]; 32];
 
             let udp_config = &state.config.udp;
-            let chunk_broadcast: SocketAddrV4 = udp_config.chunk_broadcast.into();
+            let chunk_broadcast = udp_config.chunk_broadcast;
 
             for index in 0..num_packets {
                 write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
@@ -172,7 +166,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
             groups: state.config.groups.clone(),
         };
         let data = serde_json::to_vec(&hint)?;
-        let hint_broadcast: SocketAddrV4 = state.config.udp.hint_broadcast.into();
+        let hint_broadcast = state.config.udp.hint_broadcast;
         socket.send_to(&data, hint_broadcast).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
@@ -270,14 +264,13 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 
 pub async fn main(state: &State) -> Result<()> {
     let (tx, rx) = mpsc::channel(128);
-    let listen_on: SocketAddrV4 = state.config.udp.listen_on.into();
-    let socket = UdpSocket::bind(listen_on).await?;
+    let socket = UdpSocket::bind(state.config.udp.listen_on).await?;
     socket.set_broadcast(true)?;
 
     tokio::try_join!(
-        broadcast_chunks(&state, &socket, rx),
-        broadcast_hint(&state, &socket),
-        handle_requests(&state, &socket, tx),
+        broadcast_chunks(state, &socket, rx),
+        broadcast_hint(state, &socket),
+        handle_requests(state, &socket, tx),
     )?;
 
     Ok(())
