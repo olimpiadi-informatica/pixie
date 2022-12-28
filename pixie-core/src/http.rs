@@ -9,7 +9,7 @@ use actix_web::{
     web::{Data, Path, PayloadConfig},
     App, HttpServer, Responder,
 };
-use actix_web_httpauth::extractors::basic::BasicAuth;
+use actix_web_httpauth::middleware::HttpAuthentication;
 use anyhow::Result;
 use macaddr::MacAddr6;
 
@@ -77,24 +77,12 @@ async fn action(
 }
 
 #[get("/admin/config")]
-async fn get_config(
-    auth: BasicAuth,
-    state: Data<State>,
-) -> Result<impl Responder, actix_web::Error> {
-    if Some(state.config.http.password.as_str()) != auth.password() {
-        return Err(ErrorUnauthorized("password incorrect"));
-    }
+async fn get_config(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
     Ok(serde_json::to_string(&state.config))
 }
 
 #[get("/admin/units")]
-async fn get_units(
-    auth: BasicAuth,
-    state: Data<State>,
-) -> Result<impl Responder, actix_web::Error> {
-    if Some(state.config.http.password.as_str()) != auth.password() {
-        return Err(ErrorUnauthorized("password incorrect"));
-    }
+async fn get_units(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
     Ok(serde_json::to_string(&*state.units.lock().unwrap()))
 }
 
@@ -102,15 +90,28 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
         max_payload,
         listen_on,
-        ..
+        ref password,
     } = state.config.http;
+
+    let pw = password.clone();
 
     let admin = state.storage_dir.join("admin");
     let data: Data<_> = state.into();
 
     HttpServer::new(move || {
+        let pw = pw.clone();
         App::new()
             .wrap(Logger::default())
+            .wrap(HttpAuthentication::basic(move |req, credentials| {
+                let pw = pw.clone();
+                async move {
+                    if credentials.password() != Some(&pw) {
+                        Err((ErrorUnauthorized("password incorrect"), req))
+                    } else {
+                        Ok(req)
+                    }
+                }
+            }))
             .app_data(PayloadConfig::new(max_payload))
             .app_data(data.clone())
             .service(action)
