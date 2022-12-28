@@ -1034,6 +1034,7 @@ name = "pixie-shared"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ipnet",
  "macaddr",
  "serde",
 ]

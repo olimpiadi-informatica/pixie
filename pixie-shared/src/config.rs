@@ -3,6 +3,7 @@ use core::fmt::Display;
 use core::str::FromStr;
 
 use macaddr::MacAddr6;
+use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -37,29 +38,19 @@ pub struct DhcpConfig {
     pub interface: String,
 }
 
-// TODO(veluca): this should become TCPConfig.
-#[derive(Clone, Debug, Serialize, Deserialize, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpConfig {
     pub max_payload: usize,
     pub listen_on: SocketAddrV4,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AdminConfig {
     pub password: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UdpConfig {
-    pub listen_on: Ipv4Addr,
-    pub chunk_broadcast: SocketAddrV4,
-    pub hint_broadcast: SocketAddrV4,
+pub struct HostsConfig {
+    pub network: Ipv4Net,
+    pub chunks_port: u16,
+    pub hint_port: u16,
     pub bits_per_second: u32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TcpConfig {
-    pub listen_on: SocketAddrV4,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,9 +100,7 @@ pub struct BootConfig {
 pub struct Config {
     pub dhcp: DhcpConfig,
     pub http: HttpConfig,
-    pub admin: AdminConfig,
-    pub udp: UdpConfig,
-    pub tcp: TcpConfig,
+    pub hosts: HostsConfig,
     pub boot: BootConfig,
     pub groups: Bijection<String, u8>,
     pub images: Vec<String>,

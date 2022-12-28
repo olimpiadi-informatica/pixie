@@ -1,4 +1,4 @@
-use std::{io::ErrorKind, net::IpAddr, net::SocketAddr, path::Path, sync::Arc};
+use std::{io::ErrorKind, net::{IpAddr, Ipv4Addr}, net::SocketAddr, path::Path, sync::Arc};
 
 use tokio::{
     fs,
@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use macaddr::MacAddr6;
 use mktemp::Temp;
 
-use pixie_shared::{to_hex, TcpRequest, Unit};
+use pixie_shared::{to_hex, TcpRequest, Unit, ACTION_PORT};
 
 use crate::{find_mac, State};
 
@@ -132,7 +132,8 @@ async fn handle_connection(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let listener = TcpListener::bind(state.config.tcp.listen_on).await?;
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
+    log::info!("Listening on {}", listener.local_addr()?);
     loop {
         let (stream, addr) = listener.accept().await?;
         let state = state.clone();

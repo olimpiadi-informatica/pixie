@@ -3,8 +3,8 @@
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
-use core::fmt::Write;
 use blake3::OUT_LEN;
+use core::fmt::Write;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
@@ -84,20 +84,9 @@ impl From<Address> for SocketAddrV4 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     Reboot,
-    Register {
-        hint_port: u16,
-        server: Address,
-    },
-    Push {
-        http_server: Address,
-        image: String,
-    },
-    Pull {
-        http_server: Address,
-        image: String,
-        udp_recv_port: u16,
-        udp_server: Address,
-    },
+    Register { hint_port: u16 },
+    Push { image: String },
+    Pull { image: String, chunks_port: u16 },
     Wait,
 }
 

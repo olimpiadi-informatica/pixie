@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    net::{IpAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddrV4},
     ops::Bound,
 };
 
@@ -14,11 +14,10 @@ use tokio::{
 use anyhow::{anyhow, bail, ensure, Result};
 
 use pixie_shared::{
-    to_hex, Action, Address, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN,
-    PACKET_LEN,
+    to_hex, Action, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN, PACKET_LEN,
 };
 
-use crate::{find_interface_ip, find_mac, ActionKind, State};
+use crate::{find_mac, ActionKind, State};
 
 async fn broadcast_chunks(
     state: &State,
@@ -69,8 +68,9 @@ async fn broadcast_chunks(
 
             let mut xor = [[0; BODY_LEN]; 32];
 
-            let udp_config = &state.config.udp;
-            let chunk_broadcast = udp_config.chunk_broadcast;
+            let hosts_cfg = &state.config.hosts;
+            let chunks_addr =
+                SocketAddrV4::new(hosts_cfg.network.broadcast(), hosts_cfg.chunks_port);
 
             for index in 0..num_packets {
                 write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
@@ -85,12 +85,10 @@ async fn broadcast_chunks(
 
                 time::sleep_until(wait_for).await;
 
-                let sent_len = socket
-                    .send_to(&write_buf[..34 + len], chunk_broadcast)
-                    .await?;
+                let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
                 wait_for +=
-                    8 * (sent_len as u32) * Duration::from_secs(1) / udp_config.bits_per_second;
+                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.bits_per_second;
             }
 
             for index in 0..32.min(num_packets) {
@@ -100,12 +98,10 @@ async fn broadcast_chunks(
                 write_buf[34..34 + len].clone_from_slice(body);
 
                 time::sleep_until(wait_for).await;
-                let sent_len = socket
-                    .send_to(&write_buf[..34 + len], chunk_broadcast)
-                    .await?;
+                let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
                 wait_for +=
-                    8 * (sent_len as u32) * Duration::from_secs(1) / udp_config.bits_per_second;
+                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.bits_per_second;
             }
         }
     }
@@ -166,8 +162,11 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
             groups: state.config.groups.clone(),
         };
         let data = serde_json::to_vec(&hint)?;
-        let hint_broadcast = state.config.udp.hint_broadcast;
-        socket.send_to(&data, hint_broadcast).await?;
+        let hint_addr = SocketAddrV4::new(
+            state.config.hosts.network.broadcast(),
+            state.config.hosts.hint_port,
+        );
+        socket.send_to(&data, hint_addr).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -204,35 +203,17 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     None => state.config.boot.unregistered,
                 };
 
-                let server_ip = find_interface_ip(peer_ip)?;
-                let server_port = state.config.tcp.listen_on.port();
-                let server_loc = Address {
-                    ip: (
-                        server_ip.octets()[0],
-                        server_ip.octets()[1],
-                        server_ip.octets()[2],
-                        server_ip.octets()[3],
-                    ),
-                    port: server_port,
-                };
                 let action = match action_kind {
                     ActionKind::Reboot => Action::Reboot,
                     ActionKind::Register => Action::Register {
-                        server: server_loc,
-                        hint_port: state.config.udp.hint_broadcast.port(),
+                        hint_port: state.config.hosts.hint_port,
                     },
                     ActionKind::Push => Action::Push {
-                        http_server: server_loc,
                         image: unit.unwrap().image.clone(),
                     },
                     ActionKind::Pull => Action::Pull {
-                        http_server: server_loc,
                         image: unit.unwrap().image.clone(),
-                        udp_recv_port: state.config.udp.chunk_broadcast.port(),
-                        udp_server: Address {
-                            ip: server_loc.ip,
-                            port: ACTION_PORT,
-                        },
+                        chunks_port: state.config.hosts.chunks_port,
                     },
                     ActionKind::Wait => Action::Wait,
                 };
@@ -280,8 +261,8 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 
 pub async fn main(state: &State) -> Result<()> {
     let (tx, rx) = mpsc::channel(128);
-    let socket =
-        UdpSocket::bind(SocketAddrV4::new(state.config.udp.listen_on, ACTION_PORT)).await?;
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
+    log::info!("Listening on {}", socket.local_addr()?);
     socket.set_broadcast(true)?;
 
     tokio::try_join!(

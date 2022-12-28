@@ -67,13 +67,11 @@ struct Stats {
 
 pub async fn pull(
     os: UefiOS,
-    server_address: Address,
+    server_addr: Address,
     image: String,
-    udp_recv_port: u16,
-    udp_server: Address,
-    progress_address: Address,
+    chunks_port: u16,
 ) -> Result<()> {
-    let stream = os.connect(server_address.ip, server_address.port).await?;
+    let stream = os.connect(server_addr.ip, server_addr.port).await?;
     let image = fetch_image(&stream, image).await?;
     stream.close_send().await;
     stream.wait_until_closed().await;
@@ -147,7 +145,7 @@ pub async fn pull(
 
     stats.borrow_mut().fetch = chunks_info.len();
 
-    let socket = os.udp_bind(Some(udp_recv_port)).await?;
+    let socket = os.udp_bind(Some(chunks_port)).await?;
     let mut buf = [0; PACKET_SIZE];
 
     let mut received = BTreeMap::new();
@@ -231,8 +229,8 @@ pub async fn pull(
 
                 socket
                     .send(
-                        progress_address.ip,
-                        progress_address.port,
+                        server_addr.ip,
+                        server_addr.port,
                         &serde_json::to_vec(&UdpRequest::ActionProgress(
                             stats.borrow().recv,
                             stats.borrow().fetch,
@@ -245,7 +243,7 @@ pub async fn pull(
                 let chunks: Vec<_> = chunks_info.iter().take(10).map(|(hash, _)| *hash).collect();
                 stats.borrow_mut().requested += chunks.len();
                 let msg = serde_json::to_vec(&UdpRequest::RequestChunks(chunks)).unwrap();
-                socket.send(udp_server.ip, udp_server.port, &msg).await?;
+                socket.send(server_addr.ip, server_addr.port, &msg).await?;
             }
         }
     }

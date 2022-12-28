@@ -245,6 +245,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnet"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11b0d96e660696543b251e58030cf9787df56da39dab19ad60eae7353040917e"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -347,6 +356,7 @@ name = "pixie-shared"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "ipnet",
  "macaddr",
  "serde",
 ]

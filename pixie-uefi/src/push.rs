@@ -180,7 +180,6 @@ pub async fn push(
     os: UefiOS,
     server_address: Address,
     image: String,
-    progress_address: Address,
 ) -> Result<()> {
     let stats = Arc::new(RefCell::new(State::ReadingPartitions));
 
@@ -290,8 +289,8 @@ pub async fn push(
         });
 
         udp.send(
-            progress_address.ip,
-            progress_address.port,
+            server_address.ip,
+            server_address.port,
             &serde_json::to_vec(&UdpRequest::ActionProgress(idx, total))?,
         )
         .await?;

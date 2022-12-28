@@ -18,7 +18,7 @@ struct Data {
     selected: usize,
 }
 
-pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Result<()> {
+pub async fn register(os: UefiOS, server_addr: Address, hint_port: u16) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
     let data2 = data.clone();
 
@@ -162,7 +162,7 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
 
     let msg = TcpRequest::Register(data.borrow().station.clone());
     let buf = serde_json::to_vec(&msg)?;
-    let stream = os.connect(server_address.ip, server_address.port).await?;
+    let stream = os.connect(server_addr.ip, server_addr.port).await?;
     stream.send(&(buf.len() as u64).to_le_bytes()).await?;
     stream.send(&buf).await?;
     stream.close_send().await;

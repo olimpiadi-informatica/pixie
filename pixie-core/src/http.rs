@@ -81,7 +81,7 @@ async fn get_config(
     auth: BasicAuth,
     state: Data<State>,
 ) -> Result<impl Responder, actix_web::Error> {
-    if Some(state.config.admin.password.as_str()) != auth.password() {
+    if Some(state.config.http.password.as_str()) != auth.password() {
         return Err(ErrorUnauthorized("password incorrect"));
     }
     Ok(serde_json::to_string(&state.config))
@@ -92,7 +92,7 @@ async fn get_units(
     auth: BasicAuth,
     state: Data<State>,
 ) -> Result<impl Responder, actix_web::Error> {
-    if Some(state.config.admin.password.as_str()) != auth.password() {
+    if Some(state.config.http.password.as_str()) != auth.password() {
         return Err(ErrorUnauthorized("password incorrect"));
     }
     Ok(serde_json::to_string(&*state.units.lock().unwrap()))
@@ -102,6 +102,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
         max_payload,
         listen_on,
+        ..
     } = state.config.http;
 
     let admin = state.storage_dir.join("admin");

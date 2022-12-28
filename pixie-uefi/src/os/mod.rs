@@ -54,7 +54,7 @@ mod timer;
 
 use error::Result;
 
-pub use net::{HttpMethod, TcpStream, PACKET_SIZE};
+pub use net::{TcpStream, PACKET_SIZE};
 
 struct BytesFmt(u64);
 
@@ -445,16 +445,6 @@ impl UefiOS {
 
     pub async fn udp_bind(&self, port: Option<u16>) -> Result<UdpHandle> {
         UdpHandle::new(*self, port).await
-    }
-
-    pub async fn http(
-        &self,
-        ip: (u8, u8, u8, u8),
-        port: u16,
-        method: HttpMethod<'_>,
-        path: &[u8],
-    ) -> Result<Vec<u8>> {
-        net::http(*self, ip, port, method, path).await
     }
 
     pub async fn read_key(&self) -> Result<Key> {

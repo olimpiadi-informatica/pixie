@@ -1,12 +1,7 @@
 use core::{future::poll_fn, task::Poll};
 
-use alloc::{
-    boxed::Box,
-    collections::BTreeMap,
-    string::{String, ToString},
-    vec::Vec,
-};
-use futures::future::{select, try_join};
+use alloc::{boxed::Box, collections::BTreeMap};
+use futures::future::select;
 use managed::ManagedSlice;
 
 use smoltcp::{
@@ -559,81 +554,4 @@ impl Drop for UdpHandle {
     fn drop(&mut self) {
         self.close()
     }
-}
-
-pub enum HttpMethod<'a> {
-    Get,
-    Post(&'a [u8]),
-}
-
-pub async fn http<'a>(
-    os: UefiOS,
-    ip: (u8, u8, u8, u8),
-    port: u16,
-    method: HttpMethod<'a>,
-    path: &[u8],
-) -> Result<Vec<u8>> {
-    let tcp = TcpStream::new(os, ip, port).await?;
-
-    let send_req = async {
-        match method {
-            HttpMethod::Get => {
-                tcp.send(b"GET ").await?;
-                tcp.send(path).await?;
-                tcp.send(b" HTTP/1.0\r\n\r\n").await?;
-            }
-            HttpMethod::Post(data) => {
-                tcp.send(b"POST ").await?;
-                tcp.send(path).await?;
-                tcp.send(format!(" HTTP/1.0\r\nContent-Length: {}\r\n\r\n", data.len()).as_bytes())
-                    .await?;
-                tcp.send(data).await?;
-            }
-        }
-        Result::Ok(())
-    };
-
-    let mut resp = vec![0; 1024];
-    let recv_resp = async {
-        let mut recv_so_far = 0;
-        loop {
-            if resp.len() < recv_so_far * 2 {
-                resp.resize(resp.len() * 2, 0);
-            }
-            let recv = tcp.recv(&mut resp[recv_so_far..]).await?;
-            if recv == 0 {
-                resp.resize(recv_so_far, 0xFF);
-                break;
-            }
-            recv_so_far += recv;
-        }
-        Result::Ok(())
-    };
-
-    try_join(send_req, recv_resp).await?;
-
-    tcp.close_send().await;
-    tcp.wait_until_closed().await;
-
-    // TODO(veluca): better parsing of HTTP headers.
-    let end_first_line = resp
-        .windows(2)
-        .enumerate()
-        .find_map(|b| if b.1 == b"\r\n" { Some(b.0) } else { None })
-        .ok_or_else(|| Error::Generic("HTTP response has no \\r\\n".into()))?;
-
-    if &resp[..end_first_line] != b"HTTP/1.0 200 OK" {
-        return Err(Error::Generic(
-            "HTTP response first line was unexpected, found ".to_string()
-                + &String::from_utf8_lossy(&resp[..end_first_line]),
-        ));
-    }
-
-    let end_headers = resp
-        .windows(4)
-        .enumerate()
-        .find_map(|b| if b.1 == b"\r\n\r\n" { Some(b.0) } else { None })
-        .ok_or_else(|| Error::Generic("HTTP response has no \\r\\n\\r\\n".into()))?;
-
-    Ok(resp[end_headers + 4..].to_vec())
 }

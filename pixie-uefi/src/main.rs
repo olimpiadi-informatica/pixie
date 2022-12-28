@@ -64,14 +64,9 @@ async fn run(os: UefiOS) -> Result<()> {
                     udp.recv(&mut buf).await;
                     reboot_to_os(os).await;
                 }
-                Action::Register { server, hint_port } => register(os, hint_port, server).await?,
-                Action::Push { http_server, image } => push(os, http_server, image, server).await?,
-                Action::Pull {
-                    http_server,
-                    image,
-                    udp_recv_port,
-                    udp_server,
-                } => pull(os, http_server, image, udp_recv_port, udp_server, server).await?,
+                Action::Register { hint_port } => register(os, server, hint_port).await?,
+                Action::Push { image } => push(os, server, image).await?,
+                Action::Pull { image, chunks_port } => pull(os, server, image, chunks_port).await?,
             }
         }
 
