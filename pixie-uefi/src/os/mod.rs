@@ -81,14 +81,65 @@ struct UefiOSImpl {
     output: Option<ScopedProtocol<'static, Output<'static>>>,
     net: Option<NetworkInterface>,
     messages: VecDeque<(String, MessageKind)>,
+    ui_buf: Vec<(String, Color, Color)>,
+    ui_pos: usize,
 }
 
 impl UefiOSImpl {
-    pub fn write_with_color(&mut self, msg: &str, fg: Color, bg: Color) {
+    fn cols(&mut self) -> usize {
         let output = self.output.as_mut().unwrap();
-        output.set_color(fg, bg).unwrap();
-        write!(output, "{}", msg).unwrap();
+        let mode = output.current_mode().unwrap().unwrap();
+        mode.columns()
+    }
+
+    pub fn write_with_color(&mut self, msg: &str, fg: Color, bg: Color) {
+        let lines: Vec<_> = msg.split('\n').collect();
+        for (n, line) in lines.iter().enumerate() {
+            self.ui_buf.push((line.to_string(), fg, bg));
+            self.ui_pos += line.len();
+            if n != lines.len() - 1 {
+                let cols = self.cols();
+                let colp = self.ui_pos % cols;
+                let n = cols - colp;
+                self.ui_buf
+                    .push((String::from_utf8(vec![0x20; n]).unwrap(), fg, bg));
+                self.ui_pos += n;
+            }
+        }
+    }
+
+    pub fn maybe_advance_to_col(&mut self, col: usize) {
+        let (fg, bg) = if let Some((_, f, b)) = self.ui_buf[..].last() {
+            (*f, *b)
+        } else {
+            (Color::White, Color::Black)
+        };
+        let cols = self.cols();
+        let colp = self.ui_pos % cols;
+        let n = col - colp;
+        if colp < col {
+            self.ui_buf
+                .push((String::from_utf8(vec![0x20; n]).unwrap(), fg, bg));
+            self.ui_pos += n;
+        }
+    }
+
+    pub fn flush_ui_buf(&mut self) {
+        let output = self.output.as_mut().unwrap();
+        output.set_cursor_position(0, 0).unwrap();
+        let mode = output.current_mode().unwrap().unwrap();
+        let (cols, rows) = (mode.columns(), mode.rows());
+        for (msg, fg, bg) in self.ui_buf.drain(..) {
+            output.set_color(fg, bg).unwrap();
+            write!(output, "{}", msg).unwrap();
+        }
         output.set_color(Color::White, Color::Black).unwrap();
+        if self.ui_pos + 1 < cols * rows {
+            // Clear any remaining chars.
+            let n = cols * rows - self.ui_pos - 1;
+            write!(output, "{}", String::from_utf8(vec![0x20; n]).unwrap()).unwrap();
+        }
+        self.ui_pos = 0;
     }
 }
 
@@ -157,6 +208,8 @@ impl UefiOS {
                 output: None,
                 net: None,
                 messages: VecDeque::new(),
+                ui_buf: vec![],
+                ui_pos: 0,
             }))
         }
 
@@ -166,9 +219,11 @@ impl UefiOS {
             .open_handle(UefiOS {}.all_handles::<Input>().unwrap()[0])
             .unwrap();
 
-        let output = UefiOS {}
+        let mut output: ScopedProtocol<Output> = UefiOS {}
             .open_handle(UefiOS {}.all_handles::<Output>().unwrap()[0])
             .unwrap();
+
+        output.clear().unwrap();
 
         unsafe {
             OS.as_mut().unwrap().borrow_mut().net = Some(net);
@@ -209,7 +264,7 @@ impl UefiOS {
         os.spawn(async {
             loop {
                 UefiOS {}.draw_ui();
-                UefiOS {}.sleep_us(1_000_000).await;
+                UefiOS {}.sleep_us(50_000).await;
             }
         });
 
@@ -430,40 +485,28 @@ impl UefiOS {
             let mut os = self.os().borrow_mut();
 
             let mode = os.output.as_mut().unwrap().current_mode().unwrap().unwrap();
-            let (cols, _rows) = (mode.columns(), mode.rows());
+            let cols = mode.columns();
 
-            os.output.as_mut().unwrap().clear().unwrap();
             os.write_with_color(&format!("uptime: {:10}s", time), Color::White, Color::Black);
+            os.maybe_advance_to_col(cols / 3);
 
-            os.output
-                .as_mut()
-                .unwrap()
-                .set_cursor_position(cols / 3, 0)
-                .unwrap();
             if let Some(ip) = ip {
                 os.write_with_color(&format!("IP: {}", ip), Color::White, Color::Black);
             } else {
                 os.write_with_color("DHCP...", Color::Yellow, Color::Black);
             }
 
-            os.output
-                .as_mut()
-                .unwrap()
-                .set_cursor_position(2 * cols / 3, 0)
-                .unwrap();
+            os.maybe_advance_to_col(3 * cols / 5);
+
             let vrx = os.net.as_ref().unwrap().vrx;
             let vtx = os.net.as_ref().unwrap().vtx;
             os.write_with_color(
-                &format!("rx: {}/s tx: {}/s", BytesFmt(vrx), BytesFmt(vtx)),
+                &format!("rx: {}/s tx: {}/s\n\n", BytesFmt(vrx), BytesFmt(vtx)),
                 Color::White,
                 Color::Black,
             );
 
-            os.output
-                .as_mut()
-                .unwrap()
-                .set_cursor_position(0, 2)
-                .unwrap();
+            os.maybe_advance_to_col(cols);
 
             // TODO(veluca): find a better solution.
             let messages: Vec<_> = os.messages.iter().cloned().collect();
@@ -486,6 +529,8 @@ impl UefiOS {
         if let Some(ui) = &*ui_drawer {
             ui(*self);
         }
+        // Actually draw the changes.
+        self.os().borrow_mut().flush_ui_buf();
     }
 
     pub fn force_ui_redraw(&self) {
