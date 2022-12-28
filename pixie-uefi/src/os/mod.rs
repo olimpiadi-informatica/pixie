@@ -35,13 +35,8 @@ use uefi::{
 };
 
 use self::{
-    boot_options::BootOptions,
-    disk::Disk,
-    error::Error,
-    executor::Executor,
-    net::{NetworkInterface, UdpHandle},
-    rng::Rng,
-    timer::Timer,
+    boot_options::BootOptions, disk::Disk, error::Error, executor::Executor, net::NetworkInterface,
+    rng::Rng, timer::Timer,
 };
 
 mod boot_options;
@@ -54,7 +49,7 @@ mod timer;
 
 use error::Result;
 
-pub use net::{TcpStream, PACKET_SIZE};
+pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
 struct BytesFmt(u64);
 
@@ -470,14 +465,18 @@ impl UefiOS {
     fn draw_ui(&self) {
         // Write the header.
         {
-            let time = self.timer().micros() / 1_000_000;
+            let time = self.timer().micros() as f32 * 0.000_001;
             let ip = self.net().ip();
             let mut os = self.os().borrow_mut();
 
             let mode = os.output.as_mut().unwrap().current_mode().unwrap().unwrap();
             let cols = mode.columns();
 
-            os.write_with_color(&format!("uptime: {:10}s", time), Color::White, Color::Black);
+            os.write_with_color(
+                &format!("uptime: {:10.1}s", time),
+                Color::White,
+                Color::Black,
+            );
             os.maybe_advance_to_col(cols / 3);
 
             if let Some(ip) = ip {
