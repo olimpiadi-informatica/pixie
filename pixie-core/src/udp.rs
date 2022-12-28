@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeSet,
-    fmt::Write,
     fs,
     net::{IpAddr, SocketAddrV4},
     ops::Bound,
@@ -15,18 +14,11 @@ use tokio::{
 use anyhow::{anyhow, bail, ensure, Result};
 
 use pixie_shared::{
-    Action, Address, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN, PACKET_LEN,
+    to_hex, Action, Address, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN,
+    PACKET_LEN,
 };
 
 use crate::{find_interface_ip, find_mac, ActionKind, State};
-
-fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::new();
-    for byte in bytes {
-        write!(s, "{:02x}", byte).unwrap();
-    }
-    s
-}
 
 async fn broadcast_chunks(
     state: &State,
@@ -66,7 +58,7 @@ async fn broadcast_chunks(
             let data = match fs::read(&filename) {
                 Ok(data) => data,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!("ERROR: chunk {} not found", to_hex(&index));
+                    log::warn!("chunk {} not found", to_hex(&index));
                     continue;
                 }
                 Err(e) => Err(e)?,
@@ -213,7 +205,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 };
 
                 let server_ip = find_interface_ip(peer_ip)?;
-                let server_port = state.config.http.listen_on.port();
+                let server_port = state.config.tcp.listen_on.port();
                 let server_loc = Address {
                     ip: (
                         server_ip.octets()[0],
@@ -231,7 +223,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     },
                     ActionKind::Push => Action::Push {
                         http_server: server_loc,
-                        image: format!("/image/{}", unit.unwrap().image),
+                        image: unit.unwrap().image.clone(),
                     },
                     ActionKind::Pull => Action::Pull {
                         http_server: server_loc,

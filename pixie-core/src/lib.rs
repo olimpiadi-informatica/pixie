@@ -1,5 +1,6 @@
 pub mod dnsmasq;
 pub mod http;
+pub mod tcp;
 pub mod udp;
 
 use std::{
@@ -44,7 +45,7 @@ pub fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
         }
     }
 
-    if ip == Ipv4Addr::new(127, 0, 0, 1) {
+    if ip.is_loopback() {
         bail!("localhost not supported");
     }
 

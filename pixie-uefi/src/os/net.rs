@@ -412,6 +412,28 @@ impl TcpStream {
         .await
     }
 
+    pub async fn recv_exact(&self, data: &mut [u8]) -> Result<()> {
+        let mut pos = 0;
+        while pos < data.len() {
+            let recvd = self.recv(&mut data[pos..]).await?;
+            if recvd == 0 {
+                return Err(Error::msg("connection closed"));
+            }
+            pos += recvd;
+        }
+        Ok(())
+    }
+
+    pub async fn send_u64_le(&self, data: u64) -> Result<()> {
+        self.send(&data.to_le_bytes()).await
+    }
+
+    pub async fn recv_u64_le(&self) -> Result<u64> {
+        let mut buf = [0; 8];
+        self.recv_exact(&mut buf).await?;
+        Ok(u64::from_le_bytes(buf))
+    }
+
     pub async fn close_send(&self) {
         {
             self.os

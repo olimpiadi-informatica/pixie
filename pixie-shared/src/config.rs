@@ -57,6 +57,11 @@ pub struct UdpConfig {
     pub bits_per_second: u32,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TcpConfig {
+    pub listen_on: SocketAddrV4,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ActionKind {
@@ -106,6 +111,7 @@ pub struct Config {
     pub http: HttpConfig,
     pub admin: AdminConfig,
     pub udp: UdpConfig,
+    pub tcp: TcpConfig,
     pub boot: BootConfig,
     pub groups: Bijection<String, u8>,
     pub images: Vec<String>,

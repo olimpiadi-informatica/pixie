@@ -12,6 +12,8 @@ udp:
   chunk_broadcast: 192.168.1.255:4041
   hint_broadcast: 192.168.1.255:4042
   bits_per_second: 52428800
+tcp:
+  listen_on: 0.0.0.0:25640
 groups:
   - [asdf, 0]
   - [qwer, 1]

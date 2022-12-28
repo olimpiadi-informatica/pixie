@@ -39,7 +39,7 @@ use self::{
     disk::Disk,
     error::Error,
     executor::Executor,
-    net::{NetworkInterface, TcpStream, UdpHandle},
+    net::{NetworkInterface, UdpHandle},
     rng::Rng,
     timer::Timer,
 };
@@ -54,7 +54,7 @@ mod timer;
 
 use error::Result;
 
-pub use net::{HttpMethod, PACKET_SIZE};
+pub use net::{HttpMethod, TcpStream, PACKET_SIZE};
 
 struct BytesFmt(u64);
 

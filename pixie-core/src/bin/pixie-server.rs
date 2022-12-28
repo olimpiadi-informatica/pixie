@@ -5,7 +5,7 @@ use clap::Parser;
 
 use pixie_shared::{Config, Station, Unit};
 
-use pixie_core::{dnsmasq::DnsmasqHandle, http, udp, State};
+use pixie_core::{dnsmasq::DnsmasqHandle, http, tcp, udp, State};
 
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
@@ -77,6 +77,7 @@ async fn main() -> Result<()> {
     tokio::select!(
         x = http::main(state.clone()) => x?,
         x = udp::main(&state) => x?,
+        x = tcp::main(state.clone()) => x?,
     );
 
     Ok(())

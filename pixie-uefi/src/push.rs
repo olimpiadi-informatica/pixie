@@ -5,8 +5,8 @@ use blake3::Hash;
 use miniz_oxide::deflate::compress_to_vec;
 use uefi::proto::console::text::Color;
 
-use crate::os::{disk::Disk, error::Result, HttpMethod, MessageKind, UefiOS};
-use pixie_shared::{Address, Chunk, Image, Offset, UdpRequest, CHUNK_SIZE};
+use crate::os::{disk::Disk, error::Result, MessageKind, TcpStream, UefiOS};
+use pixie_shared::{Address, Chunk, Image, Offset, TcpRequest, UdpRequest, CHUNK_SIZE};
 
 #[derive(Debug)]
 struct ChunkInfo {
@@ -135,41 +135,34 @@ async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
     Ok(Some(ans))
 }
 
-async fn get_chunk_csize(
-    os: UefiOS,
-    server_address: Address,
-    hash: &Hash,
-) -> Result<Option<usize>> {
-    let resp = os
-        .http(
-            server_address.ip,
-            server_address.port,
-            HttpMethod::Get,
-            format!("/get_chunk_csize/{}", hash).as_bytes(),
-        )
-        .await?;
-    Ok(serde_json::from_slice(&resp)?)
+async fn get_chunk_csize(stream: &TcpStream, hash: &Hash) -> Result<Option<usize>> {
+    let req = TcpRequest::GetChunkSize((*hash).into());
+    let mut buf = serde_json::to_vec(&req)?;
+    stream.send_u64_le(buf.len() as u64).await?;
+    stream.send(&buf).await?;
+    let len = stream.recv_u64_le().await?;
+    buf.resize(len as usize, 0);
+    stream.recv(&mut buf).await?;
+    Ok(serde_json::from_slice(&buf)?)
 }
 
-async fn save_chunk(os: UefiOS, server_address: Address, hash: &Hash, data: &[u8]) -> Result<()> {
-    os.http(
-        server_address.ip,
-        server_address.port,
-        HttpMethod::Post(data),
-        format!("/chunk/{}", hash).as_bytes(),
-    )
-    .await?;
+async fn save_chunk(stream: &TcpStream, hash: &Hash, data: &[u8]) -> Result<()> {
+    let req = TcpRequest::UploadChunk((*hash).into(), data.into());
+    let buf = serde_json::to_vec(&req)?;
+    stream.send_u64_le(buf.len() as u64).await?;
+    stream.send(&buf).await?;
+    let len = stream.recv_u64_le().await?;
+    assert_eq!(len, 0);
     Ok(())
 }
 
-async fn save_image(os: UefiOS, server_address: Address, image: &str, info: Image) -> Result<()> {
-    os.http(
-        server_address.ip,
-        server_address.port,
-        HttpMethod::Post(&serde_json::to_vec(&info)?),
-        image.as_bytes(),
-    )
-    .await?;
+async fn save_image(stream: &TcpStream, name: String, image: Image) -> Result<()> {
+    let req = TcpRequest::UploadImage(name, image);
+    let buf = serde_json::to_vec(&req)?;
+    stream.send_u64_le(buf.len() as u64).await?;
+    stream.send(&buf).await?;
+    let len = stream.recv_u64_le().await?;
+    assert_eq!(len, 0);
     Ok(())
 }
 
@@ -192,6 +185,7 @@ pub async fn push(
     let stats = Arc::new(RefCell::new(State::ReadingPartitions));
 
     let udp = os.udp_bind(None).await?;
+    let stream = os.connect(server_address.ip, server_address.port).await?;
 
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| match &*stats2.borrow() {
@@ -305,12 +299,12 @@ pub async fn push(
         let mut data = vec![0; chnk.size];
         disk.read(chnk.start as u64, &mut data).await?;
         let hash = blake3::hash(&data);
-        let csize = match get_chunk_csize(os, server_address, &hash).await? {
+        let csize = match get_chunk_csize(&stream, &hash).await? {
             Some(csize) => csize,
             None => {
                 // TODO(veluca): consider passing in the compression level.
                 let cdata = compress_to_vec(&data, 2);
-                save_chunk(os, server_address, &hash, &cdata).await?;
+                save_chunk(&stream, &hash, &cdata).await?;
                 cdata.len()
             }
         };
@@ -330,9 +324,8 @@ pub async fn push(
     let bo_command = bo.get(boid);
 
     save_image(
-        os,
-        server_address,
-        &image,
+        &stream,
+        image.clone(),
         Image {
             boot_option_id: boid,
             boot_entry: bo_command,
@@ -341,9 +334,12 @@ pub async fn push(
     )
     .await?;
 
+    stream.close_send().await;
+    stream.wait_until_closed().await;
+
     os.append_message(
         format!(
-            "image saved at {:?}{}. Total size {total_size}, total csize {total_csize}",
+            "image saved at {:?}/{}. Total size {total_size}, total csize {total_csize}",
             server_address, image,
         ),
         MessageKind::Info,

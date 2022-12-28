@@ -12,11 +12,11 @@ use futures::future::{select, Either};
 
 use miniz_oxide::inflate::decompress_to_vec;
 
-use pixie_shared::{Address, Image, UdpRequest, BODY_LEN, HEADER_LEN};
+use pixie_shared::{Address, Image, TcpRequest, UdpRequest, BODY_LEN, HEADER_LEN};
 
 use crate::os::{
     error::{Error, Result},
-    HttpMethod, UefiOS, PACKET_SIZE,
+    TcpStream, UefiOS, PACKET_SIZE,
 };
 
 struct PartialChunk {
@@ -46,16 +46,15 @@ impl PartialChunk {
     }
 }
 
-async fn fetch_image(os: UefiOS, server_address: Address, image: &str) -> Result<Image> {
-    let resp = os
-        .http(
-            server_address.ip,
-            server_address.port,
-            HttpMethod::Get,
-            format!("/image/{}", image).as_bytes(),
-        )
-        .await?;
-    Ok(serde_json::from_slice(&resp)?)
+async fn fetch_image(stream: &TcpStream, image: String) -> Result<Image> {
+    let req = TcpRequest::GetImage(image);
+    let mut buf = serde_json::to_vec(&req)?;
+    stream.send_u64_le(buf.len() as u64).await?;
+    stream.send(&buf).await?;
+    let len = stream.recv_u64_le().await?;
+    buf.resize(len as usize, 0);
+    stream.recv_exact(&mut buf).await?;
+    Ok(serde_json::from_slice(&buf)?)
 }
 
 struct Stats {
@@ -74,7 +73,10 @@ pub async fn pull(
     udp_server: Address,
     progress_address: Address,
 ) -> Result<()> {
-    let image = fetch_image(os, server_address, &image).await?;
+    let stream = os.connect(server_address.ip, server_address.port).await?;
+    let image = fetch_image(&stream, image).await?;
+    stream.close_send().await;
+    stream.wait_until_closed().await;
 
     let mut chunks_info = BTreeMap::new();
     for chunk in &image.disk {

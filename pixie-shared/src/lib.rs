@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
+use core::fmt::Write;
 use blake3::OUT_LEN;
 use serde::{Deserialize, Serialize};
 
@@ -108,8 +109,25 @@ pub enum UdpRequest {
     RequestChunks(Vec<ChunkHash>),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TcpRequest {
+    GetChunkSize(ChunkHash),
+    GetImage(String),
+    Register(Station),
+    UploadChunk(ChunkHash, Vec<u8>),
+    UploadImage(String, Image),
+}
+
 #[cfg(feature = "std")]
 pub mod config;
 
 #[cfg(feature = "std")]
 pub use config::*;
+
+pub fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for byte in bytes {
+        write!(s, "{:02x}", byte).unwrap();
+    }
+    s
+}

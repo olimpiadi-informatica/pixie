@@ -8,9 +8,9 @@ use uefi::proto::console::text::{Color, Key, ScanCode};
 
 use crate::os::{
     error::{Error, Result},
-    HttpMethod, MessageKind, UefiOS, PACKET_SIZE,
+    MessageKind, UefiOS, PACKET_SIZE,
 };
-use pixie_shared::{Address, HintPacket, Station};
+use pixie_shared::{Address, HintPacket, Station, TcpRequest};
 
 #[derive(Debug, Default)]
 struct Data {
@@ -160,14 +160,13 @@ pub async fn register(os: UefiOS, hint_port: u16, server_address: Address) -> Re
         os.force_ui_redraw();
     }
 
-    let msg = serde_json::to_vec(&data.borrow().station)?;
-    os.http(
-        server_address.ip,
-        server_address.port,
-        HttpMethod::Post(&msg),
-        b"/register",
-    )
-    .await?;
+    let msg = TcpRequest::Register(data.borrow().station.clone());
+    let buf = serde_json::to_vec(&msg)?;
+    let stream = os.connect(server_address.ip, server_address.port).await?;
+    stream.send(&(buf.len() as u64).to_le_bytes()).await?;
+    stream.send(&buf).await?;
+    stream.close_send().await;
+    stream.wait_until_closed().await;
 
     os.append_message(
         format!("Registration successful! {:?}", data.borrow().station),
