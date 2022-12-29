@@ -76,7 +76,7 @@ pub async fn register(os: UefiOS, server_addr: Address, hint_port: u16) -> Resul
                 let key = Box::pin(os.read_key());
                 match select(recv, key).await {
                     Either::Left(((buf, _), _)) => {
-                        let hint: HintPacket = serde_json::from_slice(buf)?;
+                        let hint: HintPacket = postcard::from_bytes(buf)?;
                         data.borrow_mut().station = hint.station;
                         images = hint.images;
                         groups = hint.groups.into_iter().map(|(k, _)| k).collect();
@@ -161,7 +161,7 @@ pub async fn register(os: UefiOS, server_addr: Address, hint_port: u16) -> Resul
     }
 
     let msg = TcpRequest::Register(data.borrow().station.clone());
-    let buf = serde_json::to_vec(&msg)?;
+    let buf = postcard::to_allocvec(&msg)?;
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;

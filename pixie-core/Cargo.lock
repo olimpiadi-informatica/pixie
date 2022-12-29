@@ -437,6 +437,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cobs"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67ba02a97a2bd10f4b59b25c7973101c79642302776489e030cd13cdab09ed15"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1022,6 +1028,7 @@ dependencies = [
  "macaddr",
  "mktemp",
  "pixie-shared",
+ "postcard",
  "serde",
  "serde_derive",
  "serde_json",
@@ -1036,6 +1043,16 @@ dependencies = [
  "blake3",
  "ipnet",
  "macaddr",
+ "serde",
+]
+
+[[package]]
+name = "postcard"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c2b180dc0bade59f03fd005cb967d3f1e5f69b13922dad0cd6e047cb8af2363"
+dependencies = [
+ "cobs",
  "serde",
 ]
 

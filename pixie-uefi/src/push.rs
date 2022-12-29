@@ -137,18 +137,18 @@ async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
 
 async fn get_chunk_csize(stream: &TcpStream, hash: &Hash) -> Result<Option<usize>> {
     let req = TcpRequest::GetChunkSize((*hash).into());
-    let mut buf = serde_json::to_vec(&req)?;
+    let mut buf = postcard::to_allocvec(&req)?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
     let len = stream.recv_u64_le().await?;
     buf.resize(len as usize, 0);
     stream.recv(&mut buf).await?;
-    Ok(serde_json::from_slice(&buf)?)
+    Ok(postcard::from_bytes(&buf)?)
 }
 
 async fn save_chunk(stream: &TcpStream, hash: &Hash, data: &[u8]) -> Result<()> {
     let req = TcpRequest::UploadChunk((*hash).into(), data.into());
-    let buf = serde_json::to_vec(&req)?;
+    let buf = postcard::to_allocvec(&req)?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
     let len = stream.recv_u64_le().await?;
@@ -158,7 +158,7 @@ async fn save_chunk(stream: &TcpStream, hash: &Hash, data: &[u8]) -> Result<()> 
 
 async fn save_image(stream: &TcpStream, name: String, image: Image) -> Result<()> {
     let req = TcpRequest::UploadImage(name, image);
-    let buf = serde_json::to_vec(&req)?;
+    let buf = postcard::to_allocvec(&req)?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
     let len = stream.recv_u64_le().await?;
@@ -176,11 +176,7 @@ enum State {
     },
 }
 
-pub async fn push(
-    os: UefiOS,
-    server_address: Address,
-    image: String,
-) -> Result<()> {
+pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<()> {
     let stats = Arc::new(RefCell::new(State::ReadingPartitions));
 
     let udp = os.udp_bind(None).await?;
@@ -291,7 +287,7 @@ pub async fn push(
         udp.send(
             server_address.ip,
             server_address.port,
-            &serde_json::to_vec(&UdpRequest::ActionProgress(idx, total))?,
+            &postcard::to_allocvec(&UdpRequest::ActionProgress(idx, total))?,
         )
         .await?;
 

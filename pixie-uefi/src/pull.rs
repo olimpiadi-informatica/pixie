@@ -48,13 +48,13 @@ impl PartialChunk {
 
 async fn fetch_image(stream: &TcpStream, image: String) -> Result<Image> {
     let req = TcpRequest::GetImage(image);
-    let mut buf = serde_json::to_vec(&req)?;
+    let mut buf = postcard::to_allocvec(&req)?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
     let len = stream.recv_u64_le().await?;
     buf.resize(len as usize, 0);
     stream.recv_exact(&mut buf).await?;
-    Ok(serde_json::from_slice(&buf)?)
+    Ok(postcard::from_bytes(&buf)?)
 }
 
 struct Stats {
@@ -65,12 +65,7 @@ struct Stats {
     requested: usize,
 }
 
-pub async fn pull(
-    os: UefiOS,
-    server_addr: Address,
-    image: String,
-    chunks_port: u16,
-) -> Result<()> {
+pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: u16) -> Result<()> {
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
     let image = fetch_image(&stream, image).await?;
     stream.close_send().await;
@@ -232,7 +227,7 @@ pub async fn pull(
                     .send(
                         server_addr.ip,
                         server_addr.port,
-                        &serde_json::to_vec(&UdpRequest::ActionProgress(
+                        &postcard::to_allocvec(&UdpRequest::ActionProgress(
                             stats.borrow().recv,
                             stats.borrow().fetch,
                         ))?,
@@ -243,7 +238,7 @@ pub async fn pull(
                 // TODO(virv): compute the number of chunks to request
                 let chunks: Vec<_> = chunks_info.iter().take(10).map(|(hash, _)| *hash).collect();
                 stats.borrow_mut().requested += chunks.len();
-                let msg = serde_json::to_vec(&UdpRequest::RequestChunks(chunks)).unwrap();
+                let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
                 socket.send(server_addr.ip, server_addr.port, &msg).await?;
             }
         }

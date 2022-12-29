@@ -36,14 +36,14 @@ async fn run(os: UefiOS) -> Result<()> {
         if !last_was_wait {
             os.append_message("Sending request for command".into(), MessageKind::Debug);
         }
-        let msg = serde_json::to_vec(&UdpRequest::GetAction).unwrap();
+        let msg = postcard::to_allocvec(&UdpRequest::GetAction)?;
         udp.send((255, 255, 255, 255), pixie_shared::ACTION_PORT, &msg)
             .await?;
 
         let mut buf = [0; PACKET_SIZE];
         // TODO(veluca): add a timeout.
         let (data, server) = udp.recv(&mut buf).await;
-        let command = serde_json::from_slice::<Action>(data);
+        let command = postcard::from_bytes::<Action>(data);
 
         if let Err(e) = command {
             os.append_message(format!("Error receiving action: {e}"), MessageKind::Warning);
@@ -51,7 +51,7 @@ async fn run(os: UefiOS) -> Result<()> {
             let command = command.unwrap();
             if matches!(command, Action::Wait) {
                 // TODO: consider using tcp
-                let msg = serde_json::to_vec(&UdpRequest::ActionComplete).unwrap();
+                let msg = postcard::to_allocvec(&UdpRequest::ActionComplete).unwrap();
                 udp.send(server.ip, server.port, &msg).await?;
                 udp.recv(&mut buf).await;
                 if !last_was_wait {
@@ -77,7 +77,7 @@ async fn run(os: UefiOS) -> Result<()> {
                         unreachable!();
                     }
                     Action::Reboot => {
-                        let msg = serde_json::to_vec(&UdpRequest::ActionComplete).unwrap();
+                        let msg = postcard::to_allocvec(&UdpRequest::ActionComplete).unwrap();
                         udp.send(server.ip, server.port, &msg).await?;
                         udp.recv(&mut buf).await;
                         reboot_to_os(os).await;
@@ -90,7 +90,7 @@ async fn run(os: UefiOS) -> Result<()> {
                 }
             }
             // TODO: consider using tcp
-            let msg = serde_json::to_vec(&UdpRequest::ActionComplete).unwrap();
+            let msg = postcard::to_allocvec(&UdpRequest::ActionComplete).unwrap();
             udp.send(server.ip, server.port, &msg).await?;
             udp.recv(&mut buf).await;
         }

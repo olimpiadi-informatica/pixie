@@ -161,7 +161,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
             images: state.config.images.clone(),
             groups: state.config.groups.clone(),
         };
-        let data = serde_json::to_vec(&hint)?;
+        let data = postcard::to_allocvec(&hint)?;
         let hint_addr = SocketAddrV4::new(
             state.config.hosts.network.broadcast(),
             state.config.hosts.hint_port,
@@ -175,7 +175,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
     let mut buf = [0; PACKET_LEN];
     loop {
         let (len, addr) = socket.recv_from(&mut buf).await?;
-        let req: serde_json::Result<UdpRequest> = serde_json::from_slice(&buf[..len]);
+        let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
             Ok(UdpRequest::GetAction) => {
                 let IpAddr::V4(peer_ip) = addr.ip() else {
@@ -218,7 +218,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     ActionKind::Wait => Action::Wait,
                 };
 
-                let msg = serde_json::to_vec(&action)?;
+                let msg = postcard::to_allocvec(&action)?;
                 socket.send_to(&msg, addr).await?;
             }
             Ok(UdpRequest::ActionProgress(frac, tot)) => {

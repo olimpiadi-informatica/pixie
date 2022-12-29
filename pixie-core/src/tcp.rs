@@ -1,4 +1,10 @@
-use std::{io::ErrorKind, net::{IpAddr, Ipv4Addr}, net::SocketAddr, path::Path, sync::Arc};
+use std::{
+    io::ErrorKind,
+    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr},
+    path::Path,
+    sync::Arc,
+};
 
 use tokio::{
     fs,
@@ -31,7 +37,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                 Err(e) if e.kind() == ErrorKind::NotFound => None,
                 Err(e) => Err(e)?,
             };
-            serde_json::to_vec(&csize)?
+            postcard::to_allocvec(&csize)?
         }
         TcpRequest::GetImage(name) => {
             let path = state.storage_dir.join("images").join(name);
@@ -84,7 +90,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                     .set_hosts(&units)
                     .context("changing dnsmasq hosts")?;
 
-                buf = serde_json::to_vec(&*units)?;
+                buf = postcard::to_allocvec(&*units)?;
             }
 
             atomic_write(&state.registered_file(), &buf).await?;
@@ -99,7 +105,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
         }
         TcpRequest::UploadImage(name, image) => {
             let path = state.storage_dir.join("images").join(name);
-            let data = serde_json::to_vec(&image)?;
+            let data = postcard::to_allocvec(&image)?;
             atomic_write(&path, &data).await?;
             Vec::new()
         }
@@ -124,7 +130,7 @@ async fn handle_connection(
         };
         let mut buf = vec![0; len];
         stream.read_exact(&mut buf).await?;
-        let req = serde_json::from_slice(&buf)?;
+        let req = postcard::from_bytes(&buf)?;
         let resp = handle_request(&state, req, peer_mac).await?;
         stream.write_u64_le(resp.len() as u64).await?;
         stream.write_all(&resp).await?;

@@ -15,7 +15,7 @@ pub enum Error {
     UdpSend(udp::SendError),
     Recv(RecvError),
     Bind(BindError),
-    Serde(serde_json::Error),
+    Postcard(postcard::Error),
     Uefi(uefi::Error),
     Generic(String),
 }
@@ -56,9 +56,9 @@ impl From<BindError> for Error {
     }
 }
 
-impl From<serde_json::Error> for Error {
-    fn from(c: serde_json::Error) -> Self {
-        Error::Serde(c)
+impl From<postcard::Error> for Error {
+    fn from(c: postcard::Error) -> Self {
+        Error::Postcard(c)
     }
 }
 
