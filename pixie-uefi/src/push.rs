@@ -334,7 +334,8 @@ pub async fn push(
     .await?;
 
     stream.close_send().await;
-    stream.wait_until_closed().await;
+    // TODO(virv): this could be better
+    stream.force_close().await;
 
     os.append_message(
         format!(

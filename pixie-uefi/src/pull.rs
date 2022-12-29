@@ -74,7 +74,8 @@ pub async fn pull(
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
     let image = fetch_image(&stream, image).await?;
     stream.close_send().await;
-    stream.wait_until_closed().await;
+    // TODO(virv): this could be better
+    stream.force_close().await;
 
     let mut chunks_info = BTreeMap::new();
     for chunk in &image.disk {

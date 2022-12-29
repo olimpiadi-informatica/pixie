@@ -163,10 +163,13 @@ pub async fn register(os: UefiOS, server_addr: Address, hint_port: u16) -> Resul
     let msg = TcpRequest::Register(data.borrow().station.clone());
     let buf = serde_json::to_vec(&msg)?;
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
-    stream.send(&(buf.len() as u64).to_le_bytes()).await?;
+    stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
+    let len = stream.recv_u64_le().await?;
+    assert_eq!(len, 0);
     stream.close_send().await;
-    stream.wait_until_closed().await;
+    // TODO(virv): this could be better
+    stream.force_close().await;
 
     os.append_message(
         format!("Registration successful! {:?}", data.borrow().station),
