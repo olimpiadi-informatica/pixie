@@ -6,11 +6,10 @@ use alloc::{
     vec::Vec,
 };
 use core::{cell::RefCell, mem};
-use uefi::proto::console::text::Color;
 
 use futures::future::{select, Either};
-
-use miniz_oxide::inflate::decompress_to_vec;
+use lz4_flex::decompress;
+use uefi::proto::console::text::Color;
 
 use pixie_shared::{Address, Image, TcpRequest, UdpRequest, BODY_LEN, HEADER_LEN};
 
@@ -193,7 +192,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
                 }
 
                 let mut pc = received.remove(hash).unwrap();
-                let (_, _, pos) = chunks_info.remove(hash).unwrap();
+                let (size, _, pos) = chunks_info.remove(hash).unwrap();
 
                 let mut xor = [[0; BODY_LEN]; 32];
                 for packet in 0..pc.missing_first.len() {
@@ -215,7 +214,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
                     }
                 }
 
-                let data = decompress_to_vec(&pc.data[32 * BODY_LEN..])
+                let data = decompress(&pc.data[32 * BODY_LEN..], size)
                     .map_err(|e| Error::Generic(e.to_string()))?;
                 for offset in pos {
                     disk.write(offset as u64, &data).await?;
