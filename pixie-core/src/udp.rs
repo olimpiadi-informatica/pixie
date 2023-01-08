@@ -14,14 +14,16 @@ use tokio::{
 use anyhow::{anyhow, bail, ensure, Result};
 
 use pixie_shared::{
-    to_hex, Action, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN, PACKET_LEN,
+    to_hex, Action, DhcpMode, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN,
+    PACKET_LEN,
 };
 
-use crate::{find_mac, ActionKind, State};
+use crate::{find_mac, find_network, ActionKind, State};
 
 async fn broadcast_chunks(
     state: &State,
     socket: &UdpSocket,
+    ip: Ipv4Addr,
     mut rx: Receiver<[u8; 32]>,
 ) -> Result<()> {
     let mut queue = BTreeSet::<[u8; 32]>::new();
@@ -69,8 +71,7 @@ async fn broadcast_chunks(
             let mut xor = [[0; BODY_LEN]; 32];
 
             let hosts_cfg = &state.config.hosts;
-            let chunks_addr =
-                SocketAddrV4::new(hosts_cfg.network.broadcast(), hosts_cfg.chunks_port);
+            let chunks_addr = SocketAddrV4::new(ip, hosts_cfg.chunks_port);
 
             for index in 0..num_packets {
                 write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
@@ -154,7 +155,7 @@ fn compute_hint(state: &State) -> Result<Station> {
     })
 }
 
-async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
+async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Result<()> {
     loop {
         let hint = HintPacket {
             station: compute_hint(state)?,
@@ -162,10 +163,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket) -> Result<()> {
             groups: state.config.groups.clone(),
         };
         let data = postcard::to_allocvec(&hint)?;
-        let hint_addr = SocketAddrV4::new(
-            state.config.hosts.network.broadcast(),
-            state.config.hosts.hint_port,
-        );
+        let hint_addr = SocketAddrV4::new(ip, state.config.hosts.hint_port);
         socket.send_to(&data, hint_addr).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
@@ -178,47 +176,50 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
         let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
             Ok(UdpRequest::GetAction) => {
-                let IpAddr::V4(peer_ip) = addr.ip() else {
-                    bail!("IPv6 is not supported")
-                };
-                let peer_mac = find_mac(peer_ip)?;
-                let mut units = state.units.lock().unwrap();
-                let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
-                let action_kind = match unit {
-                    Some(Unit {
-                        curr_action: Some(action),
-                        ..
-                    }) => *action,
-                    Some(ref mut unit) => {
-                        let action = unit.next_action;
-                        unit.curr_action = Some(action);
-                        if matches!(
-                            unit.next_action,
-                            ActionKind::Push | ActionKind::Pull | ActionKind::Register
-                        ) {
-                            unit.next_action = ActionKind::Wait;
+                let msg = {
+                    let IpAddr::V4(peer_ip) = addr.ip() else {
+                        bail!("IPv6 is not supported")
+                    };
+                    let peer_mac = find_mac(peer_ip)?;
+                    let mut units = state.units.lock().unwrap();
+                    let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
+                    let action_kind = match unit {
+                        Some(Unit {
+                            curr_action: Some(action),
+                            ..
+                        }) => *action,
+                        Some(ref mut unit) => {
+                            let action = unit.next_action;
+                            unit.curr_action = Some(action);
+                            if matches!(
+                                unit.next_action,
+                                ActionKind::Push | ActionKind::Pull | ActionKind::Register
+                            ) {
+                                unit.next_action = ActionKind::Wait;
+                            }
+                            action
                         }
-                        action
-                    }
-                    None => state.config.boot.unregistered,
+                        None => state.config.boot.unregistered,
+                    };
+
+                    let action = match action_kind {
+                        ActionKind::Reboot => Action::Reboot,
+                        ActionKind::Register => Action::Register {
+                            hint_port: state.config.hosts.hint_port,
+                        },
+                        ActionKind::Push => Action::Push {
+                            image: unit.unwrap().image.clone(),
+                        },
+                        ActionKind::Pull => Action::Pull {
+                            image: unit.unwrap().image.clone(),
+                            chunks_port: state.config.hosts.chunks_port,
+                        },
+                        ActionKind::Wait => Action::Wait,
+                    };
+
+                    postcard::to_allocvec(&action)?
                 };
 
-                let action = match action_kind {
-                    ActionKind::Reboot => Action::Reboot,
-                    ActionKind::Register => Action::Register {
-                        hint_port: state.config.hosts.hint_port,
-                    },
-                    ActionKind::Push => Action::Push {
-                        image: unit.unwrap().image.clone(),
-                    },
-                    ActionKind::Pull => Action::Pull {
-                        image: unit.unwrap().image.clone(),
-                        chunks_port: state.config.hosts.chunks_port,
-                    },
-                    ActionKind::Wait => Action::Wait,
-                };
-
-                let msg = postcard::to_allocvec(&action)?;
                 socket.send_to(&msg, addr).await?;
             }
             Ok(UdpRequest::ActionProgress(frac, tot)) => {
@@ -238,13 +239,15 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     bail!("IPv6 is not supported")
                 };
                 let peer_mac = find_mac(peer_ip)?;
-                let mut units = state.units.lock().unwrap();
-                let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-                    log::warn!("Got NA from unknown unit");
-                    continue;
-                };
-                unit.curr_action = None;
-                unit.curr_progress = None;
+                {
+                    let mut units = state.units.lock().unwrap();
+                    let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                        log::warn!("Got NA from unknown unit");
+                        continue;
+                    };
+                    unit.curr_action = None;
+                    unit.curr_progress = None;
+                }
                 socket.send_to(b"OK", addr).await?;
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
@@ -260,14 +263,19 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 }
 
 pub async fn main(state: &State) -> Result<()> {
+    let network = find_network(match state.config.dhcp.mode {
+        DhcpMode::Static => Ipv4Addr::new(10, pixie_shared::UNASSIGNED_GROUP_ID, 0, 1),
+        DhcpMode::Proxy(ip) => ip,
+    })?;
+
     let (tx, rx) = mpsc::channel(128);
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
     log::info!("Listening on {}", socket.local_addr()?);
     socket.set_broadcast(true)?;
 
     tokio::try_join!(
-        broadcast_chunks(state, &socket, rx),
-        broadcast_hint(state, &socket),
+        broadcast_chunks(state, &socket, network.broadcast(), rx),
+        broadcast_hint(state, &socket, network.broadcast()),
         handle_requests(state, &socket, tx),
     )?;
 

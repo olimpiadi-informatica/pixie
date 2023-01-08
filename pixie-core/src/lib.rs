@@ -11,8 +11,9 @@ use std::{
     sync::Mutex,
 };
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use interfaces::Interface;
+use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 
 use pixie_shared::{ActionKind, Config, Station, Unit};
@@ -86,7 +87,7 @@ pub fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     bail!("Mac address not found");
 }
 
-pub fn find_interface_ip(peer_ip: Ipv4Addr) -> Result<Ipv4Addr> {
+pub fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
     for interface in Interface::get_all()? {
         for address in &interface.addresses {
             let Some(IpAddr::V4(addr)) = address.addr.map(|x| x.ip()) else {
@@ -95,13 +96,11 @@ pub fn find_interface_ip(peer_ip: Ipv4Addr) -> Result<Ipv4Addr> {
             let Some(IpAddr::V4(mask)) = address.mask.map(|x| x.ip()) else {
                 continue;
             };
-            if (u32::from_ne_bytes(addr.octets()) ^ u32::from_ne_bytes(peer_ip.octets()))
-                & u32::from_ne_bytes(mask.octets())
-                == 0
-            {
-                return Ok(addr);
+            let network = Ipv4Net::with_netmask(addr, mask).expect("invalid network mask");
+            if network.contains(&peer_ip) {
+                return Ok(network);
             }
         }
     }
-    Err(anyhow!("Could not find the corresponding ip"))?
+    bail!("Could not find the network for {}", peer_ip);
 }

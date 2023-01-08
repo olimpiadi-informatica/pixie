@@ -3,7 +3,6 @@ use core::fmt::Display;
 use core::str::FromStr;
 
 use macaddr::MacAddr6;
-use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -47,7 +46,6 @@ pub struct HttpConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostsConfig {
-    pub network: Ipv4Net,
     pub chunks_port: u16,
     pub hint_port: u16,
     pub bits_per_second: u32,
