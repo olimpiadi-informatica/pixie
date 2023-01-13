@@ -8,7 +8,7 @@ use core::fmt::Write;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::SocketAddrV4;
 
 pub mod bijection;
 pub use bijection::Bijection;
@@ -62,8 +62,7 @@ pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
-// TODO(veluca): make this a [u8; 4].
-pub type Ip = (u8, u8, u8, u8);
+pub type Ip = [u8; 4];
 
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Address {
@@ -74,10 +73,7 @@ pub struct Address {
 #[cfg(feature = "std")]
 impl From<Address> for SocketAddrV4 {
     fn from(addr: Address) -> Self {
-        SocketAddrV4::new(
-            Ipv4Addr::new(addr.ip.0, addr.ip.1, addr.ip.2, addr.ip.3),
-            addr.port,
-        )
+        SocketAddrV4::new(addr.ip.into(), addr.port)
     }
 }
 

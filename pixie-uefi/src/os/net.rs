@@ -283,7 +283,7 @@ pub struct TcpStream {
 // create that many, but still it would be nice to fix eventually.
 // Also, trying to use a closed connection may result in panics.
 impl TcpStream {
-    pub async fn new(os: UefiOS, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
+    pub async fn new(os: UefiOS, ip: [u8; 4], port: u16) -> Result<TcpStream> {
         os.wait_for_ip().await;
         const TCP_BUF_SIZE: usize = 1 << 22;
         let mut tcp_socket = TcpSocket::new(
@@ -296,7 +296,7 @@ impl TcpStream {
         tcp_socket.connect(
             os.net().interface.context(),
             IpEndpoint {
-                addr: IpAddress::Ipv4(Ipv4Address::new(ip.0, ip.1, ip.2, ip.3)),
+                addr: IpAddress::Ipv4(Ipv4Address(ip)),
                 port,
             },
             sport,
@@ -489,9 +489,9 @@ impl UdpHandle {
         Ok(ret)
     }
 
-    pub async fn send(&self, ip: (u8, u8, u8, u8), port: u16, data: &[u8]) -> Result<()> {
+    pub async fn send(&self, ip: [u8; 4], port: u16, data: &[u8]) -> Result<()> {
         let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address::new(ip.0, ip.1, ip.2, ip.3)),
+            addr: IpAddress::Ipv4(Ipv4Address(ip)),
             port,
         };
 
@@ -527,8 +527,7 @@ impl UdpHandle {
             } else {
                 // Cannot fail if can_recv() returned true.
                 let recvd = socket.recv_slice(buf2).unwrap();
-                let ip = (recvd.1).addr.as_bytes();
-                let ip = (ip[0], ip[1], ip[2], ip[3]);
+                let ip = (recvd.1).addr.as_bytes().try_into().unwrap();
                 let port = (recvd.1).port;
                 Poll::Ready((recvd.0, Address { ip, port }))
             }

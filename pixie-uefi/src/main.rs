@@ -37,7 +37,7 @@ async fn run(os: UefiOS) -> Result<()> {
             os.append_message("Sending request for command".into(), MessageKind::Debug);
         }
         let msg = postcard::to_allocvec(&UdpRequest::GetAction)?;
-        udp.send((255, 255, 255, 255), pixie_shared::ACTION_PORT, &msg)
+        udp.send([255, 255, 255, 255], pixie_shared::ACTION_PORT, &msg)
             .await?;
 
         let mut buf = [0; PACKET_SIZE];

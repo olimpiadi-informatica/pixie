@@ -435,7 +435,7 @@ impl UefiOS {
         Disk::new(*self)
     }
 
-    pub async fn connect(&self, ip: (u8, u8, u8, u8), port: u16) -> Result<TcpStream> {
+    pub async fn connect(&self, ip: [u8; 4], port: u16) -> Result<TcpStream> {
         TcpStream::new(*self, ip, port).await
     }
 
