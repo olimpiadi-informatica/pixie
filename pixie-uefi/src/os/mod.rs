@@ -242,12 +242,17 @@ impl UefiOS {
         os.spawn(async {
             let mut prx = 0;
             let mut ptx = 0;
+            let mut ptm = UefiOS {}.timer().instant();
             loop {
                 {
+                    let now = UefiOS {}.timer().instant();
+                    let dt = (now - ptm).total_micros() as f64 / 1_000_000.0;
+                    ptm = now;
+
                     let mut net = UefiOS {}.net();
-                    net.vrx = net.rx - prx;
+                    net.vrx = ((net.rx - prx) as f64 / dt) as u64;
                     prx = net.rx;
-                    net.vtx = net.tx - ptx;
+                    net.vtx = ((net.tx - ptx) as f64 / dt) as u64;
                     ptx = net.tx;
                 }
                 UefiOS {}.sleep_us(1_000_000).await;

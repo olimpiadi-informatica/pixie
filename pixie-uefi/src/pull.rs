@@ -61,6 +61,7 @@ struct Stats {
     unique: usize,
     fetch: usize,
     recv: usize,
+    pack_recv: usize,
     requested: usize,
 }
 
@@ -85,6 +86,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         unique: chunks_info.len(),
         fetch: 0,
         recv: 0,
+        pack_recv: 0,
         requested: 0,
     }));
 
@@ -107,6 +109,11 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         );
         os.write_with_color(
             &format!("{} chunks received\n", stats2.borrow().recv),
+            Color::White,
+            Color::Black,
+        );
+        os.write_with_color(
+            &format!("{} packets received\n", stats2.borrow().pack_recv),
             Color::White,
             Color::Black,
         );
@@ -154,6 +161,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         let sleep = Box::pin(os.sleep_us(1_000_000));
         match select(recv, sleep).await {
             Either::Left(((buf, _addr), _)) => {
+                stats.borrow_mut().pack_recv += 1;
                 assert!(buf.len() >= 34);
                 let hash: &[u8; 32] = buf[..32].try_into().unwrap();
                 let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
@@ -195,30 +203,30 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
                     }
                 }
 
-                let mut pc = received.remove(hash).unwrap();
                 let (size, _, pos) = chunks_info.remove(hash).unwrap();
+                let mut pchunk = received.remove(hash).unwrap();
 
                 let mut xor = [[0; BODY_LEN]; 32];
-                for packet in 0..pc.missing_first.len() {
-                    if !pc.missing_first[packet] {
+                for packet in 0..pchunk.missing_first.len() {
+                    if !pchunk.missing_first[packet] {
                         let group = packet & 31;
-                        pc.data[BODY_LEN * packet..]
+                        pchunk.data[BODY_LEN * packet..]
                             .iter()
                             .zip(xor[group].iter_mut())
                             .for_each(|(a, b)| *b ^= a);
                     }
                 }
-                for packet in 0..pc.missing_first.len() {
-                    if pc.missing_first[packet] {
+                for packet in 0..pchunk.missing_first.len() {
+                    if pchunk.missing_first[packet] {
                         let group = packet & 31;
-                        pc.data[BODY_LEN * packet..]
+                        pchunk.data[BODY_LEN * packet..]
                             .iter_mut()
                             .zip(xor[group].iter())
                             .for_each(|(a, b)| *a = *b);
                     }
                 }
 
-                let data = decompress(&pc.data[32 * BODY_LEN..], size)
+                let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
                     .map_err(|e| Error::Generic(e.to_string()))?;
                 for offset in pos {
                     disk.write(offset as u64, &data).await?;
