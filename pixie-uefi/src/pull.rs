@@ -1,8 +1,8 @@
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
+    rc::Rc,
     string::{String, ToString},
-    sync::Arc,
     vec::Vec,
 };
 use core::{cell::RefCell, mem};
@@ -80,7 +80,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
             .push(chunk.start);
     }
 
-    let stats = Arc::new(RefCell::new(Stats {
+    let stats = Rc::new(RefCell::new(Stats {
         chunks: image.disk.len(),
         unique: chunks_info.len(),
         fetch: 0,
@@ -120,18 +120,22 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
     let mut disk = os.open_first_disk();
 
     for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
-        let mut data = false;
+        let mut found = None;
         let mut buf = vec![0; size];
         for &offset in &pos {
+            os.hop().await;
             disk.read(offset as u64, &mut buf).await.unwrap();
             if blake3::hash(&buf).as_bytes() == &hash {
-                data = true;
+                found = Some(offset);
                 break;
             }
         }
-        if data {
+        if let Some(found) = found {
             for &offset in &pos {
-                disk.write(offset as u64, &buf).await.unwrap();
+                if offset != found {
+                    os.hop().await;
+                    disk.write(offset as u64, &buf).await.unwrap();
+                }
             }
         } else {
             chunks_info.insert(hash, (size, csize, pos));
@@ -235,7 +239,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
             }
             Either::Right(((), _sleep)) => {
                 // TODO(virv): compute the number of chunks to request
-                let chunks: Vec<_> = chunks_info.iter().take(10).map(|(hash, _)| *hash).collect();
+                let chunks: Vec<_> = chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
                 stats.borrow_mut().requested += chunks.len();
                 let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
                 socket.send(server_addr.ip, server_addr.port, &msg).await?;

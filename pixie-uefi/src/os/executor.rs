@@ -17,10 +17,7 @@ static mut EXECUTOR: Option<RefCell<Executor>> = None;
 static EXECUTOR_CONSTRUCTED: AtomicBool = AtomicBool::new(false);
 
 fn executor() -> &'static RefCell<Executor> {
-    assert_eq!(
-        EXECUTOR_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed),
-        true
-    );
+    assert!(EXECUTOR_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
     // SAFETY: guarded by EXECUTOR_CONSTRUCTED. There are no threads, so no problems with
     // concurrent access.
     unsafe { EXECUTOR.as_ref().unwrap() }
@@ -42,10 +39,7 @@ impl ArcWake for Task {
 
 impl Executor {
     pub fn init() {
-        assert_eq!(
-            EXECUTOR_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed),
-            false
-        );
+        assert!(!EXECUTOR_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
         // SAFETY: guarded by EXECUTOR_CONSTRUCTED. There are no threads, so no problems with
         // concurrent access.
         unsafe {

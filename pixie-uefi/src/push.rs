@@ -1,4 +1,4 @@
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{string::String, rc::Rc, vec::Vec};
 use core::cell::RefCell;
 
 use lz4_flex::compress;
@@ -159,7 +159,7 @@ enum State {
 }
 
 pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<()> {
-    let stats = Arc::new(RefCell::new(State::ReadingPartitions));
+    let stats = Rc::new(RefCell::new(State::ReadingPartitions));
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| match &*stats2.borrow() {
         State::ReadingPartitions => {

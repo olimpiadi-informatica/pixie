@@ -42,8 +42,8 @@ use self::{
 mod boot_options;
 pub mod disk;
 pub mod error;
-pub mod mpsc;
 mod executor;
+pub mod mpsc;
 mod net;
 mod rng;
 mod timer;
@@ -161,10 +161,7 @@ impl UefiOS {
         Fut: Future<Output = Result<()>>,
     {
         // Never call this function twice.
-        assert_eq!(
-            OS_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed),
-            false
-        );
+        assert!(!OS_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
 
         uefi_services::init(&mut system_table).unwrap();
 
@@ -299,6 +296,21 @@ impl UefiOS {
         })
     }
 
+    /// Interrupt task execution.
+    /// This is useful to yield the CPU to other tasks.
+    pub fn hop(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+        let mut ready = false;
+        poll_fn(move |cx| {
+            if ready {
+                Poll::Ready(())
+            } else {
+                ready = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    }
+
     pub fn sleep_us(&self, us: u64) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
         let tgt = self.timer().micros() as u64 + us;
         poll_fn(move |cx| {
@@ -314,8 +326,8 @@ impl UefiOS {
         })
     }
 
-    /// WARNING: this function halts all tasks
-    pub fn strong_sleep_us(&self, us: u64) {
+    /// **WARNING**: this function halts all tasks
+    pub fn deep_sleep_us(&self, us: u64) {
         let bs = self.os().borrow().boot_services;
         // SAFETY: we are not using a callback
         let e = unsafe {

@@ -33,7 +33,7 @@ impl Timer {
         (Self::rdtsc() - self.ticks_at_start) / self.ticks_per_micro
     }
 
-    pub fn instant(&self) -> smoltcp::time::Instant {
+    pub fn instant(&self) -> Instant {
         Instant::from_micros(self.micros())
     }
 }
