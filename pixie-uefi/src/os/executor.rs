@@ -6,12 +6,9 @@ use futures::{
     Future,
 };
 
-pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
+use super::UefiOS;
 
-pub struct Executor {
-    // TODO(veluca): scheduling.
-    tasks: VecDeque<Arc<Task>>,
-}
+pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
 
 static mut EXECUTOR: Option<RefCell<Executor>> = None;
 static EXECUTOR_CONSTRUCTED: AtomicBool = AtomicBool::new(false);
@@ -23,8 +20,33 @@ fn executor() -> &'static RefCell<Executor> {
     unsafe { EXECUTOR.as_ref().unwrap() }
 }
 
+struct TaskInner {
+    pub future: Option<BoxFuture>,
+    pub micros: i64,
+}
+
 pub(super) struct Task {
-    pub task: RefCell<Option<BoxFuture>>,
+    pub name: &'static str,
+    inner: RefCell<TaskInner>,
+}
+
+impl Task {
+    pub(super) fn new<Fut>(name: &'static str, future: Fut) -> Arc<Task>
+    where
+        Fut: Future<Output = ()> + 'static,
+    {
+        Arc::new(Task {
+            name,
+            inner: RefCell::new(TaskInner {
+                future: Some(Box::pin(future)),
+                micros: 0,
+            }),
+        })
+    }
+
+    pub(super) fn micros(&self) -> i64 {
+        self.inner.borrow().micros
+    }
 }
 
 // SAFETY: we never create threads anyway.
@@ -35,6 +57,11 @@ impl ArcWake for Task {
     fn wake_by_ref(task: &Arc<Self>) {
         executor().borrow_mut().tasks.push_back(task.clone());
     }
+}
+
+pub struct Executor {
+    // TODO(veluca): scheduling.
+    tasks: VecDeque<Arc<Task>>,
 }
 
 impl Executor {
@@ -49,7 +76,8 @@ impl Executor {
             EXECUTOR_CONSTRUCTED.store(true, core::sync::atomic::Ordering::Relaxed);
         }
     }
-    pub fn run() -> ! {
+
+    pub fn run(os: UefiOS) -> ! {
         loop {
             let task = executor()
                 .borrow_mut()
@@ -59,21 +87,18 @@ impl Executor {
 
             let waker = waker_ref(&task);
             let context = &mut Context::from_waker(&waker);
-            let mut task_inner = task.task.borrow_mut();
-            if let Some(mut fut) = task_inner.take() {
-                if fut.as_mut().poll(context).is_pending() {
-                    *task_inner = Some(fut);
-                }
+            let mut fut = task.inner.borrow_mut().future.take().unwrap();
+            let begin = os.timer().micros();
+            let status = fut.as_mut().poll(context);
+            let end = os.timer().micros();
+            task.inner.borrow_mut().micros += end - begin;
+            if status.is_pending() {
+                task.inner.borrow_mut().future = Some(fut);
             }
         }
     }
 
-    pub fn spawn<Fut>(f: Fut)
-    where
-        Fut: Future<Output = ()> + 'static,
-    {
-        executor().borrow_mut().tasks.push_back(Arc::new(Task {
-            task: RefCell::new(Some(Box::pin(f))),
-        }));
+    pub(super) fn spawn(task: Arc<Task>) {
+        executor().borrow_mut().tasks.push_back(task);
     }
 }

@@ -69,7 +69,7 @@ impl From<uefi::Error> for Error {
 }
 
 impl Display for Error {
-    fn fmt(&self, fmt: &mut Formatter<'_>) -> core::result::Result<(), core::fmt::Error> {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
         write!(fmt, "{:?}", self)
     }
 }

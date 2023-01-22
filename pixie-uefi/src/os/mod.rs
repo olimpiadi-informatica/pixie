@@ -13,6 +13,7 @@ use alloc::{
     boxed::Box,
     collections::VecDeque,
     string::{String, ToString},
+    sync::Arc,
     vec::Vec,
 };
 use uefi::{
@@ -35,8 +36,13 @@ use uefi::{
 };
 
 use self::{
-    boot_options::BootOptions, disk::Disk, error::Error, executor::Executor, net::NetworkInterface,
-    rng::Rng, timer::Timer,
+    boot_options::BootOptions,
+    disk::Disk,
+    error::Error,
+    executor::{Executor, Task},
+    net::NetworkInterface,
+    rng::Rng,
+    timer::Timer,
 };
 
 mod boot_options;
@@ -73,6 +79,7 @@ struct UefiOSImpl {
     runtime_services: &'static RuntimeServices,
     timer: Timer,
     rng: Rng,
+    tasks: Vec<Arc<Task>>,
     input: Option<ScopedProtocol<'static, Input>>,
     output: Option<ScopedProtocol<'static, Output<'static>>>,
     net: Option<NetworkInterface>,
@@ -197,6 +204,7 @@ impl UefiOS {
                 runtime_services,
                 timer,
                 rng,
+                tasks: Vec::new(),
                 input: None,
                 output: None,
                 net: None,
@@ -228,18 +236,21 @@ impl UefiOS {
 
         let os = UefiOS {};
 
-        os.spawn(async { f(UefiOS {}).await.unwrap() });
+        os.spawn("init", async { f(UefiOS {}).await.unwrap() });
 
-        os.spawn(poll_fn(|cx| {
-            let os = UefiOS {}.os().borrow_mut();
-            let (mut net, timer) = RefMut::map_split(os, |os| (&mut os.net, &mut os.timer));
-            net.as_mut().unwrap().poll(&timer);
-            // TODO(veluca): figure out whether we can suspend the task.
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }));
+        os.spawn(
+            "[net_poll]",
+            poll_fn(|cx| {
+                let os = UefiOS {}.os().borrow_mut();
+                let (mut net, timer) = RefMut::map_split(os, |os| (&mut os.net, &mut os.timer));
+                net.as_mut().unwrap().poll(&timer);
+                // TODO(veluca): figure out whether we can suspend the task.
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }),
+        );
 
-        os.spawn(async {
+        os.spawn("[net_speed]", async {
             let mut prx = 0;
             let mut ptx = 0;
             let mut ptm = UefiOS {}.timer().instant();
@@ -259,14 +270,14 @@ impl UefiOS {
             }
         });
 
-        os.spawn(async {
+        os.spawn("[draw_ui]", async {
             loop {
                 UefiOS {}.draw_ui();
-                UefiOS {}.sleep_us(50_000).await;
+                UefiOS {}.sleep_us(1_000_000).await;
             }
         });
 
-        Executor::run()
+        Executor::run(os)
     }
 
     fn os(&self) -> &'static RefCell<UefiOSImpl> {
@@ -283,6 +294,10 @@ impl UefiOS {
 
     pub fn rng(&self) -> RefMut<'static, Rng> {
         RefMut::map(self.os().borrow_mut(), |f| &mut f.rng)
+    }
+
+    fn tasks(&self) -> RefMut<'static, Vec<Arc<Task>>> {
+        RefMut::map(self.os().borrow_mut(), |f| &mut f.tasks)
     }
 
     pub fn net(&self) -> RefMut<'static, NetworkInterface> {
@@ -513,6 +528,18 @@ impl UefiOS {
                 Color::Black,
             );
 
+            os.tasks.sort_by_key(|t| -t.micros());
+            let tasks: Vec<_> = os.tasks.iter().take(7).cloned().collect();
+            for task in tasks {
+                os.write_with_color(task.name, Color::White, Color::Black);
+                os.maybe_advance_to_col(cols / 4);
+                os.write_with_color(
+                    &format!("{:7.3}s\n", task.micros() as f64 * 0.000_001),
+                    Color::White,
+                    Color::Black,
+                );
+            }
+
             os.maybe_advance_to_col(cols);
 
             // TODO(veluca): find a better solution.
@@ -568,11 +595,13 @@ impl UefiOS {
     }
 
     /// Spawn a new task.
-    pub fn spawn<Fut>(&self, f: Fut)
+    pub fn spawn<Fut>(&self, name: &'static str, f: Fut)
     where
         Fut: Future<Output = ()> + 'static,
     {
-        Executor::spawn(f)
+        let task = executor::Task::new(name, f);
+        self.tasks().push(task.clone());
+        Executor::spawn(task);
     }
 
     pub fn reset(&self) -> ! {
