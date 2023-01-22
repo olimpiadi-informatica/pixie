@@ -6,7 +6,7 @@ use smoltcp::socket::{
     udp::{self, BindError},
 };
 
-pub type Result<T> = core::result::Result<T, Error>;
+pub type Result<T, E = Error> = core::result::Result<T, E>;
 
 #[derive(Debug)]
 pub enum Error {

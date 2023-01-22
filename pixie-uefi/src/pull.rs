@@ -130,7 +130,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         let mut found = None;
         let mut buf = vec![0; size];
         for &offset in &pos {
-            os.hop().await;
+            os.schedule().await;
             disk.read(offset as u64, &mut buf).await.unwrap();
             if blake3::hash(&buf).as_bytes() == &hash {
                 found = Some(offset);
@@ -140,16 +140,15 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         if let Some(found) = found {
             for &offset in &pos {
                 if offset != found {
-                    os.hop().await;
+                    os.schedule().await;
                     disk.write(offset as u64, &buf).await.unwrap();
                 }
             }
         } else {
             chunks_info.insert(hash, (size, csize, pos));
+            stats.borrow_mut().fetch = chunks_info.len();
         }
     }
-
-    stats.borrow_mut().fetch = chunks_info.len();
 
     let socket = os.udp_bind(Some(chunks_port)).await?;
     let mut buf = [0; PACKET_SIZE];

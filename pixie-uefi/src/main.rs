@@ -67,7 +67,7 @@ async fn run(os: UefiOS) -> Result<()> {
                 const WAIT_10MSECS: u64 = 50;
                 for _ in 0..WAIT_10MSECS {
                     os.deep_sleep_us(10_000);
-                    os.hop().await;
+                    os.schedule().await;
                 }
             } else {
                 last_was_wait = false;

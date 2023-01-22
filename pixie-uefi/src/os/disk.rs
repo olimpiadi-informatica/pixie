@@ -123,7 +123,7 @@ impl Disk {
                         None
                     }
                 })
-                .collect::<core::result::Result<Vec<_>, _>>();
+                .collect::<Result<_, _>>();
             x
         };
         get_gpt_partitions(self).map_err(|e: DiskError<Error>| Error::Generic(e.to_string()))

@@ -217,6 +217,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                         ActionKind::Wait => Action::Wait,
                     };
 
+                    fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
                     postcard::to_allocvec(&action)?
                 };
 
@@ -247,6 +248,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     };
                     unit.curr_action = None;
                     unit.curr_progress = None;
+                    fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
                 }
                 socket.send_to(b"OK", addr).await?;
             }

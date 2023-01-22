@@ -303,7 +303,7 @@ impl UefiOS {
 
     /// Interrupt task execution.
     /// This is useful to yield the CPU to other tasks.
-    pub fn hop(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+    pub fn schedule(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
         let mut ready = false;
         poll_fn(move |cx| {
             if ready {

@@ -19,8 +19,8 @@ managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 postcard = { version = "1.0.2", default-features = false, features = ["alloc"] }
 rand = { version = "0.8.5", default-features = false }
 rand_xoshiro = { version = "0.6.0", default-features = false }
-uefi = { version = "0.18.0", features = ["alloc"] }
-uefi-services = { version = "0.15.0", default-features = false, features = ["panic_handler"] }
+uefi = { version = "0.19.0", features = ["alloc"] }
+uefi-services = { version = "0.16.0", default-features = false, features = ["panic_handler"] }
 
 [dependencies.smoltcp]
 version = "0.8.1"
@@ -33,8 +33,7 @@ path = "../pixie-shared"
 [profile.release]
 panic = "abort"
 opt-level = "s"
+codegen-units = 1
 
 [patch.crates-io]
-uefi = { git = "https://github.com/veluca93/uefi-rs", branch = "snp" }
-uefi-services = { git = "https://github.com/veluca93/uefi-rs", branch = "snp" }
 smoltcp = { git = "https://github.com/smoltcp-rs/smoltcp", rev = "0e614bc6cca8b97a1a11c27154f76221c5403739" }
