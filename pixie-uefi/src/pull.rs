@@ -15,7 +15,7 @@ use pixie_shared::{Address, Image, TcpRequest, UdpRequest, BODY_LEN, HEADER_LEN}
 
 use crate::os::{
     error::{Error, Result},
-    TcpStream, UefiOS, PACKET_SIZE,
+    mpsc, TcpStream, UefiOS, PACKET_SIZE,
 };
 
 struct PartialChunk {
@@ -155,104 +155,122 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
 
     let mut received = BTreeMap::new();
 
-    while !chunks_info.is_empty() {
-        let recv = Box::pin(socket.recv(&mut buf));
-        let sleep = Box::pin(os.sleep_us(1_000_000));
-        match select(recv, sleep).await {
-            Either::Left(((buf, _addr), _)) => {
-                stats.borrow_mut().pack_recv += 1;
-                assert!(buf.len() >= 34);
-                let hash: &[u8; 32] = buf[..32].try_into().unwrap();
-                let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
-                let csize = match chunks_info.get(hash) {
-                    Some(&(_, csize, _)) => csize,
-                    _ => continue,
-                };
+    let (tx, mut rx) = mpsc::channel(128);
 
-                let pchunk = received
-                    .entry(*hash)
-                    .or_insert_with(|| PartialChunk::new(csize));
+    let task1 = async {
+        let mut tx = tx;
+        while !chunks_info.is_empty() {
+            let recv = Box::pin(socket.recv(&mut buf));
+            let sleep = Box::pin(os.sleep_us(100_000));
+            match select(recv, sleep).await {
+                Either::Left(((buf, _addr), _)) => {
+                    stats.borrow_mut().pack_recv += 1;
+                    assert!(buf.len() >= 34);
+                    let hash: &[u8; 32] = buf[..32].try_into().unwrap();
+                    let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
+                    let csize = match chunks_info.get(hash) {
+                        Some(&(_, csize, _)) => csize,
+                        _ => continue,
+                    };
 
-                let rot_index = (index as u16).wrapping_add(32) as usize;
-                match &mut pchunk.missing_first[rot_index] {
-                    false => continue,
-                    x @ true => *x = false,
-                }
+                    let pchunk = received
+                        .entry(*hash)
+                        .or_insert_with(|| PartialChunk::new(csize));
 
-                let start = rot_index * BODY_LEN;
-                pchunk.data[start..start + buf.len() - HEADER_LEN]
-                    .clone_from_slice(&buf[HEADER_LEN..]);
-
-                let group = index & 31;
-                match &mut pchunk.missing_second[group] {
-                    0 => continue,
-                    x @ 1 => *x = 0,
-                    x @ 2.. => {
-                        *x -= 1;
-                        continue;
+                    let rot_index = (index as u16).wrapping_add(32) as usize;
+                    match &mut pchunk.missing_first[rot_index] {
+                        false => continue,
+                        x @ true => *x = false,
                     }
-                }
 
-                match &mut pchunk.missing_third {
-                    0 => unreachable!(),
-                    x @ 1 => *x = 0,
-                    x @ 2.. => {
-                        *x -= 1;
-                        continue;
+                    let start = rot_index * BODY_LEN;
+                    pchunk.data[start..start + buf.len() - HEADER_LEN]
+                        .clone_from_slice(&buf[HEADER_LEN..]);
+
+                    let group = index & 31;
+                    match &mut pchunk.missing_second[group] {
+                        0 => continue,
+                        x @ 1 => *x = 0,
+                        x @ 2.. => {
+                            *x -= 1;
+                            continue;
+                        }
                     }
-                }
 
-                let (size, _, pos) = chunks_info.remove(hash).unwrap();
-                let mut pchunk = received.remove(hash).unwrap();
-
-                let mut xor = [[0; BODY_LEN]; 32];
-                for packet in 0..pchunk.missing_first.len() {
-                    if !pchunk.missing_first[packet] {
-                        let group = packet & 31;
-                        pchunk.data[BODY_LEN * packet..]
-                            .iter()
-                            .zip(xor[group].iter_mut())
-                            .for_each(|(a, b)| *b ^= a);
+                    match &mut pchunk.missing_third {
+                        0 => unreachable!(),
+                        x @ 1 => *x = 0,
+                        x @ 2.. => {
+                            *x -= 1;
+                            continue;
+                        }
                     }
-                }
-                for packet in 0..pchunk.missing_first.len() {
-                    if pchunk.missing_first[packet] {
-                        let group = packet & 31;
-                        pchunk.data[BODY_LEN * packet..]
-                            .iter_mut()
-                            .zip(xor[group].iter())
-                            .for_each(|(a, b)| *a = *b);
+
+                    let (size, _, pos) = chunks_info.remove(hash).unwrap();
+                    let mut pchunk = received.remove(hash).unwrap();
+
+                    let mut xor = [[0; BODY_LEN]; 32];
+                    for packet in 0..pchunk.missing_first.len() {
+                        if !pchunk.missing_first[packet] {
+                            let group = packet & 31;
+                            pchunk.data[BODY_LEN * packet..]
+                                .iter()
+                                .zip(xor[group].iter_mut())
+                                .for_each(|(a, b)| *b ^= a);
+                        }
                     }
+                    for packet in 0..pchunk.missing_first.len() {
+                        if pchunk.missing_first[packet] {
+                            let group = packet & 31;
+                            pchunk.data[BODY_LEN * packet..]
+                                .iter_mut()
+                                .zip(xor[group].iter())
+                                .for_each(|(a, b)| *a = *b);
+                        }
+                    }
+
+                    let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
+                        .map_err(|e| Error::Generic(e.to_string()))?;
+
+                    tx.send((pos, data)).await;
                 }
-
-                let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
-                    .map_err(|e| Error::Generic(e.to_string()))?;
-                for offset in pos {
-                    disk.write(offset as u64, &data).await?;
+                Either::Right(((), _sleep)) => {
+                    // TODO(virv): compute the number of chunks to request
+                    let chunks: Vec<_> =
+                        chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
+                    stats.borrow_mut().requested += chunks.len();
+                    let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
+                    socket.send(server_addr.ip, server_addr.port, &msg).await?;
                 }
-
-                stats.borrow_mut().recv += 1;
-
-                socket
-                    .send(
-                        server_addr.ip,
-                        server_addr.port,
-                        &postcard::to_allocvec(&UdpRequest::ActionProgress(
-                            stats.borrow().recv,
-                            stats.borrow().fetch,
-                        ))?,
-                    )
-                    .await?;
-            }
-            Either::Right(((), _sleep)) => {
-                // TODO(virv): compute the number of chunks to request
-                let chunks: Vec<_> = chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
-                stats.borrow_mut().requested += chunks.len();
-                let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
-                socket.send(server_addr.ip, server_addr.port, &msg).await?;
             }
         }
-    }
+        Ok::<_, Error>(())
+    };
+
+    let task2 = async {
+        while let Some((pos, data)) = rx.recv().await {
+            for offset in pos {
+                os.schedule().await;
+                disk.write(offset as u64, &data).await?;
+            }
+
+            stats.borrow_mut().recv += 1;
+
+            socket
+                .send(
+                    server_addr.ip,
+                    server_addr.port,
+                    &postcard::to_allocvec(&UdpRequest::ActionProgress(
+                        stats.borrow().recv,
+                        stats.borrow().fetch,
+                    ))?,
+                )
+                .await?;
+        }
+        Ok(())
+    };
+
+    let ((), ()) = futures::try_join!(task1, task2)?;
 
     let bo = os.boot_options();
     let mut order = bo.order();

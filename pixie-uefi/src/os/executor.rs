@@ -21,6 +21,7 @@ fn executor() -> &'static RefCell<Executor> {
 }
 
 struct TaskInner {
+    pub in_queue: bool,
     pub future: Option<BoxFuture>,
     pub micros: i64,
 }
@@ -38,6 +39,7 @@ impl Task {
         Arc::new(Task {
             name,
             inner: RefCell::new(TaskInner {
+                in_queue: false,
                 future: Some(Box::pin(future)),
                 micros: 0,
             }),
@@ -55,7 +57,10 @@ unsafe impl Sync for Task {}
 
 impl ArcWake for Task {
     fn wake_by_ref(task: &Arc<Self>) {
-        executor().borrow_mut().tasks.push_back(task.clone());
+        if !task.inner.borrow().in_queue {
+            task.inner.borrow_mut().in_queue = true;
+            executor().borrow_mut().tasks.push_back(task.clone());
+        }
     }
 }
 
@@ -85,6 +90,7 @@ impl Executor {
                 .pop_front()
                 .expect("Executor should never run out of tasks");
 
+            task.inner.borrow_mut().in_queue = false;
             let waker = waker_ref(&task);
             let context = &mut Context::from_waker(&waker);
             let mut fut = task.inner.borrow_mut().future.take().unwrap();
