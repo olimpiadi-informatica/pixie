@@ -65,6 +65,79 @@ struct Stats {
     requested: usize,
 }
 
+async fn handle_packet(
+    buf: &[u8],
+    chunks_info: &mut BTreeMap<[u8; 32], (usize, usize, Vec<usize>)>,
+    received: &mut BTreeMap<[u8; 32], PartialChunk>,
+) -> Result<Option<(Vec<usize>, Vec<u8>)>> {
+    let hash: &[u8; 32] = buf[..32].try_into().unwrap();
+    let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
+    let csize = match chunks_info.get(hash) {
+        Some(&(_, csize, _)) => csize,
+        _ => return Ok(None),
+    };
+
+    let pchunk = received
+        .entry(*hash)
+        .or_insert_with(|| PartialChunk::new(csize));
+
+    let rot_index = (index as u16).wrapping_add(32) as usize;
+    match &mut pchunk.missing_first[rot_index] {
+        false => return Ok(None),
+        x @ true => *x = false,
+    }
+
+    let start = rot_index * BODY_LEN;
+    pchunk.data[start..start + buf.len() - HEADER_LEN].clone_from_slice(&buf[HEADER_LEN..]);
+
+    let group = index & 31;
+    match &mut pchunk.missing_second[group] {
+        0 => return Ok(None),
+        x @ 1 => *x = 0,
+        x @ 2.. => {
+            *x -= 1;
+            return Ok(None);
+        }
+    }
+
+    match &mut pchunk.missing_third {
+        0 => unreachable!(),
+        x @ 1 => *x = 0,
+        x @ 2.. => {
+            *x -= 1;
+            return Ok(None);
+        }
+    }
+
+    let (size, _, pos) = chunks_info.remove(hash).unwrap();
+    let mut pchunk = received.remove(hash).unwrap();
+
+    let mut xor = [[0; BODY_LEN]; 32];
+    for packet in 0..pchunk.missing_first.len() {
+        if !pchunk.missing_first[packet] {
+            let group = packet & 31;
+            pchunk.data[BODY_LEN * packet..]
+                .iter()
+                .zip(xor[group].iter_mut())
+                .for_each(|(a, b)| *b ^= a);
+        }
+    }
+    for packet in 0..pchunk.missing_first.len() {
+        if pchunk.missing_first[packet] {
+            let group = packet & 31;
+            pchunk.data[BODY_LEN * packet..]
+                .iter_mut()
+                .zip(xor[group].iter())
+                .for_each(|(a, b)| *a = *b);
+        }
+    }
+
+    let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
+        .map_err(|e| Error::Generic(e.to_string()))?;
+
+    Ok(Some((pos, data)))
+}
+
 pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: u16) -> Result<()> {
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
     let image = fetch_image(&stream, image).await?;
@@ -166,73 +239,15 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
                 Either::Left(((buf, _addr), _)) => {
                     stats.borrow_mut().pack_recv += 1;
                     assert!(buf.len() >= 34);
-                    let hash: &[u8; 32] = buf[..32].try_into().unwrap();
-                    let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
-                    let csize = match chunks_info.get(hash) {
-                        Some(&(_, csize, _)) => csize,
-                        _ => continue,
-                    };
 
-                    let pchunk = received
-                        .entry(*hash)
-                        .or_insert_with(|| PartialChunk::new(csize));
-
-                    let rot_index = (index as u16).wrapping_add(32) as usize;
-                    match &mut pchunk.missing_first[rot_index] {
-                        false => continue,
-                        x @ true => *x = false,
+                    let chunk = handle_packet(buf, &mut chunks_info, &mut received).await?;
+                    if let Some((pos, data)) = chunk {
+                        tx.send((pos, data)).await;
                     }
 
-                    let start = rot_index * BODY_LEN;
-                    pchunk.data[start..start + buf.len() - HEADER_LEN]
-                        .clone_from_slice(&buf[HEADER_LEN..]);
-
-                    let group = index & 31;
-                    match &mut pchunk.missing_second[group] {
-                        0 => continue,
-                        x @ 1 => *x = 0,
-                        x @ 2.. => {
-                            *x -= 1;
-                            continue;
-                        }
+                    if received.len() > 128 {
+                        received.pop_last();
                     }
-
-                    match &mut pchunk.missing_third {
-                        0 => unreachable!(),
-                        x @ 1 => *x = 0,
-                        x @ 2.. => {
-                            *x -= 1;
-                            continue;
-                        }
-                    }
-
-                    let (size, _, pos) = chunks_info.remove(hash).unwrap();
-                    let mut pchunk = received.remove(hash).unwrap();
-
-                    let mut xor = [[0; BODY_LEN]; 32];
-                    for packet in 0..pchunk.missing_first.len() {
-                        if !pchunk.missing_first[packet] {
-                            let group = packet & 31;
-                            pchunk.data[BODY_LEN * packet..]
-                                .iter()
-                                .zip(xor[group].iter_mut())
-                                .for_each(|(a, b)| *b ^= a);
-                        }
-                    }
-                    for packet in 0..pchunk.missing_first.len() {
-                        if pchunk.missing_first[packet] {
-                            let group = packet & 31;
-                            pchunk.data[BODY_LEN * packet..]
-                                .iter_mut()
-                                .zip(xor[group].iter())
-                                .for_each(|(a, b)| *a = *b);
-                        }
-                    }
-
-                    let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
-                        .map_err(|e| Error::Generic(e.to_string()))?;
-
-                    tx.send((pos, data)).await;
                 }
                 Either::Right(((), _sleep)) => {
                     // TODO(virv): compute the number of chunks to request
