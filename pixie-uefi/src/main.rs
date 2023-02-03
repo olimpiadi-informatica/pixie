@@ -5,9 +5,9 @@
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
-use os::{MessageKind, UdpHandle, UefiOS};
+use os::{MessageKind, TcpStream, UdpHandle, UefiOS};
 
-use pixie_shared::{Action, Address, UdpRequest, ACTION_PORT};
+use pixie_shared::{Action, Address, TcpRequest, UdpRequest, ACTION_PORT};
 use uefi::prelude::*;
 
 use os::{error::Result, PACKET_SIZE};
@@ -32,10 +32,34 @@ async fn server_discover(_os: UefiOS, udp: &UdpHandle) -> Result<Address> {
     Ok(server)
 }
 
+async fn get_action(stream: &TcpStream) -> Result<Action> {
+    let msg = postcard::to_allocvec(&TcpRequest::GetAction)?;
+    stream.send_u64_le(msg.len() as u64).await?;
+    stream.send(&msg).await?;
+
+    let len = stream.recv_u64_le().await? as usize;
+    let mut buf = vec![0; len];
+    stream.recv_exact(&mut buf).await?;
+    let cmd = postcard::from_bytes(&buf)?;
+    Ok(cmd)
+}
+
+async fn complete_action(stream: &TcpStream) -> Result<()> {
+    let msg = postcard::to_allocvec(&TcpRequest::ActionComplete)?;
+    stream.send_u64_le(msg.len() as u64).await?;
+    stream.send(&msg).await?;
+
+    let len = stream.recv_u64_le().await?;
+    assert_eq!(len, 0);
+    Ok(())
+}
+
 async fn run(os: UefiOS) -> Result<()> {
     // Local port does not matter.
     let udp = os.udp_bind(None).await?;
     let server = server_discover(os, &udp).await?;
+
+    let tcp = os.connect(server.ip, server.port).await?;
 
     let mut last_was_wait = false;
 
@@ -46,23 +70,15 @@ async fn run(os: UefiOS) -> Result<()> {
         if !last_was_wait {
             os.append_message("Sending request for command".into(), MessageKind::Debug);
         }
-        let msg = postcard::to_allocvec(&UdpRequest::GetAction)?;
-        udp.send(server.ip, server.port, &msg).await?;
 
-        let mut buf = [0; PACKET_SIZE];
-        // TODO(veluca): add a timeout.
-        let (data, server) = udp.recv(&mut buf).await;
-        let command = postcard::from_bytes::<Action>(data);
+        let command = get_action(&tcp).await;
 
         if let Err(e) = command {
             os.append_message(format!("Error receiving action: {e}"), MessageKind::Warning);
         } else {
             let command = command.unwrap();
             if matches!(command, Action::Wait) {
-                // TODO: consider using tcp
-                let msg = postcard::to_allocvec(&UdpRequest::ActionComplete).unwrap();
-                udp.send(server.ip, server.port, &msg).await?;
-                udp.recv(&mut buf).await;
+                complete_action(&tcp).await?;
                 if !last_was_wait {
                     os.append_message(
                         format!(
@@ -86,9 +102,7 @@ async fn run(os: UefiOS) -> Result<()> {
                         unreachable!();
                     }
                     Action::Reboot => {
-                        let msg = postcard::to_allocvec(&UdpRequest::ActionComplete).unwrap();
-                        udp.send(server.ip, server.port, &msg).await?;
-                        udp.recv(&mut buf).await;
+                        complete_action(&tcp).await?;
                         reboot_to_os(os).await;
                     }
                     Action::Register { hint_port } => register(os, server, hint_port).await?,
@@ -98,10 +112,7 @@ async fn run(os: UefiOS) -> Result<()> {
                     }
                 }
             }
-            // TODO: consider using tcp
-            let msg = postcard::to_allocvec(&UdpRequest::ActionComplete).unwrap();
-            udp.send(server.ip, server.port, &msg).await?;
-            udp.recv(&mut buf).await;
+            complete_action(&tcp).await?;
         }
     }
 }

@@ -89,9 +89,7 @@ pub enum Action {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UdpRequest {
     Discover,
-    GetAction,
     ActionProgress(usize, usize),
-    ActionComplete,
     RequestChunks(Vec<ChunkHash>),
 }
 
@@ -102,6 +100,8 @@ pub enum TcpRequest {
     Register(Station),
     UploadChunk(ChunkHash, Vec<u8>),
     UploadImage(String, Image),
+    GetAction,
+    ActionComplete,
 }
 
 #[cfg(feature = "std")]

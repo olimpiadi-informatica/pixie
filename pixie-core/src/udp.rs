@@ -14,11 +14,10 @@ use tokio::{
 use anyhow::{anyhow, bail, ensure, Result};
 
 use pixie_shared::{
-    to_hex, Action, DhcpMode, HintPacket, Station, UdpRequest, Unit, ACTION_PORT, BODY_LEN,
-    PACKET_LEN,
+    to_hex, DhcpMode, HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, PACKET_LEN,
 };
 
-use crate::{find_mac, find_network, ActionKind, State};
+use crate::{find_mac, find_network, State};
 
 async fn broadcast_chunks(
     state: &State,
@@ -178,54 +177,6 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
             Ok(UdpRequest::Discover) => {
                 socket.send_to(&[], addr).await?;
             }
-            Ok(UdpRequest::GetAction) => {
-                let msg = {
-                    let IpAddr::V4(peer_ip) = addr.ip() else {
-                        bail!("IPv6 is not supported")
-                    };
-                    let peer_mac = find_mac(peer_ip)?;
-                    let mut units = state.units.lock().unwrap();
-                    let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
-                    let action_kind = match unit {
-                        Some(Unit {
-                            curr_action: Some(action),
-                            ..
-                        }) => *action,
-                        Some(ref mut unit) => {
-                            let action = unit.next_action;
-                            unit.curr_action = Some(action);
-                            if matches!(
-                                unit.next_action,
-                                ActionKind::Push | ActionKind::Pull | ActionKind::Register
-                            ) {
-                                unit.next_action = ActionKind::Wait;
-                            }
-                            action
-                        }
-                        None => state.config.boot.unregistered,
-                    };
-
-                    let action = match action_kind {
-                        ActionKind::Reboot => Action::Reboot,
-                        ActionKind::Register => Action::Register {
-                            hint_port: state.config.hosts.hint_port,
-                        },
-                        ActionKind::Push => Action::Push {
-                            image: unit.unwrap().image.clone(),
-                        },
-                        ActionKind::Pull => Action::Pull {
-                            image: unit.unwrap().image.clone(),
-                            chunks_port: state.config.hosts.chunks_port,
-                        },
-                        ActionKind::Wait => Action::Wait,
-                    };
-
-                    fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
-                    postcard::to_allocvec(&action)?
-                };
-
-                socket.send_to(&msg, addr).await?;
-            }
             Ok(UdpRequest::ActionProgress(frac, tot)) => {
                 let IpAddr::V4(peer_ip) = addr.ip() else {
                     bail!("IPv6 is not supported")
@@ -237,23 +188,6 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                     continue;
                 };
                 unit.curr_progress = Some((frac, tot));
-            }
-            Ok(UdpRequest::ActionComplete) => {
-                let IpAddr::V4(peer_ip) = addr.ip() else {
-                    bail!("IPv6 is not supported")
-                };
-                let peer_mac = find_mac(peer_ip)?;
-                {
-                    let mut units = state.units.lock().unwrap();
-                    let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-                        log::warn!("Got NA from unknown unit");
-                        continue;
-                    };
-                    unit.curr_action = None;
-                    unit.curr_progress = None;
-                    fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
-                }
-                socket.send_to(b"OK", addr).await?;
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
                 for hash in chunks {

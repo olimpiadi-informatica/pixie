@@ -16,7 +16,7 @@ use interfaces::Interface;
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 
-use pixie_shared::{ActionKind, Config, Station, Unit};
+use pixie_shared::{Config, Station, Unit};
 
 use dnsmasq::DnsmasqHandle;
 

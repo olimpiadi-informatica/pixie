@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use macaddr::MacAddr6;
 use mktemp::Temp;
 
-use pixie_shared::{to_hex, TcpRequest, Unit, ACTION_PORT};
+use pixie_shared::{to_hex, Action, ActionKind, TcpRequest, Unit, ACTION_PORT};
 
 use crate::{find_mac, State};
 
@@ -107,6 +107,59 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             let path = state.storage_dir.join("images").join(name);
             let data = postcard::to_allocvec(&image)?;
             atomic_write(&path, &data).await?;
+            Vec::new()
+        }
+        TcpRequest::GetAction => {
+            let mut units = state.units.lock().unwrap();
+            let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
+            let action_kind = match unit {
+                Some(Unit {
+                    curr_action: Some(action),
+                    ..
+                }) => *action,
+                Some(ref mut unit) => {
+                    let action = unit.next_action;
+                    unit.curr_action = Some(action);
+                    if matches!(
+                        unit.next_action,
+                        ActionKind::Push | ActionKind::Pull | ActionKind::Register
+                    ) {
+                        unit.next_action = ActionKind::Wait;
+                    }
+                    action
+                }
+                None => state.config.boot.unregistered,
+            };
+
+            let action = match action_kind {
+                ActionKind::Reboot => Action::Reboot,
+                ActionKind::Register => Action::Register {
+                    hint_port: state.config.hosts.hint_port,
+                },
+                ActionKind::Push => Action::Push {
+                    image: unit.unwrap().image.clone(),
+                },
+                ActionKind::Pull => Action::Pull {
+                    image: unit.unwrap().image.clone(),
+                    chunks_port: state.config.hosts.chunks_port,
+                },
+                ActionKind::Wait => Action::Wait,
+            };
+
+            // TODO(virv): async
+            std::fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
+            postcard::to_allocvec(&action)?
+        }
+        TcpRequest::ActionComplete => {
+            let mut units = state.units.lock().unwrap();
+            if let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) {
+                unit.curr_action = None;
+                unit.curr_progress = None;
+                std::fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
+            } else {
+                log::warn!("Got NA from unknown unit");
+            };
+
             Vec::new()
         }
     })
