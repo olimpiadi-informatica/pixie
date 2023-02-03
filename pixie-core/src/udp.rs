@@ -175,6 +175,9 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
         let (len, addr) = socket.recv_from(&mut buf).await?;
         let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
+            Ok(UdpRequest::Discover) => {
+                socket.send_to(&[], addr).await?;
+            }
             Ok(UdpRequest::GetAction) => {
                 let msg = {
                     let IpAddr::V4(peer_ip) = addr.ip() else {

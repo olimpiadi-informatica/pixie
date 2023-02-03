@@ -88,6 +88,7 @@ pub enum Action {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UdpRequest {
+    Discover,
     GetAction,
     ActionProgress(usize, usize),
     ActionComplete,

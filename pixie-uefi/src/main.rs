@@ -5,9 +5,9 @@
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
-use os::{MessageKind, UefiOS};
+use os::{MessageKind, UdpHandle, UefiOS};
 
-use pixie_shared::{Action, UdpRequest};
+use pixie_shared::{Action, Address, UdpRequest, ACTION_PORT};
 use uefi::prelude::*;
 
 use os::{error::Result, PACKET_SIZE};
@@ -23,9 +23,19 @@ mod register;
 #[macro_use]
 extern crate alloc;
 
+async fn server_discover(_os: UefiOS, udp: &UdpHandle) -> Result<Address> {
+    let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
+    udp.send([255; 4], ACTION_PORT, &msg).await?;
+    let mut buf = [0; PACKET_SIZE];
+    let (data, server) = udp.recv(&mut buf).await;
+    assert_eq!(data.len(), 0);
+    Ok(server)
+}
+
 async fn run(os: UefiOS) -> Result<()> {
     // Local port does not matter.
     let udp = os.udp_bind(None).await?;
+    let server = server_discover(os, &udp).await?;
 
     let mut last_was_wait = false;
 
@@ -37,8 +47,7 @@ async fn run(os: UefiOS) -> Result<()> {
             os.append_message("Sending request for command".into(), MessageKind::Debug);
         }
         let msg = postcard::to_allocvec(&UdpRequest::GetAction)?;
-        udp.send([255, 255, 255, 255], pixie_shared::ACTION_PORT, &msg)
-            .await?;
+        udp.send(server.ip, server.port, &msg).await?;
 
         let mut buf = [0; PACKET_SIZE];
         // TODO(veluca): add a timeout.
