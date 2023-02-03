@@ -5,12 +5,15 @@
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
-use os::{MessageKind, TcpStream, UdpHandle, UefiOS};
-
+use alloc::boxed::Box;
+use futures::future::{self, Either};
 use pixie_shared::{Action, Address, TcpRequest, UdpRequest, ACTION_PORT};
 use uefi::prelude::*;
 
-use os::{error::Result, PACKET_SIZE};
+use os::{
+    error::{Error, Result},
+    MessageKind, TcpStream, UefiOS, PACKET_SIZE,
+};
 
 use crate::{pull::pull, push::push, reboot_to_os::reboot_to_os, register::register};
 
@@ -23,12 +26,37 @@ mod register;
 #[macro_use]
 extern crate alloc;
 
-async fn server_discover(_os: UefiOS, udp: &UdpHandle) -> Result<Address> {
-    let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
-    udp.send([255; 4], ACTION_PORT, &msg).await?;
-    let mut buf = [0; PACKET_SIZE];
-    let (data, server) = udp.recv(&mut buf).await;
-    assert_eq!(data.len(), 0);
+async fn server_discover(os: UefiOS) -> Result<Address> {
+    let socket = os.udp_bind(None).await?;
+
+    let task1 = async {
+        // TODO(virv): there must be a better way...
+        if false {
+            return Err::<!, _>(Error::Generic("".into()));
+        }
+
+        let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
+        loop {
+            socket.send([255; 4], ACTION_PORT, &msg).await?;
+            os.sleep_us(1_000_000).await;
+        }
+    };
+
+    let task2 = async {
+        let mut buf = [0; PACKET_SIZE];
+        let (data, server) = socket.recv(&mut buf).await;
+        assert_eq!(data.len(), 0);
+        Ok::<_, Error>(server)
+    };
+
+    let x = future::try_select(Box::pin(task1), Box::pin(task2)).await;
+    let server = match x {
+        Ok(Either::Left((never, _))) => never,
+        Ok(Either::Right((server, _))) => server,
+        Err(Either::Left((e, _))) => Err(e)?,
+        Err(Either::Right((e, _))) => Err(e)?,
+    };
+
     Ok(server)
 }
 
@@ -55,9 +83,7 @@ async fn complete_action(stream: &TcpStream) -> Result<()> {
 }
 
 async fn run(os: UefiOS) -> Result<()> {
-    // Local port does not matter.
-    let udp = os.udp_bind(None).await?;
-    let server = server_discover(os, &udp).await?;
+    let server = server_discover(os).await?;
 
     let tcp = os.connect(server.ip, server.port).await?;
 

@@ -1,4 +1,4 @@
-use alloc::{string::String, rc::Rc, vec::Vec};
+use alloc::{rc::Rc, string::String, vec::Vec};
 use core::cell::RefCell;
 
 use lz4_flex::compress;

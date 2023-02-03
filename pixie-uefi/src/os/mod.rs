@@ -38,7 +38,7 @@ use uefi::{
 use self::{
     boot_options::BootOptions,
     disk::Disk,
-    error::Error,
+    error::{Error, Result},
     executor::{Executor, Task},
     net::NetworkInterface,
     rng::Rng,
@@ -53,8 +53,6 @@ pub mod mpsc;
 mod net;
 mod rng;
 mod timer;
-
-use error::Result;
 
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
