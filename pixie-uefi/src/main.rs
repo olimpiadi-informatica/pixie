@@ -1,7 +1,6 @@
 #![no_main]
 #![no_std]
 #![feature(negative_impls)]
-#![feature(abi_efiapi)]
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
