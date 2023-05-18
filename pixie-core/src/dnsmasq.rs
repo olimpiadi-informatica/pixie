@@ -38,7 +38,7 @@ impl DnsmasqHandle {
 
 ## net0
 {dhcp_dynamic_conf}
-dhcp-range=tag:staticip,10.0.0.0,static
+dhcp-range=10.0.0.0,static
 dhcp-hostsfile={storage_str}/hosts
 dhcp-boot=uefi_app.efi
 interface={name}
