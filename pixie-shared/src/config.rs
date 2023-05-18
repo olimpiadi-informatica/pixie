@@ -10,7 +10,6 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use crate::Bijection;
 
 pub const UNASSIGNED_GROUP_ID: u8 = 187;
-pub const STATIC_IP_USERCLASS: &str = "pixie-static-ip";
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -24,11 +23,9 @@ pub enum DhcpMode {
 }
 
 /// Registered clients will always be assigned an IP in the form
-/// 10.{group_id}.{column_id}.{row_id} if they specify the STATIC_IP_USERCLASS user class;
-/// this can be done for example by setting the UserClass= option in the [DHCPv4] section of
-/// systemd-networkd config files.
+/// 10.{group_id}.{column_id}.{row_id}.
 /// Note that for this to work, the specified network interface must have an IP on the 10.0.0.0/8
-/// subnet.
+/// subnet; BEWARE that dnsmasq can be picky about the order of IP addresses.
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 pub struct DhcpConfig {
     /// IP behaviour of unregistered clients and while running pixie itself.

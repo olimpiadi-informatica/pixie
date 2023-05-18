@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::Result;
 
-use pixie_shared::{DhcpConfig, DhcpMode, Unit, STATIC_IP_USERCLASS, UNASSIGNED_GROUP_ID};
+use pixie_shared::{DhcpConfig, DhcpMode, Unit, UNASSIGNED_GROUP_ID};
 
 pub struct DnsmasqHandle {
     child: Child,
@@ -39,7 +39,6 @@ impl DnsmasqHandle {
 ## net0
 {dhcp_dynamic_conf}
 dhcp-range=tag:staticip,10.0.0.0,static
-dhcp-userclass=set:staticip,{STATIC_IP_USERCLASS}
 dhcp-hostsfile={storage_str}/hosts
 dhcp-boot=uefi_app.efi
 interface={name}
@@ -77,7 +76,7 @@ pxe-prompt="pixie",1
         for host in hosts {
             let mac = host.mac;
             let ip = host.static_ip();
-            writeln!(self.hosts, "tag:{STATIC_IP_USERCLASS},{},{}", mac, ip)?;
+            writeln!(self.hosts, "{},{}", mac, ip)?;
         }
         let r = unsafe { libc::kill(self.child.id().try_into().unwrap(), libc::SIGHUP) };
         if r < 0 {
