@@ -1,11 +1,10 @@
 use core::{future::poll_fn, task::Poll};
 
-use alloc::{boxed::Box, collections::BTreeMap};
+use alloc::boxed::Box;
 use futures::future::select;
-use managed::ManagedSlice;
 
 use smoltcp::{
-    iface::{Interface, InterfaceBuilder, NeighborCache, Routes, SocketHandle, SocketSet},
+    iface::{Config, Interface, SocketHandle, SocketSet},
     phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
     socket::{
         dhcpv4::{Event, Socket as Dhcpv4Socket},
@@ -84,26 +83,26 @@ struct SnpTxToken<'a> {
 }
 
 impl<'a> TxToken for SnpTxToken<'a> {
-    fn consume<R, F>(self, _: Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, len: usize, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> R,
     {
         assert!(len <= self.buf.len());
         let payload = &mut self.buf[..len];
-        let ret = f(payload)?;
+        let ret = f(payload);
         let snp = self.snp;
         snp.transmit(0, payload, None, None, None)
             .expect("Failed to transmit frame");
         // Wait until sending is complete.
         while snp.get_recycled_transmit_buffer_status().unwrap().is_none() {}
-        Ok(ret)
+        ret
     }
 }
 
 impl<'a> RxToken for SnpRxToken<'a> {
-    fn consume<R, F>(self, _: Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> R,
     {
         f(self.packet)
     }
@@ -113,7 +112,7 @@ impl Device for SNPDevice {
     type TxToken<'d> = SnpTxToken<'d>;
     type RxToken<'d> = SnpRxToken<'d>;
 
-    fn receive(&mut self) -> Option<(SnpRxToken<'_>, SnpTxToken<'_>)> {
+    fn receive(&mut self, _: Instant) -> Option<(SnpRxToken<'_>, SnpTxToken<'_>)> {
         let rec = self.snp.receive(&mut self.rx_buf, None, None, None, None);
         if rec == Err(Status::NOT_READY.into()) {
             return None;
@@ -129,7 +128,7 @@ impl Device for SNPDevice {
         ))
     }
 
-    fn transmit(&mut self) -> Option<SnpTxToken<'_>> {
+    fn transmit(&mut self, _: Instant) -> Option<SnpTxToken<'_>> {
         Some(SnpTxToken {
             snp: self.snp,
             buf: &mut self.tx_buf,
@@ -149,7 +148,7 @@ impl Device for SNPDevice {
 }
 
 pub struct NetworkInterface {
-    interface: Interface<'static>,
+    interface: Interface,
     device: SNPDevice,
     socket_set: SocketSet<'static>,
     dhcp_socket_handle: SocketHandle,
@@ -177,20 +176,14 @@ impl NetworkInterface {
             os.open_protocol_on_device::<SimpleNetwork>(device).unwrap(),
         )));
 
-        let routes = Routes::new(BTreeMap::new());
-        let neighbor_cache = NeighborCache::new(BTreeMap::new());
         let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
             &device.snp.mode().current_address.0[..6],
         ));
 
-        let interface = InterfaceBuilder::new()
-            .hardware_addr(hw_addr)
-            .routes(routes)
-            .ip_addrs(vec![])
-            .random_seed(os.rng().rand_u64())
-            .neighbor_cache(neighbor_cache)
-            .finalize(&mut device);
-
+        let mut interface_config = Config::new();
+        interface_config.random_seed = os.rng().rand_u64();
+        interface_config.hardware_addr = Some(hw_addr);
+        let interface = Interface::new(interface_config, &mut device);
         let dhcp_socket = Dhcpv4Socket::new();
         let mut socket_set = SocketSet::new(vec![]);
         let dhcp_socket_handle = socket_set.add(dhcp_socket);
@@ -227,13 +220,6 @@ impl NetworkInterface {
         let status = self
             .interface
             .poll(now, &mut self.device, &mut self.socket_set);
-        if let Err(err) = status {
-            if err != smoltcp::Error::Unrecognized {
-                UefiOS {}.append_message(format!("net error: {:?}", err), MessageKind::Warning);
-            }
-            return false;
-        }
-        let status = status.unwrap();
         if !status {
             return false;
         }
@@ -246,11 +232,7 @@ impl NetworkInterface {
         if let Some(dhcp_status) = dhcp_status {
             if let Event::Configured(config) = dhcp_status {
                 self.interface.update_ip_addrs(|a| {
-                    if let ManagedSlice::Owned(ref mut a) = a {
-                        a.push(IpCidr::Ipv4(config.address));
-                    } else {
-                        panic!("Invalid addresses: {:?}", a);
-                    }
+                    a.push(IpCidr::Ipv4(config.address)).unwrap();
                 });
                 if let Some(router) = config.router {
                     self.interface
@@ -260,11 +242,7 @@ impl NetworkInterface {
                 }
             } else {
                 self.interface.update_ip_addrs(|a| {
-                    if let ManagedSlice::Owned(ref mut a) = a {
-                        a.clear();
-                    } else {
-                        panic!("Invalid addresses: {:?}", a);
-                    }
+                    a.clear();
                 });
                 self.interface.routes_mut().remove_default_ipv4_route();
             }

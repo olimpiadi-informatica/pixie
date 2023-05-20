@@ -79,7 +79,7 @@ struct UefiOSImpl {
     rng: Rng,
     tasks: Vec<Arc<Task>>,
     input: Option<ScopedProtocol<'static, Input>>,
-    output: Option<ScopedProtocol<'static, Output<'static>>>,
+    output: Option<ScopedProtocol<'static, Output>>,
     net: Option<NetworkInterface>,
     messages: VecDeque<(String, MessageKind)>,
     ui_buf: Vec<(String, Color, Color)>,

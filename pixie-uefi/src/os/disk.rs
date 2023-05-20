@@ -113,10 +113,11 @@ impl Disk {
                         part.unwrap()
                     };
                     if part.is_used() {
+                        let part_guid = part.unique_partition_guid;
                         Some(Ok(DiskPartition {
                             byte_start: part.starting_lba.to_u64() * block_size,
                             byte_end: (part.ending_lba.to_u64() + 1) * block_size,
-                            guid: part.unique_partition_guid.to_string(),
+                            guid: part_guid.to_string(),
                             name: part.name.to_string(),
                         }))
                     } else {
