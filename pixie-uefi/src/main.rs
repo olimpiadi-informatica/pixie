@@ -81,7 +81,7 @@ async fn complete_action(stream: &TcpStream) -> Result<()> {
     Ok(())
 }
 
-async fn run(os: UefiOS) -> Result<()> {
+async fn run(os: UefiOS) -> Result<!> {
     let server = server_discover(os).await?;
 
     let tcp = os.connect(server.ip, server.port).await?;

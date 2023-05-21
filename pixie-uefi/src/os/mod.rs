@@ -160,10 +160,10 @@ unsafe extern "efiapi" fn exit_boot_services(_e: Event, _ctx: Option<NonNull<c_v
 }
 
 impl UefiOS {
-    pub fn start<F, Fut>(mut system_table: SystemTable<Boot>, f: F) -> !
+    pub fn start<F, Fut>(mut system_table: SystemTable<Boot>, mut f: F) -> !
     where
-        F: FnOnce(UefiOS) -> Fut + 'static,
-        Fut: Future<Output = Result<()>>,
+        F: FnMut(UefiOS) -> Fut + 'static,
+        Fut: Future<Output = Result<!>>,
     {
         // Never call this function twice.
         assert!(!OS_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
@@ -234,7 +234,12 @@ impl UefiOS {
 
         let os = UefiOS {};
 
-        os.spawn("init", async { f(UefiOS {}).await.unwrap() });
+        os.spawn("init", async move {
+            loop {
+                let err = f(UefiOS {}).await.unwrap_err();
+                UefiOS {}.append_message(format!("Error: {:?}", err), MessageKind::Error);
+            }
+        });
 
         os.spawn(
             "[net_poll]",
