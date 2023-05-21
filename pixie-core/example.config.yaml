@@ -1,6 +1,6 @@
 dhcp:
   interface: br0
-  mode: { proxy: 192.168.1.100 }
+  mode: !proxy 192.168.1.100
   # mode: static
 http:
   listen_on: 0.0.0.0:8080
