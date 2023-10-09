@@ -26,7 +26,9 @@ impl DnsmasqHandle {
 
         let dhcp_dynamic_conf = match cfg.mode {
             DhcpMode::Static => {
-                format!("dhcp-range=10.{UNASSIGNED_GROUP_ID}.0.1,10.{UNASSIGNED_GROUP_ID}.0.100")
+                format!(
+                    "dhcp-range=10.{UNASSIGNED_GROUP_ID}.100.1,10.{UNASSIGNED_GROUP_ID}.200.200"
+                )
             }
             DhcpMode::Proxy(ip) => format!("dhcp-range={},proxy", ip),
         };
