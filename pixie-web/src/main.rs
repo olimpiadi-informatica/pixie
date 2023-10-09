@@ -97,6 +97,7 @@ fn GroupInfo<'a, G: Html>(
     units: &'a ReadSignal<Vec<Unit>>,
     group_id: u8,
     group_name: String,
+    images: Vec<String>,
 ) -> View<G> {
     let group_units = create_memo(cx, move || {
         units
@@ -114,6 +115,21 @@ fn GroupInfo<'a, G: Html>(
     let id_cancel = format!("group-{group_name}-cancel");
     let url_cancel = format!("/admin/action/{group_name}/wait");
 
+    let set_images = View::new_fragment(
+        images
+            .iter()
+            .map(|image| {
+                let url = format!("/admin/image/{group_name}/{image}");
+                let text = format!("Set image to {:?}", image);
+                view! { cx,
+                    button(on:click=move |_| send_req(url.clone())) {
+                        (text)
+                    }
+                }
+            })
+            .collect(),
+    );
+
     view! { cx,
         h2 { (group_name) }
         button(id=id_pull, on:click=move |_| send_req(url_pull.clone()) ) {
@@ -125,6 +141,7 @@ fn GroupInfo<'a, G: Html>(
         button(id=id_cancel, on:click=move |_| send_req(url_cancel.clone()) ) {
             "Set all machines to wait for next command"
         }
+        (set_images)
         table {
             tr {
                 th { "mac" }
@@ -207,8 +224,9 @@ async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
             .groups
             .iter()
             .map(|(name, id)| {
+                let images = config.images.clone();
                 view! { cx,
-                GroupInfo(units=units, group_id=*id, group_name=name.clone()) }
+                GroupInfo(units=units, group_id=*id, group_name=name.clone(), images=images) }
             })
             .collect(),
     );
