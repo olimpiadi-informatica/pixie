@@ -128,23 +128,11 @@ fn compute_hint(state: &State) -> Result<Station> {
         .iter()
         .fold((0, 0), |(r1, c1), &(r2, c2)| (r1.max(r2), c1.max(c2)));
 
-    let mut hole = None;
-    'find_hole: for row in 1..=mrow {
-        for col in 1..=mcol {
-            if positions.contains(&(row, col)) {
-                continue;
-            }
-
-            hole = Some((row, col));
-            break 'find_hole;
-        }
-    }
-
-    let (row, col) = hole.unwrap_or(match mrow {
+    let (row, col) = match mrow {
         0 => (1, 1),
         1 => (1, mcol + 1),
-        _ => (mrow + 1, 1),
-    });
+        _ => (last.row + (last.col + 1 / mcol), (last.col + 1) % mcol),
+    };
 
     Ok(Station {
         group: last.group.clone(),
