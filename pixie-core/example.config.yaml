@@ -4,7 +4,6 @@ dhcp:
   # mode: static
 http:
   listen_on: 0.0.0.0:8080
-  max_payload: 10000000
   password: secret
 hosts:
   chunks_port: 4041

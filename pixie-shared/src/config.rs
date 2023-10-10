@@ -36,7 +36,6 @@ pub struct DhcpConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpConfig {
-    pub max_payload: usize,
     pub listen_on: SocketAddrV4,
     pub password: String,
 }

@@ -6,7 +6,7 @@ use actix_web::{
     get,
     http::StatusCode,
     middleware::Logger,
-    web::{Data, Path, PayloadConfig},
+    web::{Data, Path},
     App, HttpServer, Responder,
 };
 use actix_web_httpauth::middleware::HttpAuthentication;
@@ -148,7 +148,6 @@ async fn get_units(state: Data<State>) -> Result<impl Responder, actix_web::Erro
 
 pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
-        max_payload,
         listen_on,
         ref password,
     } = state.config.http;
@@ -172,7 +171,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
                     }
                 }
             }))
-            .app_data(PayloadConfig::new(max_payload))
             .app_data(data.clone())
             .service(action)
             .service(image)
