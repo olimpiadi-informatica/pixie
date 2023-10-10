@@ -1,0 +1,21 @@
+dhcp:
+  interface: br0
+  mode: !proxy 192.168.1.100
+  # mode: static
+http:
+  listen_on: 0.0.0.0:8080
+  max_payload: 10000000
+  password: secret
+hosts:
+  chunks_port: 4041
+  hint_port: 4042
+  bits_per_second: 52428800
+groups:
+  - [asdf, 0]
+  - [qwer, 1]
+boot:
+  unregistered: register
+  default: wait
+images:
+  - contestant
+  - worker

@@ -1,0 +1,36 @@
+[package]
+edition = "2021"
+name = "uefi_app"
+version = "0.1.0"
+
+[[bin]]
+name = "uefi_app"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+blake3 = { version = "1.3.3", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
+core_detect = "1.0.0"
+futures = { version = "0.3.28", default-features = false, features = ["alloc", "async-await"] }
+gpt_disk_io = "0.15.0"
+lz4_flex = { version = "0.10.0", default-features = false }
+managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
+postcard = { version = "1.0.4", default-features = false, features = ["alloc"] }
+rand = { version = "0.8.5", default-features = false }
+rand_xoshiro = { version = "0.6.0", default-features = false }
+uefi = { version = "0.21.0", features = ["alloc"] }
+uefi-services = { version = "0.18.0", default-features = false, features = ["panic_handler"] }
+
+[dependencies.smoltcp]
+version = "0.9.1"
+default-features = false
+features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async"]
+
+[dependencies.pixie-shared]
+path = "../pixie-shared"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+codegen-units = 1

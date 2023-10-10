@@ -1,7 +1,0 @@
-{
-    "subnet": "192.168.0.0/16",
-    "hashes": ["/bin/sh"],
-    "swap_size": 8,
-    "root_size": 16,
-    "extra_args": "test"
-}
