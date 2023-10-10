@@ -289,8 +289,15 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
 
     let bo = os.boot_options();
     let mut order = bo.order();
-    order.retain(|&x| x != image.boot_option_id);
-    order.insert(1, image.boot_option_id);
+    let reboot_target = bo.reboot_target();
+    if let Some(target) = reboot_target {
+        order = order
+            .into_iter()
+            .map(|x| if x != target { x } else { image.boot_option_id })
+            .collect();
+    } else {
+        order.push(image.boot_option_id);
+    };
     bo.set_order(&order);
     bo.set(image.boot_option_id, &image.boot_entry);
 

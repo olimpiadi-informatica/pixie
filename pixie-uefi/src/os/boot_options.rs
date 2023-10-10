@@ -64,6 +64,17 @@ impl BootOptions {
             .unwrap();
     }
 
+    pub fn reboot_target(&self) -> Option<u16> {
+        let order = self.order();
+        let num_skip = order
+            .iter()
+            .cloned()
+            .position(|x| x == self.current())
+            .map(|x| x + 1)
+            .unwrap_or(0);
+        order.iter().cloned().skip(num_skip).find(|x| *x < 0x2000)
+    }
+
     pub fn get(&self, id: u16) -> Vec<u8> {
         self.os
             .get_variable(&format!("Boot{:04X}", id), &VariableVendor::GLOBAL_VARIABLE)

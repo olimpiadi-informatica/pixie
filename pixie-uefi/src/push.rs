@@ -64,6 +64,10 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         }
     });
 
+    let bo = os.boot_options();
+    let boid = bo.reboot_target().expect("Could not find reboot target");
+    let bo_command = bo.get(boid);
+
     let mut disk = os.open_first_disk();
     let chunks = parse_disk::parse_disk(&mut disk).await?;
 
@@ -212,10 +216,6 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
 
     let ((), (), (), (), (), chunk_hashes) =
         futures::try_join!(task1, task2, task3, task4, task5, task6)?;
-
-    let bo = os.boot_options();
-    let boid = bo.order()[1];
-    let bo_command = bo.get(boid);
 
     save_image(
         &stream_upload_chunk,
