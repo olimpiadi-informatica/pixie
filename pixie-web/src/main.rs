@@ -100,12 +100,14 @@ fn GroupInfo<'a, G: Html>(
     images: Vec<String>,
 ) -> View<G> {
     let group_units = create_memo(cx, move || {
-        units
+        let mut units = units
             .get()
             .iter()
             .filter(|x| x.group == group_id)
             .cloned()
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        units.sort_by_key(|x| (x.row, x.col, x.mac));
+        units
     });
 
     let id_pull = format!("group-{group_name}-pull");
