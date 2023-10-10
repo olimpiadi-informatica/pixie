@@ -131,7 +131,7 @@ fn compute_hint(state: &State) -> Result<Station> {
     let (row, col) = match mrow {
         0 => (1, 1),
         1 => (1, mcol + 1),
-        _ => (last.row + (last.col + 1 / mcol), (last.col + 1) % mcol),
+        _ => (last.row + (last.col + 1) / mcol, (last.col + 1) % mcol),
     };
 
     Ok(Station {
