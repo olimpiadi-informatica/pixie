@@ -2,6 +2,7 @@ dhcp:
   interface: br0
   mode: !proxy 192.168.1.100
   #mode: !static [10.187.100.1, 10.187.200.200]
+  hostsfile: /etc/hosts
 http:
   listen_on: 0.0.0.0:8080
   password: secret
@@ -10,8 +11,8 @@ hosts:
   hint_port: 4042
   bits_per_second: 52428800
 groups:
-  - [asdf, 0]
-  - [qwer, 1]
+  - [room0, 0]
+  - [room1, 1]
 boot:
   unregistered: register
   default: wait
