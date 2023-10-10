@@ -110,10 +110,11 @@ async fn broadcast_chunks(
 }
 
 fn compute_hint(state: &State) -> Result<Station> {
-    let last = &*state
+    let mut last = state
         .last
         .lock()
-        .map_err(|_| anyhow!("hint lock poisoned"))?;
+        .map_err(|_| anyhow!("hint lock poisoned"))?
+        .clone();
 
     let positions = state
         .units
@@ -124,6 +125,13 @@ fn compute_hint(state: &State) -> Result<Station> {
         .map(|unit| (unit.row, unit.col))
         .collect::<Vec<_>>();
 
+    if last.row == 0 {
+        if let Some(&(r, c)) = positions.iter().max() {
+            last.row = r;
+            last.col = c;
+        }
+    }
+
     let (mrow, mcol) = positions
         .iter()
         .fold((0, 0), |(r1, c1), &(r2, c2)| (r1.max(r2), c1.max(c2)));
@@ -131,7 +139,7 @@ fn compute_hint(state: &State) -> Result<Station> {
     let (row, col) = match mrow {
         0 => (1, 1),
         1 => (1, mcol + 1),
-        _ => (last.row + (last.col + 1) / mcol, (last.col + 1) % mcol),
+        _ => (last.row + last.col / mcol, last.col % mcol + 1),
     };
 
     Ok(Station {

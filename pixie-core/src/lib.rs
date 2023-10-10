@@ -25,6 +25,7 @@ pub struct State {
     pub config: Config,
     pub units: Mutex<Vec<Unit>>,
     pub dnsmasq_handle: Mutex<DnsmasqHandle>,
+    // TODO: use an Option
     pub last: Mutex<Station>,
 }
 
