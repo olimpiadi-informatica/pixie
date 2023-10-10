@@ -166,7 +166,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
 
 async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
     let mut buf = [0; PACKET_LEN];
-    loop {
+    'recv_packet: loop {
         let (len, addr) = socket.recv_from(&mut buf).await?;
         let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
@@ -177,7 +177,13 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 let IpAddr::V4(peer_ip) = addr.ip() else {
                     bail!("IPv6 is not supported")
                 };
-                let peer_mac = find_mac(peer_ip)?;
+                let peer_mac = match find_mac(peer_ip) {
+                    Ok(peer_mac) => peer_mac,
+                    Err(err) => {
+                        log::error!("Error handling udp packet: {}", err);
+                        continue 'recv_packet;
+                    }
+                };
                 let mut units = state.units.lock().unwrap();
                 let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
                     log::warn!("Got AP from unknown unit");
