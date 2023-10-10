@@ -239,7 +239,7 @@ impl UefiOS {
             .unwrap()
             .borrow()
             .boot_services
-            .set_watchdog_timer(0, 0, None);
+            .set_watchdog_timer(0, 0x10000, None);
         if let Err(err) = err {
             if err.status() != Status::UNSUPPORTED {
                 os.append_message(
