@@ -234,6 +234,21 @@ impl UefiOS {
 
         let os = UefiOS {};
 
+        // Disable watchdog. SAFETY: there are no other threads at this point.
+        let err = unsafe { OS.as_ref() }
+            .unwrap()
+            .borrow()
+            .boot_services
+            .set_watchdog_timer(0, 0, None);
+        if let Err(err) = err {
+            if err.status() != Status::UNSUPPORTED {
+                os.append_message(
+                    format!("Error disabling watchdog: {:?}", err),
+                    MessageKind::Error,
+                );
+            }
+        }
+
         os.spawn("init", async move {
             loop {
                 let err = f(UefiOS {}).await.unwrap_err();
