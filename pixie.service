@@ -1,0 +1,14 @@
+[Unit]
+Description=pixie
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/pixie-server -s /var/local/lib/pixie/storage 
+Environment=RUST_LOG=info
+WorkingDirectory=/var/local/lib/pixie
+
+[Install]
+WantedBy=multi-user.target

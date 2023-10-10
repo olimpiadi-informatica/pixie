@@ -1,7 +1,12 @@
 #!/bin/bash
 set -xe
 
-cd "$(realpath "$(dirname "$0")")"
+SELFDIR="$(realpath "$(dirname "$0")")"
+
+STORAGE_DIR="$1"
+STORAGE_DIR="${STORAGE_DIR:=$SELFDIR/storage}"
+
+cd "$SELFDIR"
 
 pushd pixie-uefi
 cargo build --release
@@ -16,11 +21,11 @@ pushd pixie-core
 cargo build --release
 popd
 
-mkdir -p storage/tftpboot
-cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi storage/tftpboot/
-mkdir -p storage/admin
-cp -r pixie-web/dist/* storage/admin/
+mkdir -p "${STORAGE_DIR}/tftpboot"
+cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi "${STORAGE_DIR}/tftpboot/"
+mkdir -p "${STORAGE_DIR}/admin"
+cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 
-mkdir -p storage/images storage/chunks
+mkdir -p "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks"
 
-[ -f storage/config.yaml ] || cp pixie-core/example.config.yaml storage/config.yaml
+[ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-core/example.config.yaml "${STORAGE_DIR}/config.yaml"
