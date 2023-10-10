@@ -153,14 +153,13 @@ fn GroupInfo<'a, G: Html>(
                 th(colspan=5) { "change action" }
                 th { "current action" }
             }
-            Keyed(
+            Indexed(
                 iterable=group_units,
                 view=|cx, x| {
                     view! { cx,
                         UnitInfo(unit=x)
                     }
                 },
-                key=|x| (x.row, x.col, x.mac)
             )
         }
     }
