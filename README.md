@@ -21,7 +21,5 @@ A system to boot multiple computers, supporting rsync-like updates
 * gruppi più flessibili
 * registrazione più fancy
 * current/next action, abort operation
-* non utilizzare connessioni tcp a lunga vita
 * SIGHUP
 * chunks garbage collection
-* watchdog
