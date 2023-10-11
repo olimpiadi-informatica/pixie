@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
+
 use gloo_timers::future::TimeoutFuture;
 use pixie_shared::{ActionKind, Config, Unit};
 use sycamore::prelude::*;
@@ -28,7 +31,7 @@ fn send_req(url: String) {
 }
 
 #[component(inline_props)]
-fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit) -> View<G> {
+fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> View<G> {
     let fmt_ca = |curr_action: Option<ActionKind>, progress: Option<(usize, usize)>| {
         if let Some(a) = curr_action {
             if let Some((x, y)) = progress {
@@ -57,6 +60,7 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit) -> View<G> {
 
     view! { cx,
         tr {
+            td { (hostname.clone().unwrap_or_default()) }
             td { (unit.mac) }
             td { (unit.image) }
             td { "row " (unit.row) " col " (unit.col) }
@@ -98,6 +102,7 @@ fn GroupInfo<'a, G: Html>(
     group_id: u8,
     group_name: String,
     images: Vec<String>,
+    hostmap: HashMap<Ipv4Addr, String>,
 ) -> View<G> {
     let group_units = create_memo(cx, move || {
         let mut units = units
@@ -146,6 +151,7 @@ fn GroupInfo<'a, G: Html>(
         (set_images)
         table {
             tr {
+                th { "hostname" }
                 th { "mac" }
                 th { "image" }
                 th { "position" }
@@ -155,9 +161,10 @@ fn GroupInfo<'a, G: Html>(
             }
             Indexed(
                 iterable=group_units,
-                view=|cx, x| {
+                view=move |cx, x| {
+                    let hostname = hostmap.get(&x.static_ip()).cloned();
                     view! { cx,
-                        UnitInfo(unit=x)
+                        UnitInfo(unit=x, hostname=hostname)
                     }
                 },
             )
@@ -208,6 +215,7 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'b Vec<String>) -> View<G> {
 #[component]
 async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
     let config: Config = make_req("/admin/config").await;
+    let hostmap: HashMap<Ipv4Addr, String> = make_req("/admin/hostmap").await;
 
     let units = create_signal(cx, make_req::<Vec<Unit>>("/admin/units").await);
 
@@ -227,8 +235,9 @@ async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
             .iter()
             .map(|(name, id)| {
                 let images = config.images.clone();
+                let hostmap = hostmap.clone();
                 view! { cx,
-                GroupInfo(units=units, group_id=*id, group_name=name.clone(), images=images) }
+                GroupInfo(units=units, group_id=*id, group_name=name.clone(), images=images, hostmap=hostmap) }
             })
             .collect(),
     );

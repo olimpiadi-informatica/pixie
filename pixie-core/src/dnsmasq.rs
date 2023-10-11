@@ -15,7 +15,7 @@ use pixie_shared::{DhcpConfig, DhcpMode, Unit, UNASSIGNED_GROUP_ID};
 pub struct DnsmasqHandle {
     child: Child,
     hosts: File,
-    hostmap: HashMap<Ipv4Addr, String>,
+    pub hostmap: HashMap<Ipv4Addr, String>,
 }
 
 impl DnsmasqHandle {

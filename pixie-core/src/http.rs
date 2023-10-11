@@ -146,6 +146,13 @@ async fn get_units(state: Data<State>) -> Result<impl Responder, actix_web::Erro
     Ok(serde_json::to_string(&*state.units.lock().unwrap()))
 }
 
+#[get("/admin/hostmap")]
+async fn get_hostmap(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
+    Ok(serde_json::to_string(
+        &state.dnsmasq_handle.lock().unwrap().hostmap,
+    ))
+}
+
 pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
         listen_on,
@@ -176,6 +183,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(image)
             .service(get_config)
             .service(get_units)
+            .service(get_hostmap)
             .service(Files::new("/", &admin).index_file("index.html"))
     })
     .bind(listen_on)?
