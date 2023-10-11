@@ -23,3 +23,4 @@ A system to boot multiple computers, supporting rsync-like updates
 * current/next action, abort operation
 * SIGHUP
 * chunks garbage collection
+* trovare il leak di file descriptors
