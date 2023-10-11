@@ -17,11 +17,11 @@ use os::{
 use crate::{pull::pull, push::push, reboot_to_os::reboot_to_os, register::register};
 
 mod os;
+mod parse_disk;
 mod pull;
 mod push;
 mod reboot_to_os;
 mod register;
-mod parse_disk;
 
 #[macro_use]
 extern crate alloc;
@@ -85,8 +85,6 @@ async fn complete_action(stream: &TcpStream) -> Result<()> {
 async fn run(os: UefiOS) -> Result<!> {
     let server = server_discover(os).await?;
 
-    let tcp = os.connect(server.ip, server.port).await?;
-
     let mut last_was_wait = false;
 
     loop {
@@ -97,14 +95,21 @@ async fn run(os: UefiOS) -> Result<!> {
             os.append_message("Sending request for command".into(), MessageKind::Debug);
         }
 
+        let tcp = os.connect(server.ip, server.port).await?;
         let command = get_action(&tcp).await;
+        tcp.close_send().await;
+        tcp.force_close().await;
 
         if let Err(e) = command {
             os.append_message(format!("Error receiving action: {e}"), MessageKind::Warning);
         } else {
             let command = command.unwrap();
             if matches!(command, Action::Wait) {
+                let tcp = os.connect(server.ip, server.port).await?;
                 complete_action(&tcp).await?;
+                tcp.close_send().await;
+                tcp.force_close().await;
+
                 if !last_was_wait {
                     os.append_message(
                         format!(
@@ -128,7 +133,10 @@ async fn run(os: UefiOS) -> Result<!> {
                         unreachable!();
                     }
                     Action::Reboot => {
+                        let tcp = os.connect(server.ip, server.port).await?;
                         complete_action(&tcp).await?;
+                        tcp.close_send().await;
+                        tcp.force_close().await;
                         reboot_to_os(os).await;
                     }
                     Action::Register { hint_port } => register(os, server, hint_port).await?,
@@ -138,7 +146,11 @@ async fn run(os: UefiOS) -> Result<!> {
                     }
                 }
             }
+
+            let tcp = os.connect(server.ip, server.port).await?;
             complete_action(&tcp).await?;
+            tcp.close_send().await;
+            tcp.force_close().await;
         }
     }
 }
