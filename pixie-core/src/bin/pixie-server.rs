@@ -41,11 +41,13 @@ async fn main() -> Result<()> {
         anyhow::ensure!(path.is_file(), "{} not found", path.display());
     }
 
-    let config_path = options.storage_dir.join("config.yaml");
-    let config = File::open(&config_path)
-        .with_context(|| format!("open config file: {}", config_path.display()))?;
-    let config: Config = serde_yaml::from_reader(&config)
-        .with_context(|| format!("deserialize config from {}", config_path.display()))?;
+    let config: Config = {
+        let config_path = options.storage_dir.join("config.yaml");
+        let config = File::open(&config_path)
+            .with_context(|| format!("open config file: {}", config_path.display()))?;
+        serde_yaml::from_reader(&config)
+            .with_context(|| format!("deserialize config from {}", config_path.display()))?
+    };
 
     let mut dnsmasq_handle = DnsmasqHandle::from_config(&options.storage_dir, &config.dhcp)
         .context("Error start dnsmasq")?;

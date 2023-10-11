@@ -178,7 +178,7 @@ async fn handle_connection(
     loop {
         let len = match stream.read_u64_le().await {
             Ok(len) => len as usize,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(()),
+            Err(e) if e.kind() == ErrorKind::ConnectionReset => return Ok(()),
             Err(e) => Err(e)?,
         };
         let mut buf = vec![0; len];
