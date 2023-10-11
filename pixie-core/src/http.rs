@@ -5,7 +5,7 @@ use actix_web::{
     error::ErrorUnauthorized,
     get,
     http::StatusCode,
-    middleware::Logger,
+    middleware::{Compress, Logger},
     web::{Data, Path},
     App, HttpServer, Responder,
 };
@@ -167,6 +167,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     HttpServer::new(move || {
         let pw = pw.clone();
         App::new()
+            .wrap(Compress::default())
             .wrap(Logger::default())
             .wrap(HttpAuthentication::basic(move |req, credentials| {
                 let pw = pw.clone();
