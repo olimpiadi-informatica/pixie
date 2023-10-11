@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{bail, Result};
 
-use pixie_shared::{DhcpConfig, DhcpMode, Unit, UNASSIGNED_GROUP_ID};
+use pixie_shared::{DhcpConfig, DhcpMode, Unit};
 
 pub struct DnsmasqHandle {
     child: Child,
@@ -28,11 +28,7 @@ impl DnsmasqHandle {
         let hosts = File::create(storage_dir.join("hosts"))?;
 
         let dhcp_dynamic_conf = match cfg.mode {
-            DhcpMode::Static => {
-                format!(
-                    "dhcp-range=10.{UNASSIGNED_GROUP_ID}.100.1,10.{UNASSIGNED_GROUP_ID}.200.200"
-                )
-            }
+            DhcpMode::Static(low, high) => format!("dhcp-range={low},{high}"),
             DhcpMode::Proxy(ip) => format!("dhcp-range={},proxy", ip),
         };
 

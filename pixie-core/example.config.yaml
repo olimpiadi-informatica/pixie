@@ -1,7 +1,7 @@
 dhcp:
   interface: br0
   mode: !proxy 192.168.1.100
-  # mode: static
+  #mode: !static [10.187.100.1, 10.187.200.200]
 http:
   listen_on: 0.0.0.0:8080
   password: secret

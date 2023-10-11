@@ -12,13 +12,11 @@ use std::{
 
 use crate::Bijection;
 
-pub const UNASSIGNED_GROUP_ID: u8 = 187;
-
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum DhcpMode {
-    /// Unknown clients will be assigned IPs in a /24 subnet of 10.{UNASSIGNED_GROUP_ID}.0.0.
-    Static,
+    /// Unknown clients will be assigned IPs in the specified range.
+    Static(Ipv4Addr, Ipv4Addr),
     /// Unknown clients are assumed to receive an IP address by another DHCP server.
     /// The specified IP must belong to the network on which the other DHCP server gives IPs,
     /// and the DHCP interface must have an IP on this network.

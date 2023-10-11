@@ -205,7 +205,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 
 pub async fn main(state: &State) -> Result<()> {
     let network = find_network(match state.config.dhcp.mode {
-        DhcpMode::Static => Ipv4Addr::new(10, pixie_shared::UNASSIGNED_GROUP_ID, 0, 1),
+        DhcpMode::Static(low, _) => low,
         DhcpMode::Proxy(ip) => ip,
     })?;
 
