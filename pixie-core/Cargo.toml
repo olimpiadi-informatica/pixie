@@ -24,6 +24,7 @@ serde_derive = "1.0.163"
 serde_yaml = "0.9"
 tokio = { version = "1.28.1", features = ["macros", "fs"] }
 serde_json = "1.0.96"
+hostfile = "0.2.0"
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"

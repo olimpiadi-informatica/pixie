@@ -5,7 +5,10 @@ use core::str::FromStr;
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::{
+    net::{Ipv4Addr, SocketAddrV4},
+    path::PathBuf,
+};
 
 use crate::Bijection;
 
@@ -32,6 +35,8 @@ pub struct DhcpConfig {
     pub mode: DhcpMode,
     /// Name of the interface on which clients are reachable.
     pub interface: String,
+    /// Hosts file to use for DHCP hostnames.
+    pub hostsfile: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

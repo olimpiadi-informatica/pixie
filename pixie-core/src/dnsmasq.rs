@@ -1,18 +1,21 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{Error, Write},
+    net::{IpAddr, Ipv4Addr},
     path::Path,
     process::{Child, Command},
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 use pixie_shared::{DhcpConfig, DhcpMode, Unit, UNASSIGNED_GROUP_ID};
 
 pub struct DnsmasqHandle {
     child: Child,
     hosts: File,
+    hostmap: HashMap<Ipv4Addr, String>,
 }
 
 impl DnsmasqHandle {
@@ -70,7 +73,28 @@ pxe-prompt="pixie",1
         std::thread::sleep(Duration::from_secs(1));
         assert!(child.try_wait()?.is_none());
 
-        Ok(DnsmasqHandle { child, hosts })
+        let mut hostmap = HashMap::new();
+
+        if let Some(hostsfile) = &cfg.hostsfile {
+            match hostfile::parse_file(hostsfile) {
+                Ok(hosts) => {
+                    for host in hosts {
+                        if let IpAddr::V4(ip) = host.ip {
+                            hostmap.insert(ip, host.names[0].clone());
+                        }
+                    }
+                }
+                Err(err) => {
+                    bail!("Error parsing host file: {err}");
+                }
+            }
+        }
+
+        Ok(DnsmasqHandle {
+            child,
+            hosts,
+            hostmap,
+        })
     }
 
     pub fn set_hosts(&mut self, hosts: &Vec<Unit>) -> Result<()> {
@@ -78,7 +102,11 @@ pxe-prompt="pixie",1
         for host in hosts {
             let mac = host.mac;
             let ip = host.static_ip();
-            writeln!(self.hosts, "{},{}", mac, ip)?;
+            if let Some(hostname) = self.hostmap.get(&ip) {
+                writeln!(self.hosts, "{},{},{}", mac, ip, hostname)?;
+            } else {
+                writeln!(self.hosts, "{},{}", mac, ip)?;
+            }
         }
         let r = unsafe { libc::kill(self.child.id().try_into().unwrap(), libc::SIGHUP) };
         if r < 0 {
