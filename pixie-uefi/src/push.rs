@@ -4,18 +4,19 @@ use core::cell::RefCell;
 use lz4_flex::compress;
 use uefi::proto::console::text::Color;
 
-mod parse_disk;
-
-use crate::os::{
-    error::{Error, Result},
-    mpsc, MessageKind, TcpStream, UefiOS,
+use crate::{
+    os::{
+        error::{Error, Result},
+        mpsc, MessageKind, TcpStream, UefiOS,
+    },
+    parse_disk,
 };
 use pixie_shared::{Address, Chunk, Image, Offset, TcpRequest, UdpRequest, CHUNK_SIZE};
 
 #[derive(Debug)]
-struct ChunkInfo {
-    start: Offset,
-    size: usize,
+pub struct ChunkInfo {
+    pub start: Offset,
+    pub size: usize,
 }
 
 async fn save_image(stream: &TcpStream, name: String, image: Image) -> Result<()> {

@@ -21,6 +21,7 @@ mod pull;
 mod push;
 mod reboot_to_os;
 mod register;
+mod parse_disk;
 
 #[macro_use]
 extern crate alloc;

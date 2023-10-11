@@ -4,7 +4,7 @@ use alloc::{
 };
 use gpt_disk_io::{
     gpt_disk_types::{BlockSize, Lba},
-    BlockIo, DiskError,
+    BlockIo,
 };
 use uefi::{
     proto::media::{block::BlockIO, disk::DiskIo},
@@ -97,37 +97,41 @@ impl Disk {
 
     pub fn partitions(&mut self) -> Result<Vec<DiskPartition>> {
         let block_size = self.block_size().to_u64();
-        let get_gpt_partitions = |d: &mut Disk| {
-            let mut disk = gpt_disk_io::Disk::new(d)?;
-            let mut buf = [0; 1 << 14];
-            let header = disk.read_primary_gpt_header(&mut buf)?;
-            // TODO(veluca): bubble up this error.
-            let part_array_layout = header.get_partition_entry_array_layout().unwrap();
-            let mut buf = [0; 1 << 14];
-            let x = disk
-                .gpt_partition_entry_array_iter(part_array_layout, &mut buf)?
-                .filter_map(|part| {
-                    let part = if let Err(err) = part {
-                        return Some(Err(err));
-                    } else {
-                        part.unwrap()
-                    };
-                    if part.is_used() {
-                        let part_guid = part.unique_partition_guid;
-                        Some(Ok(DiskPartition {
-                            byte_start: part.starting_lba.to_u64() * block_size,
-                            byte_end: (part.ending_lba.to_u64() + 1) * block_size,
-                            guid: part_guid.to_string(),
-                            name: part.name.to_string(),
-                        }))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Result<_, _>>();
-            x
-        };
-        get_gpt_partitions(self).map_err(|e: DiskError<Error>| Error::Generic(e.to_string()))
+        let mut disk = gpt_disk_io::Disk::new(self).map_err(|e| Error::Generic(e.to_string()))?;
+        let mut buf = [0; 1 << 14];
+        let header = disk
+            .read_primary_gpt_header(&mut buf)
+            .map_err(|e| Error::Generic(e.to_string()))?;
+        // TODO(veluca): bubble up this error.
+        let part_array_layout = header
+            .get_partition_entry_array_layout()
+            .map_err(|e| Error::Generic(e.to_string()))?;
+        let mut buf = [0; 1 << 14];
+        let x = disk
+            .gpt_partition_entry_array_iter(part_array_layout, &mut buf)
+            .map_err(|e| Error::Generic(e.to_string()))?
+            .filter_map(|part| {
+                let part = if let Err(err) = part {
+                    return Some(Err(err));
+                } else {
+                    part.unwrap()
+                };
+                if part.is_used() {
+                    let part_guid = part.unique_partition_guid;
+                    Some(Ok(DiskPartition {
+                        byte_start: part.starting_lba.to_u64() * block_size,
+                        byte_end: (part.ending_lba.to_u64() + 1) * block_size,
+                        guid: part_guid.to_string(),
+                        name: part.name.to_string(),
+                    }))
+                } else {
+                    None
+                }
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| Error::Generic(e.to_string()))?;
+
+        Ok(x)
     }
 }
 

@@ -225,11 +225,31 @@ async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
     Ok(Some(chunks))
 }
 
+async fn get_swap_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+    if end - start < 4096 {
+        return Ok(None);
+    }
+
+    let mut first_chunk = [0u8; 4096];
+    disk.read(start, &mut first_chunk).await?;
+
+    if &first_chunk[4096 - 10..] != b"SWAPSPACE2" {
+        return Ok(None);
+    }
+
+    Ok(Some(vec![ChunkInfo {
+        start: 0,
+        size: 4096,
+    }]))
+}
+
 /// Returns chunks *relative to the start of the partition*.
 async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkInfo>> {
     if let Some(chunks) = get_ext4_chunks(disk, start, end).await? {
         Ok(chunks)
     } else if let Some(chunks) = get_ntfs_chunks(disk, start, end).await? {
+        Ok(chunks)
+    } else if let Some(chunks) = get_swap_chunks(disk, start, end).await? {
         Ok(chunks)
     } else {
         Ok(vec![ChunkInfo {
