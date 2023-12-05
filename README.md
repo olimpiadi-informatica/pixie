@@ -24,3 +24,4 @@ A system to boot multiple computers, supporting rsync-like updates
 * SIGHUP
 * chunks garbage collection
 * trovare il leak di file descriptors
+* trovare in automatico l'IP per proxy
