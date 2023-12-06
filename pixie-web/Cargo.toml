@@ -11,6 +11,6 @@ itertools = "0.10.5"
 macaddr = "1.0.1"
 pixie-shared = { version = "0.1.0", path = "../pixie-shared", features = ["macaddr", "std"] }
 reqwasm = "0.5.0"
-serde = "1.0.163"
+serde = "1.0.193"
 sycamore = { version = "0.8.2", features = ["sycamore-futures", "futures", "suspense"] }
-web-sys = "0.3.63"
+web-sys = "0.3.66"
