@@ -254,10 +254,6 @@ async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
 fn main() {
     sycamore::render(|cx| {
         view! { cx,
-            style {
-                ":root { color-scheme: light dark; }"
-            }
-
             Suspense(fallback=view! { cx, "Loading..." }) {
                 UnitView {}
             }
