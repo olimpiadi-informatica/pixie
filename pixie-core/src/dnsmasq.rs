@@ -28,8 +28,8 @@ impl DnsmasqHandle {
         let hosts = File::create(storage_dir.join("hosts"))?;
 
         let dhcp_dynamic_conf = match cfg.mode {
-            DhcpMode::Static(low, high) => format!("dhcp-range={low},{high}"),
-            DhcpMode::Proxy(ip) => format!("dhcp-range={},proxy", ip),
+            DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
+            DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{},proxy", ip),
         };
 
         write!(
@@ -39,7 +39,7 @@ impl DnsmasqHandle {
 
 ## net0
 {dhcp_dynamic_conf}
-dhcp-range=10.0.0.0,static
+dhcp-range=tag:!netboot,10.0.0.0,static,255.0.0.0
 dhcp-hostsfile={storage_str}/hosts
 dhcp-boot=uefi_app.efi
 interface={name}
@@ -56,6 +56,12 @@ enable-tftp
 
 ## PXE prompt and timeout
 pxe-prompt="pixie",1
+
+dhcp-vendorclass=set:netboot,PXEClient:Arch:00000
+dhcp-vendorclass=set:netboot,PXEClient:Arch:00006
+dhcp-vendorclass=set:netboot,PXEClient:Arch:00007
+dhcp-vendorclass=set:netboot,PXEClient:Arch:00009
+dhcp-vendorclass=set:netboot,pixie
 "#
         )?;
 

@@ -14,7 +14,7 @@ use smoltcp::{
     },
     storage::RingBuffer,
     time::{Duration, Instant},
-    wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address},
+    wire::{DhcpOption, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address},
 };
 
 use uefi::{
@@ -184,7 +184,11 @@ impl NetworkInterface {
         interface_config.random_seed = os.rng().rand_u64();
         interface_config.hardware_addr = Some(hw_addr);
         let interface = Interface::new(interface_config, &mut device);
-        let dhcp_socket = Dhcpv4Socket::new();
+        let mut dhcp_socket = Dhcpv4Socket::new();
+        dhcp_socket.set_outgoing_options(&[DhcpOption {
+            kind: 60,
+            data: b"pixie",
+        }]);
         let mut socket_set = SocketSet::new(vec![]);
         let dhcp_socket_handle = socket_set.add(dhcp_socket);
 
