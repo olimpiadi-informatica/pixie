@@ -25,3 +25,4 @@ A system to boot multiple computers, supporting rsync-like updates
 * chunks garbage collection
 * trovare il leak di file descriptors
 * trovare in automatico l'IP per proxy
+* implementare DHCP e  DNS
