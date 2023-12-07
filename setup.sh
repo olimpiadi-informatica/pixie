@@ -17,7 +17,7 @@ pushd pixie-web
 trunk build --release
 popd
 
-pushd pixie-core
+pushd pixie-server
 cargo build --release
 popd
 
@@ -28,4 +28,4 @@ cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 
 mkdir -p "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks"
 
-[ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-core/example.config.yaml "${STORAGE_DIR}/config.yaml"
+[ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-server/example.config.yaml "${STORAGE_DIR}/config.yaml"

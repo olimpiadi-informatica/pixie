@@ -11,7 +11,7 @@ A system to boot multiple computers, supporting rsync-like updates
   ```
 * run `./setup.sh` to compile pixie and prepare the `storage` directory.
 * modify the configuration file at `storage/config.yaml`.
-* run with root privilegies the server `./pixie-core/target/release/pixie-server`.
+* run with root privilegies the server `./pixie-server/target/release/pixie-server`.
 
 ## TODO
 * progress bar per up/download
