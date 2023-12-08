@@ -90,17 +90,17 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
             td { (unit.next_action) }
             td {
                 button(id=id_pull, on:click=move |_| send_req(url_pull.clone()) ) {
-                    "pull"
+                    "flash"
                 }
             }
             td {
                 button(id=id_push, on:click=move |_| send_req(url_push.clone()) ) {
-                    "push"
+                    "store"
                 }
             }
             td {
                 button(id=id_boot, on:click=move |_| send_req(url_boot.clone()) ) {
-                    "OS"
+                    "reboot"
                 }
             }
             td {

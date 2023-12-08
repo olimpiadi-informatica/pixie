@@ -1,8 +1,8 @@
 pub mod dnsmasq;
 pub mod http;
+pub mod ping;
 pub mod tcp;
 pub mod udp;
-pub mod ping;
 
 use std::{
     fs::File,
