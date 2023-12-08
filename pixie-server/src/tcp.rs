@@ -78,6 +78,8 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                             curr_progress: None,
                             next_action: state.config.boot.default,
                             image: station.image,
+                            last_ping_timestamp: 0,
+                            last_ping_msg: Vec::new(),
                         };
                         units.push(unit);
                     }

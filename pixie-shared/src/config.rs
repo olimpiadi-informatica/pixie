@@ -113,6 +113,10 @@ pub struct Unit {
     pub curr_progress: Option<(usize, usize)>,
     pub next_action: ActionKind,
     pub image: String,
+    #[serde(default)]
+    pub last_ping_timestamp: u64,
+    #[serde(default)]
+    pub last_ping_msg: Vec<u8>,
 }
 
 impl Unit {

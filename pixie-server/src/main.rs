@@ -2,6 +2,7 @@ pub mod dnsmasq;
 pub mod http;
 pub mod tcp;
 pub mod udp;
+pub mod ping;
 
 use std::{
     fs::File,
@@ -181,6 +182,7 @@ async fn main() -> Result<()> {
         x = http::main(state.clone()) => x?,
         x = udp::main(&state) => x?,
         x = tcp::main(state.clone()) => x?,
+        x = ping::main(&state) => x?,
     );
 
     Ok(())

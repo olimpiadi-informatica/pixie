@@ -1,15 +1,23 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+pub use std::time::*;
 
 use gloo_timers::future::TimeoutFuture;
-use pixie_shared::{ActionKind, Config, Unit};
+use pixie_shared::{Config, Unit};
 use sycamore::prelude::*;
 use sycamore::{
     futures::{spawn_local, spawn_local_scoped},
     suspense::Suspense,
 };
+use wasm_bindgen::prelude::*;
 
 use reqwasm::http::Request;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn date_now() -> f64;
+}
 
 async fn make_req<T: for<'de> serde::Deserialize<'de>>(url: &str) -> T {
     Request::get(url)
@@ -32,15 +40,29 @@ fn send_req(url: String) {
 
 #[component(inline_props)]
 fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> View<G> {
-    let fmt_ca = |curr_action: Option<ActionKind>, progress: Option<(usize, usize)>| {
-        if let Some(a) = curr_action {
-            if let Some((x, y)) = progress {
+    let time = create_signal(cx, date_now());
+
+    spawn_local_scoped(cx, async move {
+        loop {
+            TimeoutFuture::new(100).await;
+            time.set(date_now());
+        }
+    });
+    let fmt_ca = |unit: &Unit| {
+        if let Some(a) = unit.curr_action {
+            if let Some((x, y)) = unit.curr_progress {
                 format!("{} ({}/{})", a, x, y)
             } else {
                 a.to_string()
             }
         } else {
-            "".into()
+            let ping_time = unit.last_ping_timestamp as i64;
+            let now = (*time.get() * 0.001) as i64;
+            format!(
+                "ping: {} seconds ago, {}",
+                now - ping_time,
+                String::from_utf8_lossy(&unit.last_ping_msg)
+            )
         }
     };
 
@@ -58,11 +80,12 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
     let id_register = format!("machine-{mac_nocolon}-register");
     let url_register = format!("/admin/action/{mac}/register");
 
+    let image = unit.image.clone();
     view! { cx,
         tr {
             td { (hostname.clone().unwrap_or_default()) }
             td { (unit.mac) }
-            td { (unit.image) }
+            td { (image) }
             td { "row " (unit.row) " col " (unit.col) }
             td { (unit.next_action) }
             td {
@@ -90,7 +113,7 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
                     "re-register"
                 }
             }
-            td { (fmt_ca(unit.curr_action, unit.curr_progress)) }
+            td { (fmt_ca(&unit)) }
         }
     }
 }

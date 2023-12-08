@@ -87,6 +87,14 @@ async fn run(os: UefiOS) -> Result<!> {
 
     let mut last_was_wait = false;
 
+    os.spawn("ping", async move {
+        let udp_socket = os.udp_bind(None).await.unwrap();
+        loop {
+            udp_socket.send(server.ip, 4043, b"pixie").await.unwrap();
+            os.sleep_us(1_000_000).await;
+        }
+    });
+
     loop {
         // Clear any UI drawer.
         os.set_ui_drawer(|_| {});
