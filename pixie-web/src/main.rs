@@ -48,7 +48,14 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
             time.set(date_now());
         }
     });
-    let fmt_ca = |unit: &Unit| {
+
+    let ping_time = unit.last_ping_timestamp as i64;
+    let ping_ago = move || {
+        let now = (*time.get() * 0.001) as i64;
+        now - ping_time
+    };
+
+    let fmt_ca = move |unit: &Unit| {
         if let Some(a) = unit.curr_action {
             if let Some((x, y)) = unit.curr_progress {
                 format!("{} ({}/{})", a, x, y)
@@ -56,14 +63,19 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
                 a.to_string()
             }
         } else {
-            let ping_time = unit.last_ping_timestamp as i64;
-            let now = (*time.get() * 0.001) as i64;
             format!(
                 "ping: {} seconds ago, {}",
-                now - ping_time,
+                ping_ago(),
                 String::from_utf8_lossy(&unit.last_ping_msg)
             )
         }
+    };
+
+    let led_class = move || match ping_ago() {
+        ..=-1 => "led-blue",
+        0..=119 => "led-green",
+        120..=299 => "led-yellow",
+        300.. => "led-red",
     };
 
     let mac = unit.mac.to_string();
@@ -83,6 +95,11 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
     let image = unit.image.clone();
     view! { cx,
         tr {
+            td {
+                div(class=format!("{} tooltip", led_class())) {
+                    span(class="tooltiptext") { (ping_ago()) " seconds ago" }
+                }
+            }
             td { (hostname.clone().unwrap_or_default()) }
             td { (unit.mac) }
             td { (image) }
@@ -174,6 +191,7 @@ fn GroupInfo<'a, G: Html>(
         (set_images)
         table {
             tr {
+                th { }
                 th { "hostname" }
                 th { "mac" }
                 th { "image" }

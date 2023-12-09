@@ -1,0 +1,63 @@
+:root {
+    color-scheme: light dark;
+}
+
+.led-blue, .led-green, .led-yellow, .led-red {
+    margin: 0 auto;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: block;
+}
+
+.led-green {
+    background-color: #ABFF00;
+    box-shadow: inset #304701 0 0 5px 1px;
+}
+
+.led-yellow {
+    background-color: #FF0;
+    box-shadow: inset #808002 0 0 5px 1px;
+}
+
+.led-red {
+    background-color: #F00;
+    box-shadow: inset #441313 0 0 5px 1px;
+}
+
+.led-blue {
+    background-color: #24E0FF;
+    box-shadow: inset #006 0 0 5px 1px;
+}
+
+.tooltip {
+    position: relative;
+}
+
+.tooltip .tooltiptext {
+    visibility: hidden;
+    width: 180px;
+    background-color: black;
+    color: #fff;
+    text-align: center;
+    border-radius: 6px;
+    padding: 5px 0;
+    position: absolute;
+    z-index: 1;
+    top: -8.25px;
+    left: 180%;
+}
+.tooltip:hover .tooltiptext {
+    visibility: visible;
+}
+
+.tooltip .tooltiptext::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 100%;
+    margin-top: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent black transparent transparent;
+}
