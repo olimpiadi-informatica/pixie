@@ -26,6 +26,7 @@ cp pixie-uefi/target/x86_64-unknown-uefi/release/uefi_app.efi "${STORAGE_DIR}/tf
 mkdir -p "${STORAGE_DIR}/admin"
 cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 cp pixie-web/style.css "${STORAGE_DIR}/admin/"
+cp pixie-web/favicon.ico "${STORAGE_DIR}/admin/"
 
 mkdir -p "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks"
 
