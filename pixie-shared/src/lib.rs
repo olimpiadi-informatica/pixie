@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;
 use core::fmt::Write;
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,20 @@ pub struct Image {
     pub boot_option_id: u16,
     pub boot_entry: Vec<u8>,
     pub disk: Vec<Chunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageStat {
+    pub total_csize: u64,
+    pub reclaimable: u64,
+    /// size and csize
+    pub images: BTreeMap<String, (u64, u64)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkStat {
+    pub csize: u64,
+    pub ref_cnt: usize,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

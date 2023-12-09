@@ -1,9 +1,9 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::net::Ipv4Addr;
-pub use std::time::*;
 
 use gloo_timers::future::TimeoutFuture;
-use pixie_shared::{Config, Unit};
+use pixie_shared::{Config, ImageStat, Unit};
 use sycamore::prelude::*;
 use sycamore::{
     futures::{spawn_local, spawn_local_scoped},
@@ -213,17 +213,35 @@ fn GroupInfo<'a, G: Html>(
     }
 }
 
+struct Bytes(u64);
+
+impl fmt::Display for Bytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 < 1024 {
+            write!(f, "{} B", self.0)
+        } else if self.0 < 1024 * 1024 {
+            write!(f, "{:.2} KiB", self.0 as f64 / 1024.0)
+        } else if self.0 < 1024 * 1024 * 1024 {
+            write!(f, "{:.2} MiB", self.0 as f64 / 1024.0 / 1024.0)
+        } else {
+            write!(f, "{:.2} GiB", self.0 as f64 / 1024.0 / 1024.0 / 1024.0)
+        }
+    }
+}
+
 #[component(inline_props)]
-fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'b Vec<String>) -> View<G> {
-    let make_image_row = |x: String| {
-        let id_pull = format!("image-{x}-pull");
-        let url_pull = format!("/admin/action/{x}/pull");
-        let id_boot = format!("image-{x}-boot");
-        let url_boot = format!("/admin/action/{x}/reboot");
-        let id_cancel = format!("image-{x}-cancel");
-        let url_cancel = format!("/admin/action/{x}/wait");
+fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> View<G> {
+    let make_image_row = move |name: String, image: (u64, u64)| {
+        let id_pull = format!("image-{name}-pull");
+        let url_pull = format!("/admin/action/{name}/pull");
+        let id_boot = format!("image-{name}-boot");
+        let url_boot = format!("/admin/action/{name}/reboot");
+        let id_cancel = format!("image-{name}-cancel");
+        let url_cancel = format!("/admin/action/{name}/wait");
         view! { cx, tr {
-            td { (x) }
+            td { (name) }
+            td { (Bytes(image.0)) }
+            td { (Bytes(image.1)) }
             td {
                 button(id=id_pull, on:click=move |_| send_req(url_pull.clone()) ) {
                     "Pull image on all machines"
@@ -243,12 +261,34 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'b Vec<String>) -> View<G> {
         }
     };
 
-    let images = View::new_fragment(images.iter().cloned().map(make_image_row).collect());
+    let images_table = move || {
+        View::new_fragment(
+            images
+                .get()
+                .images
+                .iter()
+                .map(|(name, image)| make_image_row(name.clone(), image.clone()))
+                .collect(),
+        )
+    };
 
     view! { cx,
         h1 { "Images" }
         table {
-            (images)
+            tr {
+                th { "Image" }
+                th { "Size" }
+                th { "Compressed" }
+            }
+            (images_table())
+            tr {
+                td { "Total" }
+                td { (Bytes(images.get().total_csize)) }
+            }
+            tr {
+                td { "Reclaimable" }
+                td { (Bytes(images.get().reclaimable)) }
+            }
         }
     }
 }
@@ -259,6 +299,7 @@ async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
     let hostmap: HashMap<Ipv4Addr, String> = make_req("/admin/hostmap").await;
 
     let units = create_signal(cx, make_req::<Vec<Unit>>("/admin/units").await);
+    let images = create_signal(cx, make_req::<ImageStat>("/admin/images").await);
 
     spawn_local_scoped(cx, async move {
         loop {
@@ -266,6 +307,16 @@ async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
             let new = make_req("/admin/units").await;
             if new != *units.get() {
                 units.set(new);
+            }
+        }
+    });
+
+    spawn_local_scoped(cx, async move {
+        loop {
+            TimeoutFuture::new(1000).await;
+            let new = make_req("/admin/images").await;
+            if new != *images.get() {
+                images.set(new);
             }
         }
     });
@@ -283,9 +334,8 @@ async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
             .collect(),
     );
 
-    let images = config.images.clone();
     view! { cx,
-        Images(images=&images)
+        Images(images=images)
 
         h1 { "Groups" }
         (groups)

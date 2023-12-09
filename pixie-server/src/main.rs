@@ -5,7 +5,8 @@ pub mod tcp;
 pub mod udp;
 
 use std::{
-    fs::File,
+    collections::BTreeMap,
+    fs::{self, File},
     io::{BufRead, BufReader},
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
@@ -19,7 +20,8 @@ use interfaces::Interface;
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 
-use pixie_shared::{Config, Station, Unit};
+use pixie_shared::{ChunkStat, Config, Image, ImageStat, Station, Unit};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::dnsmasq::DnsmasqHandle;
 
@@ -30,6 +32,8 @@ pub struct State {
     pub dnsmasq_handle: Mutex<DnsmasqHandle>,
     // TODO: use an Option
     pub last: Mutex<Station>,
+    pub image_stats: AsyncMutex<ImageStat>,
+    pub chunk_stats: AsyncMutex<BTreeMap<[u8; 32], ChunkStat>>,
 }
 
 impl State {
@@ -124,10 +128,10 @@ async fn main() -> Result<()> {
     // Validate the configuration.
     let mut options = PixieOptions::parse();
 
-    std::fs::create_dir_all(&options.storage_dir)
+    fs::create_dir_all(&options.storage_dir)
         .with_context(|| format!("create storage dir: {}", options.storage_dir.display()))?;
 
-    options.storage_dir = std::fs::canonicalize(&options.storage_dir)
+    options.storage_dir = fs::canonicalize(&options.storage_dir)
         .with_context(|| format!("storage dir is invalid: {}", options.storage_dir.display()))?;
 
     anyhow::ensure!(
@@ -154,7 +158,7 @@ async fn main() -> Result<()> {
     let mut dnsmasq_handle = DnsmasqHandle::from_config(&options.storage_dir, &config.dhcp)
         .context("Error start dnsmasq")?;
 
-    let data = std::fs::read(options.storage_dir.join("registered.json"));
+    let data = fs::read(options.storage_dir.join("registered.json"));
     let units: Vec<Unit> = data
         .ok()
         .map(|d| serde_json::from_slice(&d))
@@ -170,12 +174,62 @@ async fn main() -> Result<()> {
         ..Default::default()
     });
 
+    let mut chunk_stats: BTreeMap<[u8; 32], ChunkStat> =
+        fs::read_dir(options.storage_dir.join("chunks"))
+            .unwrap()
+            .map(|file| {
+                let file = file?;
+                let metadata = file.metadata().unwrap();
+                let csize = metadata.len();
+
+                let name = file.file_name();
+                let name = hex::decode(name.to_str().unwrap()).unwrap();
+                let name = <[u8; 32]>::try_from(&name[..]).unwrap();
+
+                Ok((name, ChunkStat { csize, ref_cnt: 0 }))
+            })
+            .collect::<Result<_>>()?;
+
+    let images: BTreeMap<String, (u64, u64)> = config
+        .images
+        .iter()
+        .map(|image_name| {
+            let path = options.storage_dir.join("images").join(image_name);
+            if !path.is_file() {
+                return Ok((image_name.clone(), (0, 0)));
+            }
+            let content = fs::read(&path)?;
+            let image = postcard::from_bytes::<Image>(&content)?;
+            let mut size = 0;
+            let mut csize = 0;
+            for chunk in image.disk {
+                size += chunk.size as u64;
+                csize += chunk.csize as u64;
+                chunk_stats.get_mut(&chunk.hash).unwrap().ref_cnt += 1;
+            }
+            Ok((image_name.clone(), (size, csize)))
+        })
+        .collect::<Result<_>>()?;
+
+    let reclaimable = chunk_stats
+        .iter()
+        .filter(|(_, stat)| stat.ref_cnt == 0)
+        .map(|(_, stat)| stat.csize)
+        .sum();
+    let total_csize = chunk_stats.iter().map(|(_, stat)| stat.csize).sum();
+
     let state = Arc::new(State {
         storage_dir: options.storage_dir,
         config,
         units: Mutex::new(units),
         dnsmasq_handle: Mutex::new(dnsmasq_handle),
         last,
+        chunk_stats: AsyncMutex::new(chunk_stats),
+        image_stats: AsyncMutex::new(ImageStat {
+            total_csize,
+            reclaimable,
+            images,
+        }),
     });
 
     tokio::select!(

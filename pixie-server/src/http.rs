@@ -153,6 +153,12 @@ async fn get_hostmap(state: Data<State>) -> Result<impl Responder, actix_web::Er
     ))
 }
 
+#[get("/admin/images")]
+async fn get_images(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
+    let image_stats = state.image_stats.lock().await;
+    Ok(serde_json::to_string(&*image_stats))
+}
+
 pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
         listen_on,
@@ -185,6 +191,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .service(get_config)
             .service(get_units)
             .service(get_hostmap)
+            .service(get_images)
             .service(Files::new("/", &admin).index_file("index.html"))
     })
     .bind(listen_on)?
