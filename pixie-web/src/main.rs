@@ -288,6 +288,12 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> 
             tr {
                 td { "Reclaimable" }
                 td { (Bytes(images.get().reclaimable)) }
+                td { }
+                td {
+                    button(id="reclaime", on:click=move |_| send_req("/admin/gc".into()) ) {
+                        "Reclaim disk space"
+                    }
+                }
             }
         }
     }

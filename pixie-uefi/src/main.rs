@@ -38,7 +38,7 @@ async fn server_discover(os: UefiOS) -> Result<Address> {
         let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
         loop {
             socket.send([255; 4], ACTION_PORT, &msg).await?;
-            os.sleep_us(10_000_000).await;
+            os.sleep_us(1_000_000).await;
         }
     };
 
@@ -91,7 +91,7 @@ async fn run(os: UefiOS) -> Result<!> {
         let udp_socket = os.udp_bind(None).await.unwrap();
         loop {
             udp_socket.send(server.ip, 4043, b"pixie").await.unwrap();
-            os.sleep_us(1_000_000).await;
+            os.sleep_us(10_000_000).await;
         }
     });
 

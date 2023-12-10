@@ -136,6 +136,26 @@ async fn image(
     Ok(format!("{updated} computer(s) affected\n").customize())
 }
 
+#[get("/admin/gc")]
+async fn gc(state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
+    let mut image_stats = state.image_stats.lock().await;
+    let mut chunk_stats = state.chunk_stats.lock().await;
+    let mut cnt = 0;
+    chunk_stats.retain(|k, v| {
+        if v.ref_cnt == 0 {
+            let path = state.storage_dir.join("chunks").join(hex::encode(k));
+            fs::remove_file(path).unwrap();
+            image_stats.total_csize -= v.csize;
+            image_stats.reclaimable -= v.csize;
+            cnt += 1;
+            false
+        } else {
+            true
+        }
+    });
+    Ok(format!("Removed {} chunks\n", cnt))
+}
+
 #[get("/admin/config")]
 async fn get_config(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
     Ok(serde_json::to_string(&state.config))
@@ -188,6 +208,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .app_data(data.clone())
             .service(action)
             .service(image)
+            .service(gc)
             .service(get_config)
             .service(get_units)
             .service(get_hostmap)
