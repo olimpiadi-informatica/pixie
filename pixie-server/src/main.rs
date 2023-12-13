@@ -116,7 +116,7 @@ pub fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
 #[derive(Parser, Debug)]
 pub struct PixieOptions {
     /// Directory in which files will be stored.
-    /// Must already contain files: tftpboot/uefi_app.efi, config.yaml
+    /// Must already contain files: tftpboot/pixie-uefi.efi, config.yaml
     #[clap(short, long, default_value = "./storage")]
     storage_dir: PathBuf,
 }
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
         "storage dir must be valid utf8"
     );
 
-    for file_path in [["tftpboot", "uefi_app.efi"]] {
+    for file_path in [["tftpboot", "pixie-uefi.efi"]] {
         let mut path = options.storage_dir.clone();
         for path_piece in file_path {
             path = path.join(path_piece);

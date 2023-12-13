@@ -1,10 +1,10 @@
 [package]
 edition = "2021"
-name = "uefi_app"
+name = "pixie-uefi"
 version = "0.1.0"
 
 [[bin]]
-name = "uefi_app"
+name = "pixie-uefi"
 path = "src/main.rs"
 test = false
 bench = false

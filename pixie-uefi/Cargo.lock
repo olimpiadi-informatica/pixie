@@ -369,6 +369,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixie-uefi"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "core_detect",
+ "futures",
+ "gpt_disk_io",
+ "lz4_flex",
+ "managed",
+ "pixie-shared",
+ "postcard",
+ "rand",
+ "rand_xoshiro",
+ "smoltcp",
+ "uefi",
+ "uefi-services",
+]
+
+[[package]]
 name = "postcard"
 version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -633,25 +652,6 @@ dependencies = [
  "cfg-if",
  "log",
  "uefi",
-]
-
-[[package]]
-name = "uefi_app"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "core_detect",
- "futures",
- "gpt_disk_io",
- "lz4_flex",
- "managed",
- "pixie-shared",
- "postcard",
- "rand",
- "rand_xoshiro",
- "smoltcp",
- "uefi",
- "uefi-services",
 ]
 
 [[package]]
