@@ -1,0 +1,42 @@
+name: Docs
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  docs:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install Deps
+        run: |
+          rustup component add rust-src --toolchain nightly
+          cargo install doc-merge
+      - name: cargo doc
+        run: |
+          for d in pixie-*; do
+            pushd $d
+            cargo doc --color=always --no-deps --document-private-items --all-features
+            popd
+          done
+      - name: Merge docs
+        run: |
+          mkdir doc
+          shopt -s globstar
+          for d in pixie-*/target/**/doc; do
+            doc-merge --src $d --dest doc
+          done
+      - name: Make index.html
+        run: |
+          echo '<meta http-equiv="Refresh" content="0; url=./pixie_server/index.html">' > doc/index.html
+      - name: Publish
+        uses: JamesIves/github-pages-deploy-action@v4.5.0
+        with:
+          branch: gh-pages
+          folder: doc
