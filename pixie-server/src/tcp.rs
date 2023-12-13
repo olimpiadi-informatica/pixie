@@ -13,7 +13,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use macaddr::MacAddr6;
 use mktemp::Temp;
 
@@ -52,15 +52,13 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                 return Ok(format!("Unknown group: {}", station.group).into_bytes());
             };
 
-            let buf;
-            {
-                let mut guard = state
-                    .last
-                    .lock()
-                    .map_err(|_| anyhow!("last mutex is poisoned"))?;
-                *guard = station.clone();
+            let mut guard = state
+                .last
+                .lock()
+                .map_err(|_| anyhow!("last mutex is poisoned"))?;
+            *guard = station.clone();
 
-                let mut units = state.units.lock().unwrap();
+            state.units.send_modify(|units| {
                 let unit = units.iter_mut().position(|unit| unit.mac == peer_mac);
                 match unit {
                     Some(unit) => {
@@ -85,18 +83,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                         units.push(unit);
                     }
                 }
-
-                state
-                    .dnsmasq_handle
-                    .lock()
-                    .expect("dnsmasq mutex is poisoned")
-                    .set_hosts(&units)
-                    .context("changing dnsmasq hosts")?;
-
-                buf = postcard::to_allocvec(&*units)?;
-            }
-
-            atomic_write(&state.registered_file(), &buf).await?;
+            });
 
             Vec::new()
         }
@@ -162,55 +149,71 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             Vec::new()
         }
         TcpRequest::GetAction => {
-            let mut units = state.units.lock().unwrap();
-            let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
-            let action_kind = match unit {
-                Some(Unit {
-                    curr_action: Some(action),
-                    ..
-                }) => *action,
-                Some(ref mut unit) => {
-                    let action = unit.next_action;
-                    unit.curr_action = Some(action);
-                    if matches!(
-                        unit.next_action,
-                        ActionKind::Push | ActionKind::Pull | ActionKind::Register
-                    ) {
-                        unit.next_action = ActionKind::Wait;
+            let mut action = Action::Wait;
+
+            state.units.send_if_modified(|units| {
+                let mut unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
+
+                let modified;
+                let action_kind;
+
+                match unit {
+                    Some(Unit {
+                        curr_action: Some(action),
+                        ..
+                    }) => {
+                        action_kind = *action;
+                        modified = false;
                     }
-                    action
+                    Some(ref mut unit) => {
+                        let action = unit.next_action;
+                        unit.curr_action = Some(action);
+                        if matches!(
+                            unit.next_action,
+                            ActionKind::Push | ActionKind::Pull | ActionKind::Register
+                        ) {
+                            unit.next_action = ActionKind::Wait;
+                        }
+                        action_kind = action;
+                        modified = true;
+                    }
+                    None => {
+                        action_kind = state.config.boot.unregistered;
+                        modified = false;
+                    }
                 }
-                None => state.config.boot.unregistered,
-            };
 
-            let action = match action_kind {
-                ActionKind::Reboot => Action::Reboot,
-                ActionKind::Register => Action::Register {
-                    hint_port: state.config.hosts.hint_port,
-                },
-                ActionKind::Push => Action::Push {
-                    image: unit.unwrap().image.clone(),
-                },
-                ActionKind::Pull => Action::Pull {
-                    image: unit.unwrap().image.clone(),
-                    chunks_port: state.config.hosts.chunks_port,
-                },
-                ActionKind::Wait => Action::Wait,
-            };
+                action = match action_kind {
+                    ActionKind::Reboot => Action::Reboot,
+                    ActionKind::Register => Action::Register {
+                        hint_port: state.config.hosts.hint_port,
+                    },
+                    ActionKind::Push => Action::Push {
+                        image: unit.unwrap().image.clone(),
+                    },
+                    ActionKind::Pull => Action::Pull {
+                        image: unit.unwrap().image.clone(),
+                        chunks_port: state.config.hosts.chunks_port,
+                    },
+                    ActionKind::Wait => Action::Wait,
+                };
 
-            // TODO(virv): async
-            std::fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
+                modified
+            });
+
             postcard::to_allocvec(&action)?
         }
         TcpRequest::ActionComplete => {
-            let mut units = state.units.lock().unwrap();
-            if let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) {
+            state.units.send_if_modified(|units| {
+                let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                    log::warn!("Got ActionComplete from unknown unit");
+                    return false;
+                };
+
                 unit.curr_action = None;
                 unit.curr_progress = None;
-                std::fs::write(state.registered_file(), serde_json::to_vec(&*units)?)?;
-            } else {
-                log::warn!("Got NA from unknown unit");
-            };
+                true
+            });
 
             Vec::new()
         }

@@ -1,40 +1,53 @@
 use std::{
-    collections::HashMap,
     fs::File,
-    io::{Error, Write},
-    net::{IpAddr, Ipv4Addr},
-    path::Path,
+    io::{BufWriter, Error, Write},
+    net::Ipv4Addr,
+    ops::Deref,
     process::{Child, Command},
-    time::Duration,
+    sync::Arc,
 };
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 
-use pixie_shared::{DhcpConfig, DhcpMode, Unit};
+use macaddr::MacAddr6;
+use pixie_shared::{DhcpMode, Unit};
 
-pub struct DnsmasqHandle {
+use crate::state::State;
+
+struct DnsmasqHandle {
     child: Child,
-    hosts: File,
-    pub hostmap: HashMap<Ipv4Addr, String>,
 }
 
 impl DnsmasqHandle {
-    pub fn from_config(storage_dir: &Path, cfg: &DhcpConfig) -> Result<Self> {
-        let storage_str = storage_dir.to_str().unwrap();
+    fn reload(&self) -> Result<()> {
+        let r = unsafe { libc::kill(self.child.id().try_into().unwrap(), libc::SIGHUP) };
+        if r < 0 {
+            return Err(Error::last_os_error().into());
+        }
+        Ok(())
+    }
+}
 
-        let name = &cfg.interface;
+impl Drop for DnsmasqHandle {
+    fn drop(&mut self) {
+        self.child.kill().unwrap();
+        self.child.wait().unwrap();
+    }
+}
 
-        let mut dnsmasq_conf = File::create(storage_dir.join("dnsmasq.conf"))?;
-        let hosts = File::create(storage_dir.join("hosts"))?;
+async fn write_config(state: &State) -> Result<()> {
+    let name = state.config.dhcp.interface.deref();
 
-        let dhcp_dynamic_conf = match cfg.mode {
-            DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
-            DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{},proxy", ip),
-        };
+    let mut dnsmasq_conf = File::create(state.storage_dir.join("dnsmasq.conf"))?;
 
-        write!(
-            dnsmasq_conf,
-            r#"
+    let dhcp_dynamic_conf = match state.config.dhcp.mode {
+        DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
+        DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{},proxy", ip),
+    };
+
+    write!(
+        dnsmasq_conf,
+        r#"
 ### Per-network configuration
 
 ## net0
@@ -62,64 +75,67 @@ dhcp-vendorclass=set:netboot,PXEClient:Arch:00006
 dhcp-vendorclass=set:netboot,PXEClient:Arch:00007
 dhcp-vendorclass=set:netboot,PXEClient:Arch:00009
 dhcp-vendorclass=set:netboot,pixie
-"#
-        )?;
+"#,
+        storage_str = state.storage_dir.to_str().unwrap()
+    )?;
 
-        let mut child = Command::new("dnsmasq")
-            .arg(format!("--conf-file={storage_str}/dnsmasq.conf"))
-            .arg("--log-dhcp")
-            .arg("--no-daemon")
-            .spawn()?;
-
-        // Without this sleep line, dnsmasq does not produce any output.
-        std::thread::sleep(Duration::from_secs(1));
-        assert!(child.try_wait()?.is_none());
-
-        let mut hostmap = HashMap::new();
-
-        if let Some(hostsfile) = &cfg.hostsfile {
-            match hostfile::parse_file(hostsfile) {
-                Ok(hosts) => {
-                    for host in hosts {
-                        if let IpAddr::V4(ip) = host.ip {
-                            hostmap.insert(ip, host.names[0].clone());
-                        }
-                    }
-                }
-                Err(err) => {
-                    bail!("Error parsing host file: {err}");
-                }
-            }
-        }
-
-        Ok(DnsmasqHandle {
-            child,
-            hosts,
-            hostmap,
-        })
-    }
-
-    pub fn set_hosts(&mut self, hosts: &Vec<Unit>) -> Result<()> {
-        self.hosts.set_len(0)?;
-        for host in hosts {
-            let mac = host.mac;
-            let ip = host.static_ip();
-            if let Some(hostname) = self.hostmap.get(&ip) {
-                writeln!(self.hosts, "{},{},{}", mac, ip, hostname)?;
-            } else {
-                writeln!(self.hosts, "{},{}", mac, ip)?;
-            }
-        }
-        let r = unsafe { libc::kill(self.child.id().try_into().unwrap(), libc::SIGHUP) };
-        if r < 0 {
-            return Err(Error::last_os_error().into());
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
-impl Drop for DnsmasqHandle {
-    fn drop(&mut self) {
-        self.child.kill().unwrap();
+async fn write_hosts(state: &State, hosts: &[(MacAddr6, Ipv4Addr, Option<String>)]) -> Result<()> {
+    let file = File::create(state.storage_dir.join("hosts"))?;
+    let mut file = BufWriter::new(file);
+
+    for (mac, ip, hostname) in hosts {
+        if let Some(hostname) = hostname {
+            writeln!(file, "{},{},{}", mac, ip, hostname)?;
+        } else {
+            writeln!(file, "{},{}", mac, ip)?;
+        }
+    }
+    Ok(())
+}
+
+fn get_hosts(state: &State, units: &[Unit]) -> Vec<(MacAddr6, Ipv4Addr, Option<String>)> {
+    units
+        .iter()
+        .map(|unit| {
+            let mac = unit.mac;
+            let ip = unit.static_ip();
+            let hostname = state.hostmap.get(&ip).cloned();
+            (mac, ip, hostname)
+        })
+        .collect()
+}
+
+pub async fn main(state: Arc<State>) -> Result<()> {
+    let mut units_rx = state.units.subscribe();
+
+    write_config(&state).await?;
+    let mut hosts = get_hosts(&state, &units_rx.borrow_and_update());
+    write_hosts(&state, &hosts).await?;
+
+    let dnsmasq = DnsmasqHandle {
+        child: Command::new("dnsmasq")
+            .arg(format!(
+                "--conf-file={storage_str}/dnsmasq.conf",
+                storage_str = state.storage_dir.to_str().unwrap()
+            ))
+            .arg("--log-dhcp")
+            .arg("--no-daemon")
+            .spawn()?,
+    };
+
+    loop {
+        tokio::select! {
+            _ = units_rx.changed() => {
+                let hosts2 = get_hosts(&state, &units_rx.borrow_and_update());
+                if hosts != hosts2 {
+                    hosts = hosts2;
+                    write_hosts(&state, &hosts).await?;
+                    dnsmasq.reload()?;
+                }
+            }
+        }
     }
 }

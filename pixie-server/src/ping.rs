@@ -22,16 +22,19 @@ pub async fn main(state: &State) -> Result<()> {
         };
         let peer_mac = find_mac(peer_ip)?;
 
-        let mut units = state.units.lock().unwrap();
-        let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-            log::warn!("Got AP from unknown unit");
-            continue;
-        };
+        state.units.send_if_modified(|units| {
+            let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                log::warn!("Got ping from unknown unit");
+                return false;
+            };
 
-        unit.last_ping_timestamp = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        unit.last_ping_msg = buf[..len].to_vec();
+            unit.last_ping_timestamp = SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            unit.last_ping_msg = buf[..len].to_vec();
+
+            true
+        });
     }
 }

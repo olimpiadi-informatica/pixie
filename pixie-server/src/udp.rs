@@ -91,10 +91,9 @@ async fn broadcast_chunks(
                     8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.bits_per_second;
             }
 
-            for index in 0..32.min(num_packets) {
+            for (index, body) in xor.iter().enumerate().take(num_packets) {
                 write_buf[32..34].clone_from_slice(&(index as u16).wrapping_sub(32).to_le_bytes());
                 let len = BODY_LEN;
-                let body = &xor[index];
                 write_buf[34..34 + len].clone_from_slice(body);
 
                 time::sleep_until(wait_for).await;
@@ -118,8 +117,7 @@ fn compute_hint(state: &State) -> Result<Station> {
 
     let positions = state
         .units
-        .lock()
-        .unwrap()
+        .borrow()
         .iter()
         .filter(|unit| unit.group == *state.config.groups.get_by_first(&last.group).unwrap())
         .map(|unit| (unit.row, unit.col))
@@ -184,12 +182,15 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                         continue 'recv_packet;
                     }
                 };
-                let mut units = state.units.lock().unwrap();
-                let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-                    log::warn!("Got AP from unknown unit");
-                    continue;
-                };
-                unit.curr_progress = Some((frac, tot));
+                state.units.send_if_modified(|units| {
+                    let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                        log::warn!("Got ActionProgress from unknown unit");
+                        return false;
+                    };
+
+                    unit.curr_progress = Some((frac, tot));
+                    true
+                });
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
                 for hash in chunks {
