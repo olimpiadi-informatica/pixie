@@ -35,9 +35,9 @@ where
     U: PartialEq + Clone + Ord,
 {
     fn eq(&self, other: &Self) -> bool {
-        let mut foo = self.0.clone();
-        foo.sort();
-        foo == other.0
+        let mut tmp = self.0.clone();
+        tmp.sort();
+        tmp == other.0
     }
 }
 

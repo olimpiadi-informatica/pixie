@@ -2,21 +2,23 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
     net::{IpAddr, Ipv4Addr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Mutex,
-    time::Duration,
 };
 
-use anyhow::{anyhow, Context, Result};
-use tokio::{
-    sync::{watch, Mutex as AsyncMutex},
-    time,
-};
+use anyhow::{anyhow, bail, Context, Result};
+use mktemp::Temp;
+use tokio::sync::{watch, Mutex as AsyncMutex};
 
-use pixie_shared::{ChunkStat, Config, Image, ImageStat, Station, Unit};
+use pixie_shared::{ChunkHash, ChunkStat, Config, Image, ImageStat, Station, Unit};
 
-const CONFIG: &str = "config.yaml";
-const UNITS: &str = "registered.json";
+fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
+    // TODO(virv): find a better way to make a temporary file
+    let tmp_file = Temp::new_file_in(path.parent().unwrap())?.release();
+    fs::write(&tmp_file, data)?;
+    fs::rename(&tmp_file, path)?;
+    Ok(())
+}
 
 pub struct State {
     pub storage_dir: PathBuf,
@@ -31,13 +33,9 @@ pub struct State {
 }
 
 impl State {
-    pub fn registered_file(&self) -> PathBuf {
-        self.storage_dir.join(UNITS)
-    }
-
     pub fn load(storage_dir: PathBuf) -> Result<Self> {
         let config: Config = {
-            let path = storage_dir.join(CONFIG);
+            let path = storage_dir.join("config.yaml");
             let file = File::open(&path)
                 .with_context(|| format!("open config file: {}", path.display()))?;
             serde_yaml::from_reader(file)
@@ -55,7 +53,7 @@ impl State {
             }
         }
 
-        let units_path = storage_dir.join(UNITS);
+        let units_path = storage_dir.join("registered.json");
         let units = watch::Sender::new({
             if units_path.exists() {
                 let file = File::open(&units_path).with_context(|| {
@@ -73,9 +71,8 @@ impl State {
         tokio::spawn(async move {
             while units_rx.changed().await.is_ok() {
                 let units = units_rx.borrow_and_update().clone();
-                let mut file = File::create(&units_path).unwrap();
-                serde_json::to_writer(&mut file, &units).unwrap();
-                time::sleep(Duration::from_secs(1)).await;
+                let json = serde_json::to_vec(&units).unwrap();
+                atomic_write(&units_path, &json).unwrap();
             }
         });
 
@@ -142,5 +139,83 @@ impl State {
                 images,
             }),
         })
+    }
+
+    pub async fn gc_chunks(&self) -> Result<()> {
+        let mut image_stats = self.image_stats.lock().await;
+        let mut chunk_stats = self.chunk_stats.lock().await;
+        let mut cnt = 0;
+        chunk_stats.retain(|k, v| {
+            if v.ref_cnt == 0 {
+                let path = self.storage_dir.join("chunks").join(hex::encode(k));
+                fs::remove_file(path).unwrap();
+                image_stats.total_csize -= v.csize;
+                image_stats.reclaimable -= v.csize;
+                cnt += 1;
+                false
+            } else {
+                true
+            }
+        });
+        Ok(())
+    }
+
+    pub async fn add_chunk(&self, hash: ChunkHash, data: &[u8]) -> Result<()> {
+        let path = self.storage_dir.join("chunks").join(hex::encode(hash));
+
+        let mut image_stats = self.image_stats.lock().await;
+        let mut chunk_stats = self.chunk_stats.lock().await;
+
+        let chunk = ChunkStat {
+            csize: data.len() as u64,
+            ref_cnt: 0,
+        };
+        let ins = chunk_stats.insert(hash, chunk).is_none();
+        if ins {
+            atomic_write(&path, data)?;
+            image_stats.total_csize += data.len() as u64;
+            image_stats.reclaimable += data.len() as u64;
+        }
+
+        Ok(())
+    }
+
+    pub async fn add_image(&self, name: String, image: Image) -> Result<()> {
+        if !self.config.images.contains(&name) {
+            bail!("Unknown image: {}", name);
+        }
+
+        let path = self.storage_dir.join("images").join(&name);
+        let data = postcard::to_allocvec(&image)?;
+
+        let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
+        let csize = image.disk.iter().map(|chunk| chunk.csize as u64).sum();
+
+        let mut image_stats = self.image_stats.lock().await;
+        let mut chunk_stats = self.chunk_stats.lock().await;
+
+        if path.exists() {
+            let old_image = fs::read(&path)?;
+            let old_image = postcard::from_bytes::<Image>(&old_image)?;
+            for chunk in old_image.disk {
+                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                info.ref_cnt -= 1;
+                if info.ref_cnt == 0 {
+                    image_stats.reclaimable += info.csize;
+                }
+            }
+        }
+
+        atomic_write(&path, &data)?;
+        image_stats.images.insert(name, (size, csize));
+        for chunk in image.disk {
+            let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+            if info.ref_cnt == 0 {
+                image_stats.reclaimable -= info.csize;
+            }
+            info.ref_cnt += 1;
+        }
+
+        Ok(())
     }
 }

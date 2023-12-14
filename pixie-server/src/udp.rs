@@ -13,11 +13,9 @@ use tokio::{
 
 use anyhow::{anyhow, bail, ensure, Result};
 
-use pixie_shared::{
-    to_hex, DhcpMode, HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, PACKET_LEN,
-};
+use pixie_shared::{DhcpMode, HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, PACKET_LEN};
 
-use crate::{find_mac, find_network, State};
+use crate::{find_mac, find_network, state::State};
 
 async fn broadcast_chunks(
     state: &State,
@@ -54,11 +52,11 @@ async fn broadcast_chunks(
             index = *hash;
             queue.remove(&index);
 
-            let filename = state.storage_dir.join("chunks").join(to_hex(&index));
+            let filename = state.storage_dir.join("chunks").join(hex::encode(index));
             let data = match fs::read(&filename) {
                 Ok(data) => data,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    log::warn!("chunk {} not found", to_hex(&index));
+                    log::warn!("chunk {} not found", hex::encode(index));
                     continue;
                 }
                 Err(e) => Err(e)?,

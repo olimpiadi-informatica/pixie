@@ -23,7 +23,7 @@ async fn make_req<T: for<'de> serde::Deserialize<'de>>(url: &str) -> T {
     Request::get(url)
         .send()
         .await
-        .expect(&format!("Request to {} failed", url))
+        .unwrap_or_else(|_| panic!("Request to {} failed", url))
         .json()
         .await
         .expect("Invalid response")
@@ -34,7 +34,7 @@ fn send_req(url: String) {
         Request::get(&url)
             .send()
             .await
-            .expect(&format!("Request to {} failed", url));
+            .unwrap_or_else(|_| panic!("Request to {} failed", url));
     });
 }
 
@@ -79,7 +79,7 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
     };
 
     let mac = unit.mac.to_string();
-    let mac_nocolon = mac.replace(":", "");
+    let mac_nocolon = mac.replace(':', "");
 
     let id_pull = format!("machine-{mac_nocolon}-pull");
     let url_pull = format!("/admin/action/{mac}/pull");
@@ -267,7 +267,7 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> 
                 .get()
                 .images
                 .iter()
-                .map(|(name, image)| make_image_row(name.clone(), image.clone()))
+                .map(|(name, image)| make_image_row(name.clone(), *image))
                 .collect(),
         )
     };

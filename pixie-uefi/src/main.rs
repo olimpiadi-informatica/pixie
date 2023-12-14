@@ -113,11 +113,6 @@ async fn run(os: UefiOS) -> Result<!> {
         } else {
             let command = command.unwrap();
             if matches!(command, Action::Wait) {
-                let tcp = os.connect(server.ip, server.port).await?;
-                complete_action(&tcp).await?;
-                tcp.close_send().await;
-                tcp.force_close().await;
-
                 if !last_was_wait {
                     os.append_message(
                         format!(
@@ -137,28 +132,20 @@ async fn run(os: UefiOS) -> Result<!> {
                 last_was_wait = false;
                 os.append_message(format!("Command: {:?}", command), MessageKind::Info);
                 match command {
-                    Action::Wait => {
-                        unreachable!();
-                    }
-                    Action::Reboot => {
-                        let tcp = os.connect(server.ip, server.port).await?;
-                        complete_action(&tcp).await?;
-                        tcp.close_send().await;
-                        tcp.force_close().await;
-                        reboot_to_os(os).await;
-                    }
+                    Action::Wait => unreachable!(),
+                    Action::Reboot => reboot_to_os(os).await,
                     Action::Register { hint_port } => register(os, server, hint_port).await?,
                     Action::Push { image } => push(os, server, image).await?,
                     Action::Pull { image, chunks_port } => {
                         pull(os, server, image, chunks_port).await?
                     }
                 }
-            }
 
-            let tcp = os.connect(server.ip, server.port).await?;
-            complete_action(&tcp).await?;
-            tcp.close_send().await;
-            tcp.force_close().await;
+                let tcp = os.connect(server.ip, server.port).await?;
+                complete_action(&tcp).await?;
+                tcp.close_send().await;
+                tcp.force_close().await;
+            }
         }
     }
 }

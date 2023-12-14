@@ -7,7 +7,7 @@ use anyhow::{bail, Result};
 use pixie_shared::PACKET_LEN;
 use tokio::net::UdpSocket;
 
-use crate::{find_mac, State};
+use crate::{find_mac, state::State};
 
 pub async fn main(state: &State) -> Result<()> {
     // TODO: do we like port 4043?

@@ -4,7 +4,6 @@ extern crate alloc;
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;
-use core::fmt::Write;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
@@ -123,11 +122,3 @@ pub mod config;
 
 #[cfg(feature = "std")]
 pub use config::*;
-
-pub fn to_hex(bytes: &[u8]) -> String {
-    let mut s = String::new();
-    for byte in bytes {
-        write!(s, "{:02x}", byte).unwrap();
-    }
-    s
-}

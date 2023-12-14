@@ -1,9 +1,9 @@
-pub mod dnsmasq;
-pub mod http;
-pub mod ping;
-pub mod state;
-pub mod tcp;
-pub mod udp;
+mod dnsmasq;
+mod http;
+mod ping;
+mod state;
+mod tcp;
+mod udp;
 
 use std::{
     fs,
@@ -22,7 +22,7 @@ use macaddr::MacAddr6;
 
 use crate::state::State;
 
-pub fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
+fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     struct Zombie {
         inner: Child,
     }
@@ -75,7 +75,7 @@ pub fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     bail!("Mac address not found");
 }
 
-pub fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
+fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
     for interface in Interface::get_all()? {
         for address in &interface.addresses {
             let Some(IpAddr::V4(addr)) = address.addr.map(|x| x.ip()) else {
@@ -94,7 +94,7 @@ pub fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
 }
 
 #[derive(Parser, Debug)]
-pub struct PixieOptions {
+struct PixieOptions {
     /// Directory in which files will be stored.
     /// Must already contain files: tftpboot/pixie-uefi.efi, config.yaml
     #[clap(short, long, default_value = "./storage")]

@@ -1,9 +1,7 @@
 use std::{
-    collections::btree_map::Entry,
     io::ErrorKind,
     net::SocketAddr,
     net::{IpAddr, Ipv4Addr},
-    path::Path,
     sync::Arc,
 };
 
@@ -15,24 +13,15 @@ use tokio::{
 
 use anyhow::{anyhow, bail, Result};
 use macaddr::MacAddr6;
-use mktemp::Temp;
 
-use pixie_shared::{to_hex, Action, ActionKind, ChunkStat, Image, TcpRequest, Unit, ACTION_PORT};
+use pixie_shared::{Action, ActionKind, TcpRequest, Unit, ACTION_PORT};
 
-use crate::{find_mac, State};
-
-async fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-    // TODO(virv): find a better way to make a temporary file
-    let tmp = Temp::new_file_in(path.parent().unwrap())?.release();
-    fs::write(&tmp, data).await?;
-    fs::rename(&tmp, path).await?;
-    Ok(())
-}
+use crate::{find_mac, state::State};
 
 async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> Result<Vec<u8>> {
     Ok(match req {
         TcpRequest::GetChunkSize(hash) => {
-            let path = state.storage_dir.join("chunks").join(to_hex(&hash));
+            let path = state.storage_dir.join("chunks").join(hex::encode(hash));
             let csize = match fs::metadata(path).await {
                 Ok(meta) => Some(meta.len()),
                 Err(e) if e.kind() == ErrorKind::NotFound => None,
@@ -88,63 +77,14 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             Vec::new()
         }
         TcpRequest::UploadChunk(hash, data) => {
-            let chunks_path = state.storage_dir.join("chunks");
-            let path = chunks_path.join(to_hex(&hash));
-
-            let mut image_stats = state.image_stats.lock().await;
-            let mut chunk_stats = state.chunk_stats.lock().await;
-            atomic_write(&path, &data).await?;
-
-            match chunk_stats.entry(hash) {
-                Entry::Vacant(e) => {
-                    image_stats.total_csize += data.len() as u64;
-                    image_stats.reclaimable += data.len() as u64;
-                    e.insert(ChunkStat {
-                        csize: data.len() as u64,
-                        ref_cnt: 0,
-                    });
-                }
-                Entry::Occupied(_) => {}
-            }
-
+            state.add_chunk(hash, &data).await?;
             Vec::new()
         }
         TcpRequest::UploadImage(name, image) => {
             if !state.config.images.contains(&name) {
                 return Ok(format!("Unknown image: {}", name).into_bytes());
             }
-
-            let path = state.storage_dir.join("images").join(&name);
-            let data = postcard::to_allocvec(&image)?;
-
-            let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
-            let csize = image.disk.iter().map(|chunk| chunk.csize as u64).sum();
-
-            let mut image_stats = state.image_stats.lock().await;
-            let mut chunk_stats = state.chunk_stats.lock().await;
-
-            if path.exists() {
-                let old_image = fs::read(&path).await?;
-                let old_image = postcard::from_bytes::<Image>(&old_image)?;
-                for chunk in old_image.disk {
-                    let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                    info.ref_cnt -= 1;
-                    if info.ref_cnt == 0 {
-                        image_stats.reclaimable += info.csize;
-                    }
-                }
-            }
-
-            image_stats.images.insert(name.clone(), (size, csize));
-
-            for chunk in image.disk {
-                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                if info.ref_cnt == 0 {
-                    image_stats.reclaimable -= info.csize;
-                }
-                info.ref_cnt += 1;
-            }
-            atomic_write(&path, &data).await?;
+            state.add_image(name, image).await?;
 
             Vec::new()
         }
@@ -166,16 +106,17 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                         modified = false;
                     }
                     Some(ref mut unit) => {
-                        let action = unit.next_action;
-                        unit.curr_action = Some(action);
-                        if matches!(
-                            unit.next_action,
-                            ActionKind::Push | ActionKind::Pull | ActionKind::Register
-                        ) {
-                            unit.next_action = ActionKind::Wait;
+                        match unit.next_action {
+                            ActionKind::Push | ActionKind::Pull | ActionKind::Register => {
+                                unit.curr_action = Some(unit.next_action);
+                                unit.next_action = ActionKind::Wait;
+                                modified = true;
+                            }
+                            ActionKind::Reboot | ActionKind::Wait => {
+                                modified = false;
+                            }
                         }
-                        action_kind = action;
-                        modified = true;
+                        action_kind = unit.next_action;
                     }
                     None => {
                         action_kind = state.config.boot.unregistered;
