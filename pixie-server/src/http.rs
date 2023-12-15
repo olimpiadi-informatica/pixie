@@ -1,65 +1,67 @@
-use std::{error::Error, net::Ipv4Addr, sync::Arc};
+use std::{net::Ipv4Addr, sync::Arc};
 
-use actix_files::Files;
-use actix_web::{
-    error::ErrorUnauthorized,
-    get,
-    http::StatusCode,
-    middleware::{Compress, Logger},
-    web::{Data, Path},
-    App, HttpServer, Responder,
-};
-use actix_web_httpauth::middleware::HttpAuthentication;
 use anyhow::Result;
+use axum::{
+    extract::{self, Path},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Router,
+};
 use macaddr::MacAddr6;
 
 use pixie_shared::HttpConfig;
+use tokio::net::TcpListener;
+use tower_http::{
+    compression::CompressionLayer, services::ServeDir, trace::TraceLayer,
+    validate_request::ValidateRequestHeaderLayer,
+};
 
 use crate::state::State;
 
-#[get("/admin/action/{mac}/{value}")]
 async fn action(
-    path: Path<(String, String)>,
-    state: Data<State>,
-) -> Result<impl Responder, Box<dyn Error>> {
-    let Ok(action) = path.1.parse() else {
-        return Ok(format!("Unknown action: {:?}", path.1)
-            .customize()
-            .with_status(StatusCode::BAD_REQUEST));
+    Path((unit_filter, action_name)): Path<(String, String)>,
+    extract::State(state): extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    let Ok(action) = action_name.parse() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Unknown action: {:?}\n", action_name),
+        );
     };
 
     let mut updated = 0usize;
 
     state.units.send_if_modified(|units| {
-        if let Ok(mac) = path.0.parse::<MacAddr6>() {
+        if let Ok(mac) = unit_filter.parse::<MacAddr6>() {
             for unit in units.iter_mut() {
                 if unit.mac == mac {
                     unit.next_action = action;
                     updated += 1;
                 }
             }
-        } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
+        } else if let Ok(ip) = unit_filter.parse::<Ipv4Addr>() {
             for unit in units.iter_mut() {
                 if unit.static_ip() == ip {
                     unit.next_action = action;
                     updated += 1;
                 }
             }
-        } else if path.0 == "all" {
+        } else if unit_filter == "all" {
             for unit in units.iter_mut() {
                 unit.next_action = action;
                 updated += 1;
             }
-        } else if let Some(&group) = state.config.groups.get_by_first(&path.0) {
+        } else if let Some(&group) = state.config.groups.get_by_first(&unit_filter) {
             for unit in units.iter_mut() {
                 if unit.group == group {
                     unit.next_action = action;
                     updated += 1;
                 }
             }
-        } else if state.config.images.contains(&path.0) {
+        } else if state.config.images.contains(&unit_filter) {
             for unit in units.iter_mut() {
-                if unit.image == path.0 {
+                if unit.image == unit_filter {
                     unit.next_action = action;
                     updated += 1;
                 }
@@ -70,60 +72,56 @@ async fn action(
     });
 
     if updated > 0 {
-        Ok(format!("{updated} computer(s) affected\n").customize())
+        (StatusCode::OK, format!("{updated} computer(s) affected\n"))
     } else {
-        Ok("Unknown PC"
-            .to_owned()
-            .customize()
-            .with_status(StatusCode::BAD_REQUEST))
+        (StatusCode::BAD_REQUEST, "Unknown PC\n".to_owned())
     }
 }
 
-#[get("/admin/image/{mac}/{image}")]
 async fn image(
-    path: Path<(String, String)>,
-    state: Data<State>,
-) -> Result<impl Responder, Box<dyn Error>> {
-    if !state.config.images.contains(&path.1) {
-        return Ok(format!("Unknown image: {:?}", path.1)
-            .to_owned()
-            .customize()
-            .with_status(StatusCode::BAD_REQUEST));
+    Path((unit_filter, image)): Path<(String, String)>,
+    extract::State(state): extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    if !state.config.images.contains(&image) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Unknown image: {:?}\n", image),
+        );
     }
 
     let mut updated = 0usize;
 
     state.units.send_if_modified(|units| {
-        if let Ok(mac) = path.0.parse::<MacAddr6>() {
+        if let Ok(mac) = unit_filter.parse::<MacAddr6>() {
             for unit in units.iter_mut() {
                 if unit.mac == mac {
-                    unit.image = path.1.clone();
+                    unit.image = image.clone();
                     updated += 1;
                 }
             }
-        } else if let Ok(ip) = path.0.parse::<Ipv4Addr>() {
+        } else if let Ok(ip) = unit_filter.parse::<Ipv4Addr>() {
             for unit in units.iter_mut() {
                 if unit.static_ip() == ip {
-                    unit.image = path.1.clone();
+                    unit.image = image.clone();
                     updated += 1;
                 }
             }
-        } else if path.0 == "all" {
+        } else if unit_filter == "all" {
             for unit in units.iter_mut() {
-                unit.image = path.1.clone();
+                unit.image = image.clone();
                 updated += 1;
             }
-        } else if let Some(&group) = state.config.groups.get_by_first(&path.0) {
+        } else if let Some(&group) = state.config.groups.get_by_first(&unit_filter) {
             for unit in units.iter_mut() {
                 if unit.group == group {
-                    unit.image = path.1.clone();
+                    unit.image = image.clone();
                     updated += 1;
                 }
             }
-        } else if state.config.images.contains(&path.0) {
+        } else if state.config.images.contains(&unit_filter) {
             for unit in units.iter_mut() {
-                if unit.image == path.0 {
-                    unit.image = path.1.clone();
+                if unit.image == unit_filter {
+                    unit.image = image.clone();
                     updated += 1;
                 }
             }
@@ -133,40 +131,33 @@ async fn image(
     });
 
     if updated > 0 {
-        Ok(format!("{updated} computer(s) affected\n").customize())
+        (StatusCode::OK, format!("{updated} computer(s) affected\n"))
     } else {
-        Ok("Unknown PC"
-            .to_owned()
-            .customize()
-            .with_status(StatusCode::BAD_REQUEST))
+        (StatusCode::BAD_REQUEST, "Unknown PC\n".to_owned())
     }
 }
 
-#[get("/admin/gc")]
-async fn gc(state: Data<State>) -> Result<impl Responder, Box<dyn Error>> {
-    state.gc_chunks().await?;
-    Ok("")
+async fn get_config(extract::State(state): extract::State<Arc<State>>) -> String {
+    serde_json::to_string(&state.config).unwrap()
 }
 
-#[get("/admin/config")]
-async fn get_config(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
-    Ok(serde_json::to_string(&state.config))
+async fn get_hostmap(extract::State(state): extract::State<Arc<State>>) -> String {
+    serde_json::to_string(&state.hostmap).unwrap()
 }
 
-#[get("/admin/units")]
-async fn get_units(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
-    Ok(serde_json::to_string(&*state.units.borrow()))
+async fn get_units(extract::State(state): extract::State<Arc<State>>) -> String {
+    let units = state.units.borrow();
+    serde_json::to_string(&*units).unwrap()
 }
 
-#[get("/admin/hostmap")]
-async fn get_hostmap(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
-    Ok(serde_json::to_string(&state.hostmap))
-}
-
-#[get("/admin/images")]
-async fn get_images(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
+async fn get_images(extract::State(state): extract::State<Arc<State>>) -> String {
     let image_stats = state.image_stats.borrow();
-    Ok(serde_json::to_string(&*image_stats))
+    serde_json::to_string(&*image_stats).unwrap()
+}
+
+async fn gc(extract::State(state): extract::State<Arc<State>>) -> String {
+    state.gc_chunks().await.unwrap();
+    "".to_owned()
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
@@ -175,39 +166,27 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         ref password,
     } = state.config.http;
 
-    let pw = password.clone();
+    let admin_path = state.storage_dir.join("admin");
 
-    let admin = state.storage_dir.join("admin");
-    let data: Data<_> = state.into();
+    let router = Router::new()
+        .route("/admin/config", get(get_config))
+        .route("/admin/hostmap", get(get_hostmap))
+        .route("/admin/units", get(get_units))
+        .route("/admin/images", get(get_images))
+        .route("/admin/gc", get(gc))
+        .route("/admin/action/:unit/:action", get(action))
+        .route("/admin/image/:unit/:image", get(image))
+        .nest_service(
+            "/",
+            ServeDir::new(&admin_path).append_index_html_on_directories(true),
+        )
+        .layer(CompressionLayer::new())
+        .layer(ValidateRequestHeaderLayer::basic(&"admin", &password))
+        .layer(TraceLayer::new_for_http())
+        .with_state(state);
 
-    HttpServer::new(move || {
-        let pw = pw.clone();
-        App::new()
-            .wrap(Compress::default())
-            .wrap(Logger::default())
-            .wrap(HttpAuthentication::basic(move |req, credentials| {
-                let pw = pw.clone();
-                async move {
-                    if credentials.password() != Some(&pw) {
-                        Err((ErrorUnauthorized("password incorrect"), req))
-                    } else {
-                        Ok(req)
-                    }
-                }
-            }))
-            .app_data(data.clone())
-            .service(action)
-            .service(image)
-            .service(gc)
-            .service(get_config)
-            .service(get_units)
-            .service(get_hostmap)
-            .service(get_images)
-            .service(Files::new("/", &admin).index_file("index.html"))
-    })
-    .bind(listen_on)?
-    .run()
-    .await?;
+    let listener = TcpListener::bind(listen_on).await?;
+    axum::serve(listener, router).await?;
 
     Ok(())
 }
