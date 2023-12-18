@@ -13,7 +13,7 @@ where
     U: PartialEq,
 {
     pub fn new() -> Self {
-        Bijection(Vec::new())
+        Self(Vec::new())
     }
 
     pub fn get_by_first(&self, t: &T) -> Option<&U> {
@@ -26,6 +26,10 @@ where
 
     pub fn iter(&self) -> impl Iterator<Item = &(T, U)> {
         self.0.iter()
+    }
+
+    pub fn as_slice(&self) -> &[(T, U)] {
+        self.0.as_slice()
     }
 }
 
@@ -54,5 +58,11 @@ impl<T, U> IntoIterator for Bijection<T, U> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+impl<T, U> Default for Bijection<T, U> {
+    fn default() -> Self {
+        Self(Vec::new())
     }
 }

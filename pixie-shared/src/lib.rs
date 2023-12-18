@@ -7,7 +7,10 @@ use blake3::OUT_LEN;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
-use std::net::SocketAddrV4;
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, SocketAddrV4},
+};
 
 pub mod bijection;
 pub use bijection::Bijection;
@@ -115,6 +118,15 @@ pub enum TcpRequest {
     UploadImage(String, Image),
     GetAction,
     ActionComplete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg(feature = "std")]
+pub enum WsUpdate {
+    Config(config::Config),
+    HostMap(HashMap<Ipv4Addr, String>),
+    Units(Vec<Unit>),
+    ImageStats(ImageStat),
 }
 
 #[cfg(feature = "std")]

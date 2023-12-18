@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::ops::Deref;
 
+use futures::StreamExt;
 use gloo_timers::future::TimeoutFuture;
-use pixie_shared::{Config, ImageStat, Unit};
+use pixie_shared::{Config, ImageStat, Unit, WsUpdate};
+use reqwasm::websocket::futures::WebSocket;
+use reqwasm::websocket::Message;
+use sycamore::futures::{spawn_local, spawn_local_scoped};
 use sycamore::prelude::*;
-use sycamore::{
-    futures::{spawn_local, spawn_local_scoped},
-    suspense::Suspense,
-};
 use wasm_bindgen::prelude::*;
 
 use reqwasm::http::Request;
@@ -17,16 +18,9 @@ use reqwasm::http::Request;
 extern "C" {
     #[wasm_bindgen(js_namespace = Date, js_name = now)]
     fn date_now() -> f64;
-}
 
-async fn make_req<T: for<'de> serde::Deserialize<'de>>(url: &str) -> T {
-    Request::get(url)
-        .send()
-        .await
-        .unwrap_or_else(|_| panic!("Request to {} failed", url))
-        .json()
-        .await
-        .expect("Invalid response")
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
 }
 
 fn send_req(url: String) {
@@ -138,7 +132,7 @@ fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> Vie
 #[component(inline_props)]
 fn GroupInfo<'a, G: Html>(
     cx: Scope<'a>,
-    units: &'a ReadSignal<Vec<Unit>>,
+    units: Vec<Unit>,
     group_id: u8,
     group_name: String,
     images: Vec<String>,
@@ -146,7 +140,6 @@ fn GroupInfo<'a, G: Html>(
 ) -> View<G> {
     let group_units = create_memo(cx, move || {
         let mut units = units
-            .get()
             .iter()
             .filter(|x| x.group == group_id)
             .cloned()
@@ -230,7 +223,7 @@ impl fmt::Display for Bytes {
 }
 
 #[component(inline_props)]
-fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> View<G> {
+fn Images<'a, G: Html>(cx: Scope<'a>, images_signal: &'a ReadSignal<Option<ImageStat>>) -> View<G> {
     let make_image_row = move |name: String, image: (u64, u64)| {
         let id_pull = format!("image-{name}-pull");
         let url_pull = format!("/admin/action/{name}/pull");
@@ -263,13 +256,35 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> 
 
     let images_table = move || {
         View::new_fragment(
-            images
+            images_signal
                 .get()
-                .images
-                .iter()
-                .map(|(name, image)| make_image_row(name.clone(), *image))
-                .collect(),
+                .deref()
+                .as_ref()
+                .map(|images| {
+                    images
+                        .images
+                        .iter()
+                        .map(|(name, image)| make_image_row(name.clone(), *image))
+                        .collect()
+                })
+                .unwrap_or_default(),
         )
+    };
+
+    let total_csize = move || {
+        images_signal
+            .get()
+            .deref()
+            .as_ref()
+            .map(|images| images.total_csize)
+    };
+
+    let reclaimable = move || {
+        images_signal
+            .get()
+            .deref()
+            .as_ref()
+            .map(|images| images.reclaimable)
     };
 
     view! { cx,
@@ -283,11 +298,11 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> 
             (images_table())
             tr {
                 td { "Total" }
-                td { (Bytes(images.get().total_csize)) }
+                td { (Bytes(total_csize().unwrap_or_default())) }
             }
             tr {
                 td { "Reclaimable" }
-                td { (Bytes(images.get().reclaimable)) }
+                td { (Bytes(reclaimable().unwrap_or_default())) }
                 td { }
                 td {
                     button(id="reclaime", on:click=move |_| send_req("/admin/gc".into()) ) {
@@ -300,60 +315,100 @@ fn Images<'a, 'b, G: Html>(cx: Scope<'a>, images: &'a ReadSignal<ImageStat>) -> 
 }
 
 #[component]
-async fn UnitView<G: Html>(cx: Scope<'_>) -> View<G> {
-    let config: Config = make_req("/admin/config").await;
-    let hostmap: HashMap<Ipv4Addr, String> = make_req("/admin/hostmap").await;
-
-    let units = create_signal(cx, make_req::<Vec<Unit>>("/admin/units").await);
-    let images = create_signal(cx, make_req::<ImageStat>("/admin/images").await);
+async fn MainView<'a, G: Html>(cx: Scope<'a>) -> View<G> {
+    let config_signal = create_signal(cx, None::<Config>);
+    let hostmap_signal = create_signal(cx, None::<HashMap<Ipv4Addr, String>>);
+    let units_signal = create_signal(cx, None::<Vec<Unit>>);
+    let images_signal = create_signal(cx, None::<ImageStat>);
 
     spawn_local_scoped(cx, async move {
+        let url = format!(
+            "ws://{}/admin/ws",
+            web_sys::window().unwrap().location().host().unwrap()
+        );
+
+        let mut ws = WebSocket::open(&url).unwrap_or_else(|err| {
+            log(&format!("Failed to open websocket: {:?}", err));
+            panic!();
+        });
+
         loop {
-            TimeoutFuture::new(100).await;
-            let new = make_req("/admin/units").await;
-            if new != *units.get() {
-                units.set(new);
+            let msg = ws
+                .next()
+                .await
+                .unwrap_or_else(|| {
+                    log(&format!("Websocket closed"));
+                    panic!();
+                })
+                .unwrap_or_else(|err| {
+                    log(&format!("Websocket error: {:?}", err));
+                    panic!();
+                });
+
+            match msg {
+                Message::Text(text) => {
+                    let update: WsUpdate = serde_json::from_str(&text).unwrap_or_else(|err| {
+                        log(&format!("Failed to parse websocket message: {:?}", err));
+                        panic!();
+                    });
+
+                    match update {
+                        WsUpdate::Config(config) => {
+                            config_signal.set(Some(config));
+                        }
+                        WsUpdate::HostMap(hostmap) => {
+                            hostmap_signal.set(Some(hostmap));
+                        }
+                        WsUpdate::Units(units) => {
+                            units_signal.set(Some(units));
+                        }
+                        WsUpdate::ImageStats(images) => {
+                            images_signal.set(Some(images));
+                        }
+                    }
+                }
+                Message::Bytes(_) => {
+                    panic!("Unexpected binary message")
+                }
             }
         }
     });
 
-    spawn_local_scoped(cx, async move {
-        loop {
-            TimeoutFuture::new(1000).await;
-            let new = make_req("/admin/images").await;
-            if new != *images.get() {
-                images.set(new);
-            }
-        }
-    });
+    let groups = move || {
+        let config_opt = config_signal.get().deref().clone();
+        let units_opt = units_signal.get().deref().clone();
 
-    let groups = View::new_fragment(
-        config
-            .groups
-            .iter()
-            .map(|(name, id)| {
-                let images = config.images.clone();
-                let hostmap = hostmap.clone();
-                view! { cx,
-                GroupInfo(units=units, group_id=*id, group_name=name.clone(), images=images, hostmap=hostmap) }
-            })
-            .collect(),
-    );
+        View::new_fragment(
+            config_opt
+                .zip(units_opt)
+                .map(|(config, units)| {
+                    config.groups
+                        .iter()
+                        .map(|(name, id)| {
+                            let units = units.clone();
+                            let images = config.images.clone();
+                            let hostmap = hostmap_signal.get().deref().clone().unwrap_or_default();
+                            view! { cx,
+                            GroupInfo(units=units, group_id=*id, group_name=name.clone(), images=images, hostmap=hostmap) }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        )
+    };
 
     view! { cx,
-        Images(images=images)
+        Images(images_signal=images_signal)
 
         h1 { "Groups" }
-        (groups)
+        (groups())
     }
 }
 
 fn main() {
     sycamore::render(|cx| {
         view! { cx,
-            Suspense(fallback=view! { cx, "Loading..." }) {
-                UnitView {}
-            }
+            MainView {}
         }
     });
 }

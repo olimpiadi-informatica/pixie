@@ -419,12 +419,14 @@ dependencies = [
 name = "pixie-web"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "gloo-timers",
  "itertools",
  "macaddr",
  "pixie-shared",
  "reqwasm",
  "serde",
+ "serde_json",
  "sycamore",
  "wasm-bindgen",
  "web-sys",
