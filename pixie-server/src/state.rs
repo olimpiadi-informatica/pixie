@@ -20,6 +20,17 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+fn get_image_disk_size(image: &Image) -> u64 {
+    let mut chunks: Vec<_> = image
+        .disk
+        .iter()
+        .map(|chunk| (chunk.hash, chunk.csize))
+        .collect();
+    chunks.sort_unstable_by_key(|(hash, _)| *hash);
+    chunks.dedup_by_key(|(hash, _)| *hash);
+    chunks.into_iter().map(|(_, size)| size as u64).sum()
+}
+
 pub struct State {
     pub storage_dir: PathBuf,
     pub config: Config,
@@ -108,11 +119,10 @@ impl State {
                 }
                 let content = fs::read(&path)?;
                 let image = postcard::from_bytes::<Image>(&content)?;
+                let csize = get_image_disk_size(&image);
                 let mut size = 0;
-                let mut csize = 0;
                 for chunk in image.disk {
                     size += chunk.size as u64;
-                    csize += chunk.csize as u64;
                     chunk_stats.get_mut(&chunk.hash).unwrap().ref_cnt += 1;
                 }
                 Ok((image_name.clone(), (size, csize)))
@@ -190,7 +200,7 @@ impl State {
         let path = self.storage_dir.join("images").join(&name);
         let data = postcard::to_allocvec(&image)?;
 
-        let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
+        let size = get_image_disk_size(&image);
         let csize = image.disk.iter().map(|chunk| chunk.csize as u64).sum();
 
         self.image_stats.send_modify(|image_stats| {
