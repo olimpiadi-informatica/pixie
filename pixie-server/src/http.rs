@@ -165,7 +165,7 @@ async fn get_hostmap(state: Data<State>) -> Result<impl Responder, actix_web::Er
 
 #[get("/admin/images")]
 async fn get_images(state: Data<State>) -> Result<impl Responder, actix_web::Error> {
-    let image_stats = state.image_stats.lock().await;
+    let image_stats = state.image_stats.borrow();
     Ok(serde_json::to_string(&*image_stats))
 }
 

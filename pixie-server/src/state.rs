@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use mktemp::Temp;
-use tokio::sync::{watch, Mutex as AsyncMutex};
+use tokio::sync::watch;
 
 use pixie_shared::{ChunkHash, ChunkStat, Config, Image, ImageStat, Station, Unit};
 
@@ -28,8 +28,8 @@ pub struct State {
     pub units: watch::Sender<Vec<Unit>>,
     // TODO: use an Option
     pub last: Mutex<Station>,
-    pub image_stats: AsyncMutex<ImageStat>,
-    pub chunk_stats: AsyncMutex<BTreeMap<[u8; 32], ChunkStat>>,
+    pub image_stats: watch::Sender<ImageStat>,
+    pub chunk_stats: Mutex<BTreeMap<[u8; 32], ChunkStat>>,
 }
 
 impl State {
@@ -132,30 +132,31 @@ impl State {
             hostmap,
             units,
             last,
-            chunk_stats: AsyncMutex::new(chunk_stats),
-            image_stats: AsyncMutex::new(ImageStat {
+            image_stats: watch::Sender::new(ImageStat {
                 total_csize,
                 reclaimable,
                 images,
             }),
+            chunk_stats: Mutex::new(chunk_stats),
         })
     }
 
     pub async fn gc_chunks(&self) -> Result<()> {
-        let mut image_stats = self.image_stats.lock().await;
-        let mut chunk_stats = self.chunk_stats.lock().await;
-        let mut cnt = 0;
-        chunk_stats.retain(|k, v| {
-            if v.ref_cnt == 0 {
-                let path = self.storage_dir.join("chunks").join(hex::encode(k));
-                fs::remove_file(path).unwrap();
-                image_stats.total_csize -= v.csize;
-                image_stats.reclaimable -= v.csize;
-                cnt += 1;
-                false
-            } else {
-                true
-            }
+        self.image_stats.send_modify(|image_stats| {
+            let mut chunk_stats = self.chunk_stats.lock().unwrap();
+            let mut cnt = 0;
+            chunk_stats.retain(|k, v| {
+                if v.ref_cnt == 0 {
+                    let path = self.storage_dir.join("chunks").join(hex::encode(k));
+                    fs::remove_file(path).unwrap();
+                    image_stats.total_csize -= v.csize;
+                    image_stats.reclaimable -= v.csize;
+                    cnt += 1;
+                    false
+                } else {
+                    true
+                }
+            });
         });
         Ok(())
     }
@@ -163,19 +164,20 @@ impl State {
     pub async fn add_chunk(&self, hash: ChunkHash, data: &[u8]) -> Result<()> {
         let path = self.storage_dir.join("chunks").join(hex::encode(hash));
 
-        let mut image_stats = self.image_stats.lock().await;
-        let mut chunk_stats = self.chunk_stats.lock().await;
+        self.image_stats.send_modify(|image_stats| {
+            let mut chunk_stats = self.chunk_stats.lock().unwrap();
 
-        let chunk = ChunkStat {
-            csize: data.len() as u64,
-            ref_cnt: 0,
-        };
-        let ins = chunk_stats.insert(hash, chunk).is_none();
-        if ins {
-            atomic_write(&path, data)?;
-            image_stats.total_csize += data.len() as u64;
-            image_stats.reclaimable += data.len() as u64;
-        }
+            let chunk = ChunkStat {
+                csize: data.len() as u64,
+                ref_cnt: 0,
+            };
+            let ins = chunk_stats.insert(hash, chunk).is_none();
+            if ins {
+                atomic_write(&path, data).unwrap();
+                image_stats.total_csize += data.len() as u64;
+                image_stats.reclaimable += data.len() as u64;
+            }
+        });
 
         Ok(())
     }
@@ -191,30 +193,31 @@ impl State {
         let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
         let csize = image.disk.iter().map(|chunk| chunk.csize as u64).sum();
 
-        let mut image_stats = self.image_stats.lock().await;
-        let mut chunk_stats = self.chunk_stats.lock().await;
+        self.image_stats.send_modify(|image_stats| {
+            let mut chunk_stats = self.chunk_stats.lock().unwrap();
 
-        if path.exists() {
-            let old_image = fs::read(&path)?;
-            let old_image = postcard::from_bytes::<Image>(&old_image)?;
-            for chunk in old_image.disk {
-                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                info.ref_cnt -= 1;
-                if info.ref_cnt == 0 {
-                    image_stats.reclaimable += info.csize;
+            if path.exists() {
+                let old_image = fs::read(&path).unwrap();
+                let old_image = postcard::from_bytes::<Image>(&old_image).unwrap();
+                for chunk in old_image.disk {
+                    let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                    info.ref_cnt -= 1;
+                    if info.ref_cnt == 0 {
+                        image_stats.reclaimable += info.csize;
+                    }
                 }
             }
-        }
 
-        atomic_write(&path, &data)?;
-        image_stats.images.insert(name, (size, csize));
-        for chunk in image.disk {
-            let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-            if info.ref_cnt == 0 {
-                image_stats.reclaimable -= info.csize;
+            atomic_write(&path, &data).unwrap();
+            image_stats.images.insert(name, (size, csize));
+            for chunk in image.disk {
+                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                if info.ref_cnt == 0 {
+                    image_stats.reclaimable -= info.csize;
+                }
+                info.ref_cnt += 1;
             }
-            info.ref_cnt += 1;
-        }
+        });
 
         Ok(())
     }
