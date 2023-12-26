@@ -12,26 +12,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: dtolnay/rust-toolchain@nightly
       - name: Install Deps
         run: |
+          rustup toolchain install stable nightly
           rustup component add rust-src --toolchain nightly
+          rustup default stable
           cargo install doc-merge
       - name: cargo doc
         run: |
           for d in pixie-*; do
             pushd $d
-            cargo doc --color=always --no-deps --document-private-items --all-features
+            cargo doc \
+              --color=always \
+              --no-deps \
+              --document-private-items \
+              --all-features \
+              --package $d \
+              --package pixie-shared
             popd
           done
       - name: Merge docs
         run: |
-          mkdir doc
-          shopt -s globstar
-          for d in pixie-*/target/**/doc; do
-            doc-merge --src $d --dest doc
+          for d in pixie-*/target/doc; do
+            doc-merge --src $d --dest doc --create-dest
           done
+          # doc-merge does not work with nightly
+          # we merge pixie-uefi doc by hand by search is broken
+          cp -r pixie-uefi/target/x86_64-unknown-uefi/doc/static.files doc/
+          cp -r pixie-uefi/target/x86_64-unknown-uefi/doc/pixie_uefi doc/
+          echo 'window.ALL_CRATES = ["pixie_server","pixie_shared","pixie_web","pixie_uefi"];' > doc/crates.js
       - name: Make index.html
         run: |
           echo '<meta http-equiv="Refresh" content="0; url=./pixie_server/index.html">' > doc/index.html
