@@ -101,7 +101,7 @@ struct PixieOptions {
     storage_dir: PathBuf,
 }
 
-#[actix_rt::main]
+#[tokio::main]
 async fn main() -> Result<()> {
     env_logger::init();
 
@@ -125,13 +125,13 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(State::load(options.storage_dir)?);
 
-    tokio::select! {
-        x = dnsmasq::main(state.clone()) => x?,
-        x = http::main(state.clone()) => x?,
-        x = udp::main(&state) => x?,
-        x = tcp::main(state.clone()) => x?,
-        x = ping::main(&state) => x?,
-    };
+    tokio::try_join!(
+        dnsmasq::main(state.clone()),
+        http::main(state.clone()),
+        udp::main(&state),
+        tcp::main(state.clone()),
+        ping::main(&state),
+    )?;
 
     Ok(())
 }

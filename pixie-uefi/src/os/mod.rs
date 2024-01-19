@@ -144,13 +144,17 @@ impl UefiOSImpl {
     }
 }
 
+#[allow(clippy::type_complexity)]
 static mut UI_DRAWER: RefCell<Option<Box<dyn Fn(UefiOS) + 'static>>> = RefCell::new(None);
 static mut OS: Option<RefCell<UefiOSImpl>> = None;
 static OS_CONSTRUCTED: AtomicBool = AtomicBool::new(false);
 
 #[non_exhaustive]
 #[derive(Clone, Copy)]
-pub struct UefiOS {}
+pub struct UefiOS {
+    #[allow(dead_code)]
+    cant_build: (),
+}
 
 impl !Send for UefiOS {}
 impl !Sync for UefiOS {}
@@ -212,14 +216,16 @@ impl UefiOS {
             }))
         }
 
-        let net = NetworkInterface::new(UefiOS {});
+        let os = UefiOS { cant_build: () };
 
-        let input = UefiOS {}
-            .open_handle(UefiOS {}.all_handles::<Input>().unwrap()[0])
+        let net = NetworkInterface::new(os);
+
+        let input = os
+            .open_handle(os.all_handles::<Input>().unwrap()[0])
             .unwrap();
 
-        let mut output: ScopedProtocol<Output> = UefiOS {}
-            .open_handle(UefiOS {}.all_handles::<Output>().unwrap()[0])
+        let mut output: ScopedProtocol<Output> = os
+            .open_handle(os.all_handles::<Output>().unwrap()[0])
             .unwrap();
 
         output.clear().unwrap();
@@ -232,12 +238,10 @@ impl UefiOS {
 
         Executor::init();
 
-        let os = UefiOS {};
-
         os.spawn("init", async move {
             loop {
-                let err = f(UefiOS {}).await.unwrap_err();
-                UefiOS {}.append_message(format!("Error: {:?}", err), MessageKind::Error);
+                let err = f(os).await.unwrap_err();
+                os.append_message(format!("Error: {:?}", err), MessageKind::Error);
             }
         });
 
@@ -267,8 +271,8 @@ impl UefiOS {
 
         os.spawn(
             "[net_poll]",
-            poll_fn(|cx| {
-                let os = UefiOS {}.os().borrow_mut();
+            poll_fn(move |cx| {
+                let os = os.os().borrow_mut();
                 let (mut net, timer) = RefMut::map_split(os, |os| (&mut os.net, &mut os.timer));
                 net.as_mut().unwrap().poll(&timer);
                 // TODO(veluca): figure out whether we can suspend the task.
@@ -277,30 +281,30 @@ impl UefiOS {
             }),
         );
 
-        os.spawn("[net_speed]", async {
+        os.spawn("[net_speed]", async move {
             let mut prx = 0;
             let mut ptx = 0;
-            let mut ptm = UefiOS {}.timer().instant();
+            let mut ptm = os.timer().instant();
             loop {
                 {
-                    let now = UefiOS {}.timer().instant();
+                    let now = os.timer().instant();
                     let dt = (now - ptm).total_micros() as f64 / 1_000_000.0;
                     ptm = now;
 
-                    let mut net = UefiOS {}.net();
+                    let mut net = os.net();
                     net.vrx = ((net.rx - prx) as f64 / dt) as u64;
                     prx = net.rx;
                     net.vtx = ((net.tx - ptx) as f64 / dt) as u64;
                     ptx = net.tx;
                 }
-                UefiOS {}.sleep_us(1_000_000).await;
+                os.sleep_us(1_000_000).await;
             }
         });
 
-        os.spawn("[draw_ui]", async {
+        os.spawn("[draw_ui]", async move {
             loop {
-                UefiOS {}.draw_ui();
-                UefiOS {}.sleep_us(1_000_000).await;
+                os.draw_ui();
+                os.sleep_us(1_000_000).await;
             }
         });
 
@@ -331,10 +335,9 @@ impl UefiOS {
         RefMut::map(self.os().borrow_mut(), |f| f.net.as_mut().unwrap())
     }
 
-    pub fn wait_for_ip(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+    pub fn wait_for_ip(self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
         poll_fn(move |cx| {
-            let os = UefiOS {};
-            if os.net().has_ip() {
+            if self.net().has_ip() {
                 Poll::Ready(())
             } else {
                 cx.waker().wake_by_ref();
@@ -358,11 +361,10 @@ impl UefiOS {
         })
     }
 
-    pub fn sleep_us(&self, us: u64) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+    pub fn sleep_us(self, us: u64) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
         let tgt = self.timer().micros() as u64 + us;
         poll_fn(move |cx| {
-            let os = UefiOS {};
-            let now = os.timer().micros() as u64;
+            let now = self.timer().micros() as u64;
             if now >= tgt {
                 Poll::Ready(())
             } else {

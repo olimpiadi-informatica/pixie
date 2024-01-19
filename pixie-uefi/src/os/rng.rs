@@ -7,6 +7,12 @@ pub struct Rng {
     rng: Xoshiro256StarStar,
 }
 
+impl Default for Rng {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Rng {
     pub fn new() -> Rng {
         // Try to generate a random number with rdseed up to 10 times, but if that fails, use

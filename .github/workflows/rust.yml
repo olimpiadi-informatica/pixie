@@ -1,0 +1,26 @@
+name: Rust
+
+on: [push, pull_request]
+
+jobs:
+  clippy:
+    name: Format & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Deps
+        run: |
+          rustup toolchain install stable nightly
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustup component add rustfmt clippy rust-src --toolchain nightly
+
+      - name: cargo clippy
+        run: |
+          for t in pixie-*; do
+            pushd $t
+            cargo fmt --check
+            cargo clippy
+            popd
+          done

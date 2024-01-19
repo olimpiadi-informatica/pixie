@@ -271,14 +271,12 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
 
             stats.borrow_mut().recv += 1;
 
+            let msg = UdpRequest::ActionProgress(stats.borrow().recv, stats.borrow().fetch);
             socket
                 .send(
                     server_addr.ip,
                     server_addr.port,
-                    &postcard::to_allocvec(&UdpRequest::ActionProgress(
-                        stats.borrow().recv,
-                        stats.borrow().fetch,
-                    ))?,
+                    &postcard::to_allocvec(&msg)?,
                 )
                 .await?;
         }

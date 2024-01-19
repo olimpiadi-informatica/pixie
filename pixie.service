@@ -10,8 +10,5 @@ ExecStart=/usr/local/bin/pixie-server -s /var/local/lib/pixie/storage
 Environment=RUST_LOG=info
 WorkingDirectory=/var/local/lib/pixie
 
-# Using SIGTERM tokio waits for all connections to close
-KillSignal=SIGINT
-
 [Install]
 WantedBy=multi-user.target

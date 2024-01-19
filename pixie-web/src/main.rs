@@ -315,7 +315,7 @@ fn Images<'a, G: Html>(cx: Scope<'a>, images_signal: &'a ReadSignal<Option<Image
 }
 
 #[component]
-async fn MainView<'a, G: Html>(cx: Scope<'a>) -> View<G> {
+async fn MainView<G: Html>(cx: Scope<'_>) -> View<G> {
     let config_signal = create_signal(cx, None::<Config>);
     let hostmap_signal = create_signal(cx, None::<HashMap<Ipv4Addr, String>>);
     let units_signal = create_signal(cx, None::<Vec<Unit>>);
@@ -337,7 +337,7 @@ async fn MainView<'a, G: Html>(cx: Scope<'a>) -> View<G> {
                 .next()
                 .await
                 .unwrap_or_else(|| {
-                    log(&format!("Websocket closed"));
+                    log("Websocket closed");
                     panic!();
                 })
                 .unwrap_or_else(|err| {

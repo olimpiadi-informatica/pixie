@@ -33,17 +33,17 @@ use super::{timer::Timer, UefiOS};
 
 pub const PACKET_SIZE: usize = 1514;
 
-type SNP = &'static ScopedProtocol<'static, SimpleNetwork>;
+type Snp = &'static ScopedProtocol<'static, SimpleNetwork>;
 
-struct SNPDevice {
-    snp: SNP,
+struct SnpDevice {
+    snp: Snp,
     tx_buf: [u8; PACKET_SIZE],
     // Received packets might contain Ethernet-related padding (up to 4 bytes).
     rx_buf: [u8; PACKET_SIZE + 4],
 }
 
-impl SNPDevice {
-    fn new(snp: SNP) -> SNPDevice {
+impl SnpDevice {
+    fn new(snp: Snp) -> SnpDevice {
         // Shut down the SNP protocol if needed.
         let _ = snp.shutdown();
         let _ = snp.stop();
@@ -59,7 +59,7 @@ impl SNPDevice {
         )
         .unwrap();
 
-        SNPDevice {
+        SnpDevice {
             snp,
             tx_buf: [0; PACKET_SIZE],
             rx_buf: [0; PACKET_SIZE + 4],
@@ -67,7 +67,7 @@ impl SNPDevice {
     }
 }
 
-impl Drop for SNPDevice {
+impl Drop for SnpDevice {
     fn drop(&mut self) {
         self.snp.stop().unwrap()
     }
@@ -78,7 +78,7 @@ struct SnpRxToken<'a> {
 }
 
 struct SnpTxToken<'a> {
-    snp: SNP,
+    snp: Snp,
     buf: &'a mut [u8],
 }
 
@@ -108,7 +108,7 @@ impl<'a> RxToken for SnpRxToken<'a> {
     }
 }
 
-impl Device for SNPDevice {
+impl Device for SnpDevice {
     type TxToken<'d> = SnpTxToken<'d>;
     type RxToken<'d> = SnpRxToken<'d>;
 
@@ -149,7 +149,7 @@ impl Device for SNPDevice {
 
 pub struct NetworkInterface {
     interface: Interface,
-    device: SNPDevice,
+    device: SnpDevice,
     socket_set: SocketSet<'static>,
     dhcp_socket_handle: SocketHandle,
     ephemeral_port_counter: u64,
@@ -172,7 +172,7 @@ impl NetworkInterface {
             ),
             MessageKind::Info,
         );
-        let mut device = SNPDevice::new(Box::leak(Box::new(
+        let mut device = SnpDevice::new(Box::leak(Box::new(
             os.open_protocol_on_device::<SimpleNetwork>(device).unwrap(),
         )));
 
@@ -299,11 +299,13 @@ impl TcpStream {
     }
 
     pub async fn wait_for_state<T>(&self, f: impl Fn(State) -> Option<T>) -> T {
-        let handle = self.handle.clone();
-        let os = self.os.clone();
-
         poll_fn(move |cx| {
-            let state = os.net().socket_set.get_mut::<TcpSocket>(handle).state();
+            let state = self
+                .os
+                .net()
+                .socket_set
+                .get_mut::<TcpSocket>(self.handle)
+                .state();
             let res = f(state);
             if let Some(res) = res {
                 Poll::Ready(res)
@@ -331,13 +333,10 @@ impl TcpStream {
             return Ok(());
         }
 
-        let handle = self.handle.clone();
-        let os = self.os.clone();
-
         let mut pos = 0;
         let send = poll_fn(move |cx| {
-            let mut net = os.net();
-            let socket = net.socket_set.get_mut::<TcpSocket>(handle);
+            let mut net = self.os.net();
+            let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
             let sent = socket.send_slice(&data[pos..]);
             if let Err(err) = sent {
                 return Poll::Ready(Err(Error::TcpSend(err)));
@@ -362,12 +361,9 @@ impl TcpStream {
     /// Returns the number of bytes received (0 if connection is closed on the other end without
     /// receiving any data.
     pub async fn recv(&self, data: &mut [u8]) -> Result<usize> {
-        let handle = self.handle.clone();
-        let os = self.os.clone();
-
         poll_fn(move |cx| {
-            let mut net = os.net();
-            let socket = net.socket_set.get_mut::<TcpSocket>(handle);
+            let mut net = self.os.net();
+            let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
             if !socket.may_recv() {
                 return Poll::Ready(Ok(0));
             }
@@ -477,12 +473,9 @@ impl UdpHandle {
             port,
         };
 
-        let handle = self.handle.clone();
-        let os = self.os.clone();
-
         Ok(poll_fn(move |cx| {
-            let mut net = os.net();
-            let socket = net.socket_set.get_mut::<UdpSocket>(handle);
+            let mut net = self.os.net();
+            let socket = net.socket_set.get_mut::<UdpSocket>(self.handle);
             if !socket.can_send() {
                 socket.register_send_waker(cx.waker());
                 Poll::Pending
@@ -496,13 +489,10 @@ impl UdpHandle {
     }
 
     pub async fn recv<'a>(&self, buf: &'a mut [u8; PACKET_SIZE]) -> (&'a mut [u8], Address) {
-        let handle = self.handle.clone();
-        let os = self.os.clone();
-
         let buf2 = &mut *buf;
         let (len, addr) = poll_fn(move |cx| {
-            let mut net = os.net();
-            let socket = net.socket_set.get_mut::<UdpSocket>(handle);
+            let mut net = self.os.net();
+            let socket = net.socket_set.get_mut::<UdpSocket>(self.handle);
             if !socket.can_recv() {
                 socket.register_recv_waker(cx.waker());
                 Poll::Pending
@@ -516,7 +506,7 @@ impl UdpHandle {
         })
         .await;
 
-        os.net().rx += len as u64;
+        self.os.net().rx += len as u64;
 
         (&mut buf[..len], addr)
     }

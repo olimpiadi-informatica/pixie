@@ -191,11 +191,8 @@ async fn ws(
                 }
                 packet = socket.recv() => {
                     let packet = packet.unwrap().unwrap();
-                    match packet {
-                        Message::Close(_) => {
-                            break 'main_loop;
-                        }
-                        _ => {}
+                    if let Message::Close(_) = packet {
+                        break 'main_loop;
                     }
                 }
             };
@@ -221,7 +218,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             ServeDir::new(&admin_path).append_index_html_on_directories(true),
         )
         .layer(CompressionLayer::new())
-        .layer(ValidateRequestHeaderLayer::basic(&"admin", &password))
+        .layer(ValidateRequestHeaderLayer::basic("admin", password))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
