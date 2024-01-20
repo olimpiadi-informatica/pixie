@@ -50,6 +50,7 @@ pub struct DiskPartition {
 pub struct Disk {
     disk: ScopedProtocol<'static, DiskIo>,
     block: ScopedProtocol<'static, BlockIO>,
+    os: UefiOS,
 }
 
 // TODO(veluca): consider making parts of this actually async, i.e. by using DiskIo2/BlockIO2 if
@@ -72,7 +73,7 @@ impl Disk {
             .expect("Disk not found");
 
         let (disk, block) = open_disk(os, handle).unwrap();
-        Disk { disk, block }
+        Disk { disk, block, os }
     }
 
     pub fn size(&self) -> u64 {
@@ -84,12 +85,14 @@ impl Disk {
     }
 
     pub async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        self.os.schedule().await;
         Ok(self
             .disk
             .read_disk(self.block.media().media_id(), offset, buf)?)
     }
 
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        self.os.schedule().await;
         Ok(self
             .disk
             .write_disk(self.block.media().media_id(), offset, buf)?)
@@ -145,9 +148,12 @@ impl gpt_disk_io::BlockIo for &mut Disk {
         Ok(self.block.media().last_block() + 1)
     }
     fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<()> {
-        Ok(self
-            .block
-            .read_blocks(self.block.media().media_id(), start_lba.0, dst)?)
+        self.disk.read_disk(
+            self.block.media().media_id(),
+            self.block.media().block_size() as u64 * start_lba.0,
+            dst,
+        )?;
+        Ok(())
     }
     fn write_blocks(&mut self, _start_lba: Lba, _src: &[u8]) -> Result<()> {
         unreachable!();
