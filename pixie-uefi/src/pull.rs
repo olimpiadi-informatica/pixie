@@ -203,7 +203,6 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         let mut found = None;
         let mut buf = vec![0; size];
         for &offset in &pos {
-            os.schedule().await;
             disk.read(offset as u64, &mut buf).await.unwrap();
             if blake3::hash(&buf).as_bytes() == &hash {
                 found = Some(offset);
@@ -213,7 +212,6 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         if let Some(found) = found {
             for &offset in &pos {
                 if offset != found {
-                    os.schedule().await;
                     disk.write(offset as u64, &buf).await.unwrap();
                 }
             }
@@ -265,7 +263,6 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
     let task2 = async {
         while let Some((pos, data)) = rx.recv().await {
             for offset in pos {
-                os.schedule().await;
                 disk.write(offset as u64, &data).await?;
             }
 

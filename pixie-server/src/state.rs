@@ -20,7 +20,7 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn get_image_disk_size(image: &Image) -> u64 {
+fn get_image_csize(image: &Image) -> u64 {
     let mut chunks: Vec<_> = image
         .disk
         .iter()
@@ -119,7 +119,7 @@ impl State {
                 }
                 let content = fs::read(&path)?;
                 let image = postcard::from_bytes::<Image>(&content)?;
-                let csize = get_image_disk_size(&image);
+                let csize = get_image_csize(&image);
                 let mut size = 0;
                 for chunk in image.disk {
                     size += chunk.size as u64;
@@ -200,8 +200,8 @@ impl State {
         let path = self.storage_dir.join("images").join(&name);
         let data = postcard::to_allocvec(&image)?;
 
-        let size = get_image_disk_size(&image);
-        let csize = image.disk.iter().map(|chunk| chunk.csize as u64).sum();
+        let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
+        let csize = get_image_csize(&image);
 
         self.image_stats.send_modify(|image_stats| {
             let mut chunk_stats = self.chunk_stats.lock().unwrap();
