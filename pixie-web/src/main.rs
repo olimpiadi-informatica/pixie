@@ -34,20 +34,18 @@ fn send_req(url: String) {
 
 #[component(inline_props)]
 fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> View<G> {
-    let time = create_signal(cx, date_now());
+    let time = create_signal::<i64>(cx, (date_now() * 0.001) as i64);
 
     spawn_local_scoped(cx, async move {
         loop {
-            TimeoutFuture::new(100).await;
-            time.set(date_now());
+            let now = date_now() as i64;
+            TimeoutFuture::new(1000 - (now % 1000) as u32).await;
+            time.set(now / 1000);
         }
     });
 
     let ping_time = unit.last_ping_timestamp as i64;
-    let ping_ago = move || {
-        let now = (*time.get() * 0.001) as i64;
-        now - ping_time
-    };
+    let ping_ago = move || *time.get() - ping_time;
 
     let fmt_ca = move |unit: &Unit| {
         if let Some(a) = unit.curr_action {
