@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DIR=/var/local/lib/pixie/storage
+DIR=/var/local/lib/pixie
 
 mkdir -p $DIR
 
