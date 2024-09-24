@@ -169,7 +169,13 @@ async fn handle_connection(
     let IpAddr::V4(peer_ip) = peer_addr.ip() else {
         bail!("IPv6 is not supported")
     };
-    let peer_mac = find_mac(peer_ip)?;
+    let peer_mac = match find_mac(peer_ip) {
+        Ok(peer_mac) => peer_mac,
+        Err(err) => {
+            log::error!("Error handling tcp connection: {}", err);
+            return Ok(());
+        }
+    };
 
     loop {
         let len = match stream.read_u64_le().await {

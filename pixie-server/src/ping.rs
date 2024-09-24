@@ -20,7 +20,13 @@ pub async fn main(state: &State) -> Result<()> {
         let IpAddr::V4(peer_ip) = peer_addr.ip() else {
             bail!("IPv6 is not supported")
         };
-        let peer_mac = find_mac(peer_ip)?;
+        let peer_mac = match find_mac(peer_ip) {
+            Ok(peer_mac) => peer_mac,
+            Err(err) => {
+                log::error!("Error handling ping packet: {}", err);
+                continue;
+            }
+        };
 
         state.units.send_if_modified(|units| {
             let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
