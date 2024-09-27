@@ -3,3 +3,4 @@ storage/*
 build/*
 buildroot/pixie.tar.gz
 pixie-web/dist
+.*.swp

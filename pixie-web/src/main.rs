@@ -1,207 +1,30 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::net::Ipv4Addr;
-use std::ops::Deref;
+use std::{collections::HashMap, fmt, net::Ipv4Addr};
 
 use futures::StreamExt;
-use gloo_timers::future::TimeoutFuture;
-use pixie_shared::{Config, ImageStat, Unit, WsUpdate};
-use reqwasm::websocket::futures::WebSocket;
-use reqwasm::websocket::Message;
-use sycamore::futures::{spawn_local, spawn_local_scoped};
-use sycamore::prelude::*;
-use wasm_bindgen::prelude::*;
-
-use reqwasm::http::Request;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = Date, js_name = now)]
-    fn date_now() -> f64;
-
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
-}
+use leptos::*;
+use leptos_use::{use_preferred_dark, use_timestamp};
+use pixie_shared::{Config, ImageStat, StatusUpdate, Unit};
+use reqwest::Url;
+use thaw::{
+    Button, ButtonColor, ButtonGroup, ButtonVariant, GlobalStyle, Popover, PopoverPlacement,
+    PopoverTrigger, Space, Table, Theme, ThemeProvider,
+};
 
 fn send_req(url: String) {
+    let url = if url.starts_with("http") {
+        Url::parse(&url).expect("invalid url")
+    } else {
+        let location = window().location();
+        Url::parse(&location.href().expect("no href"))
+            .expect("invalid href")
+            .join(&url)
+            .expect("invalid url")
+    };
     spawn_local(async move {
-        Request::get(&url)
-            .send()
+        reqwest::get(url.clone())
             .await
             .unwrap_or_else(|_| panic!("Request to {} failed", url));
     });
-}
-
-#[component(inline_props)]
-fn UnitInfo<G: Html>(cx: Scope<'_>, unit: Unit, hostname: Option<String>) -> View<G> {
-    let time = create_signal::<i64>(cx, (date_now() * 0.001) as i64);
-
-    spawn_local_scoped(cx, async move {
-        loop {
-            let now = date_now() as i64;
-            TimeoutFuture::new(1000 - (now % 1000) as u32).await;
-            time.set(now / 1000);
-        }
-    });
-
-    let ping_time = unit.last_ping_timestamp as i64;
-    let ping_ago = move || *time.get() - ping_time;
-
-    let fmt_ca = move |unit: &Unit| {
-        if let Some(a) = unit.curr_action {
-            if let Some((x, y)) = unit.curr_progress {
-                format!("{} ({}/{})", a, x, y)
-            } else {
-                a.to_string()
-            }
-        } else {
-            format!(
-                "ping: {} seconds ago, {}",
-                ping_ago(),
-                String::from_utf8_lossy(&unit.last_ping_msg)
-            )
-        }
-    };
-
-    let led_class = move || match ping_ago() {
-        ..=-1 => "led-blue",
-        0..=119 => "led-green",
-        120..=299 => "led-yellow",
-        300.. => "led-red",
-    };
-
-    let mac = unit.mac.to_string();
-    let mac_nocolon = mac.replace(':', "");
-
-    let id_pull = format!("machine-{mac_nocolon}-pull");
-    let url_pull = format!("/admin/action/{mac}/pull");
-    let id_push = format!("machine-{mac_nocolon}-push");
-    let url_push = format!("/admin/action/{mac}/push");
-    let id_boot = format!("machine-{mac_nocolon}-boot");
-    let url_boot = format!("/admin/action/{mac}/reboot");
-    let id_cancel = format!("machine-{mac_nocolon}-cancel");
-    let url_cancel = format!("/admin/action/{mac}/wait");
-    let id_register = format!("machine-{mac_nocolon}-register");
-    let url_register = format!("/admin/action/{mac}/register");
-
-    let image = unit.image.clone();
-    view! { cx,
-        tr {
-            td {
-                div(class=format!("{} tooltip", led_class())) {
-                    span(class="tooltiptext") { (ping_ago()) " seconds ago" }
-                }
-            }
-            td { (hostname.clone().unwrap_or_default()) }
-            td { (unit.mac) }
-            td { (image) }
-            td { "row " (unit.row) " col " (unit.col) }
-            td { (unit.next_action) }
-            td {
-                button(id=id_pull, on:click=move |_| send_req(url_pull.clone()) ) {
-                    "flash"
-                }
-            }
-            td {
-                button(id=id_push, on:click=move |_| send_req(url_push.clone()) ) {
-                    "store"
-                }
-            }
-            td {
-                button(id=id_boot, on:click=move |_| send_req(url_boot.clone()) ) {
-                    "reboot"
-                }
-            }
-            td {
-                button(id=id_cancel, on:click=move |_| send_req(url_cancel.clone()) ) {
-                    "wait"
-                }
-            }
-            td {
-                button(id=id_register, on:click=move |_| send_req(url_register.clone()) ) {
-                    "re-register"
-                }
-            }
-            td { (fmt_ca(&unit)) }
-        }
-    }
-}
-
-#[component(inline_props)]
-fn GroupInfo<'a, G: Html>(
-    cx: Scope<'a>,
-    units: Vec<Unit>,
-    group_id: u8,
-    group_name: String,
-    images: Vec<String>,
-    hostmap: HashMap<Ipv4Addr, String>,
-) -> View<G> {
-    let group_units = create_memo(cx, move || {
-        let mut units = units
-            .iter()
-            .filter(|x| x.group == group_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        units.sort_by_key(|x| (x.row, x.col, x.mac));
-        units
-    });
-
-    let id_pull = format!("group-{group_name}-pull");
-    let url_pull = format!("/admin/action/{group_name}/pull");
-    let id_boot = format!("group-{group_name}-boot");
-    let url_boot = format!("/admin/action/{group_name}/reboot");
-    let id_cancel = format!("group-{group_name}-cancel");
-    let url_cancel = format!("/admin/action/{group_name}/wait");
-
-    let set_images = View::new_fragment(
-        images
-            .iter()
-            .map(|image| {
-                let url = format!("/admin/image/{group_name}/{image}");
-                let text = format!("Set image to {:?}", image);
-                view! { cx,
-                    button(on:click=move |_| send_req(url.clone())) {
-                        (text)
-                    }
-                }
-            })
-            .collect(),
-    );
-
-    view! { cx,
-        h2 { (group_name) }
-        button(id=id_pull, on:click=move |_| send_req(url_pull.clone()) ) {
-            "Pull image on all machines"
-        }
-        button(id=id_boot, on:click=move |_| send_req(url_boot.clone()) ) {
-            "Set all machines to boot into the OS"
-        }
-        button(id=id_cancel, on:click=move |_| send_req(url_cancel.clone()) ) {
-            "Set all machines to wait for next command"
-        }
-        (set_images)
-        table {
-            tr {
-                th { }
-                th { "hostname" }
-                th { "mac" }
-                th { "image" }
-                th { "position" }
-                th { "next action" }
-                th(colspan=5) { "change action" }
-                th { "current action" }
-            }
-            Indexed(
-                iterable=group_units,
-                view=move |cx, x| {
-                    let hostname = hostmap.get(&x.static_ip()).cloned();
-                    view! { cx,
-                        UnitInfo(unit=x, hostname=hostname)
-                    }
-                },
-            )
-        }
-    }
 }
 
 struct Bytes(u64);
@@ -220,193 +43,337 @@ impl fmt::Display for Bytes {
     }
 }
 
-#[component(inline_props)]
-fn Images<'a, G: Html>(cx: Scope<'a>, images_signal: &'a ReadSignal<Option<ImageStat>>) -> View<G> {
-    let make_image_row = move |name: String, image: (u64, u64)| {
-        let id_pull = format!("image-{name}-pull");
+#[component]
+fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
+    let image_row = move |(name, image): (String, (u64, u64))| {
         let url_pull = format!("/admin/action/{name}/pull");
-        let id_boot = format!("image-{name}-boot");
         let url_boot = format!("/admin/action/{name}/reboot");
-        let id_cancel = format!("image-{name}-cancel");
         let url_cancel = format!("/admin/action/{name}/wait");
-        view! { cx, tr {
-            td { (name) }
-            td { (Bytes(image.0)) }
-            td { (Bytes(image.1)) }
-            td {
-                button(id=id_pull, on:click=move |_| send_req(url_pull.clone()) ) {
-                    "Pull image on all machines"
-                }
-            }
-            td {
-                button(id=id_boot, on:click=move |_| send_req(url_boot.clone()) ) {
-                    "Set all machines to boot into the OS"
-                }
-            }
-            td {
-                button(id=id_cancel, on:click=move |_| send_req(url_cancel.clone()) ) {
-                    "Set all machines to wait for next command"
-                }
-            }
-          }
+        view! {
+            <tr>
+                <td>{name}</td>
+                <td>{Bytes(image.0).to_string()}</td>
+                <td>{Bytes(image.1).to_string()}</td>
+                <td>
+                    <ButtonGroup>
+                        <Button
+                            color=ButtonColor::Error
+                            on_click=move |_| send_req(url_pull.clone())
+                        >
+                            "Flash all machines"
+                        </Button>
+                        <Button
+                            color=ButtonColor::Success
+                            on_click=move |_| send_req(url_boot.clone())
+                        >
+                            "Set all machines to boot into the OS"
+                        </Button>
+                        <Button
+                            color=ButtonColor::Primary
+                            on_click=move |_| send_req(url_cancel.clone())
+                        >
+                            "Set all machines to wait for next command"
+                        </Button>
+                    </ButtonGroup>
+                </td>
+            </tr>
         }
     };
 
-    let images_table = move || {
-        View::new_fragment(
-            images_signal
-                .get()
-                .deref()
-                .as_ref()
-                .map(|images| {
-                    images
-                        .images
-                        .iter()
-                        .map(|(name, image)| make_image_row(name.clone(), *image))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        )
-    };
+    let total_csize = move || images.get().as_ref().map(|images| images.total_csize);
 
-    let total_csize = move || {
-        images_signal
-            .get()
-            .deref()
-            .as_ref()
-            .map(|images| images.total_csize)
-    };
+    let reclaimable = move || images.get().as_ref().map(|images| images.reclaimable);
 
-    let reclaimable = move || {
-        images_signal
-            .get()
-            .deref()
-            .as_ref()
-            .map(|images| images.reclaimable)
-    };
-
-    view! { cx,
-        h1 { "Images" }
-        table {
-            tr {
-                th { "Image" }
-                th { "Size" }
-                th { "Compressed" }
-            }
-            (images_table())
-            tr {
-                td { "Total" }
-                td { (Bytes(total_csize().unwrap_or_default())) }
-            }
-            tr {
-                td { "Reclaimable" }
-                td { (Bytes(reclaimable().unwrap_or_default())) }
-                td { }
-                td {
-                    button(id="reclaime", on:click=move |_| send_req("/admin/gc".into()) ) {
+    view! {
+        <h1>"Images"</h1>
+        <Table>
+            <tr>
+                <th>"Image"</th>
+                <th>"Size"</th>
+                <th>"Compressed"</th>
+                <th></th>
+            </tr>
+            <For
+                each=move || images.get().map(|x| x.images.clone()).unwrap_or_default()
+                key=|x| x.clone()
+                children=image_row
+            />
+            <tr>
+                <td>"Total"</td>
+                <td>{move || Bytes(total_csize().unwrap_or_default()).to_string()}</td>
+                <td></td>
+            </tr>
+            <tr>
+                <td>"Reclaimable"</td>
+                <td>{move || Bytes(reclaimable().unwrap_or_default()).to_string()}</td>
+                <td></td>
+                <td>
+                    <Button
+                        color=ButtonColor::Primary
+                        on_click=move |_| send_req("/admin/gc".into())
+                    >
                         "Reclaim disk space"
-                    }
+                    </Button>
+                </td>
+            </tr>
+        </Table>
+    }
+}
+#[component]
+fn Group(
+    #[prop(into)] units: Signal<Vec<Unit>>,
+    #[prop(into)] group_name: Signal<String>,
+    images: Signal<Vec<String>>,
+    hostmap: Signal<HashMap<Ipv4Addr, String>>,
+    #[prop(into)] time: Signal<i64>,
+) -> impl IntoView {
+    let render_unit = move |idx: usize| {
+        let unit = create_memo(move |_| units.get()[idx].clone());
+        let ping_ago = move || time.get() - unit.get().last_ping_timestamp as i64;
+
+        let mac = move || unit.get().mac.to_string();
+        let url_pull = move || format!("/admin/action/{}/pull", mac());
+        let url_push = move || format!("/admin/action/{}/push", mac());
+        let url_boot = move || format!("/admin/action/{}/reboot", mac());
+        let url_cancel = move || format!("/admin/action/{}/wait", mac());
+        let url_register = move || format!("/admin/action/{}/register", mac());
+
+        let fmt_ca = move || {
+            let unit = unit.get();
+            if let Some(a) = unit.curr_action {
+                if let Some((x, y)) = unit.curr_progress {
+                    format!("{} ({}/{})", a, x, y)
+                } else {
+                    a.to_string()
                 }
+            } else {
+                format!(
+                    "ping: {} seconds ago, {}",
+                    ping_ago(),
+                    String::from_utf8_lossy(&unit.last_ping_msg)
+                )
             }
+        };
+
+        let led_class = move || match ping_ago() {
+            ..=-1 => "led-blue",
+            0..=119 => "led-green",
+            120..=299 => "led-yellow",
+            300.. => "led-red",
+        };
+        view! {
+            <tr>
+                <td>
+                    <Popover tooltip=true placement=PopoverPlacement::Right>
+                        <PopoverTrigger slot>
+                            <div class=led_class></div>
+                        </PopoverTrigger>
+                        {move || format!("{} seconds ago", ping_ago())}
+                    </Popover>
+                </td>
+                <td>
+                    {move || {
+                        hostmap.get().get(&unit.get().static_ip()).cloned().unwrap_or_default()
+                    }}
+                </td>
+                <td>{move || unit.get().mac.to_string()}</td>
+                <td>{move || unit.get().image}</td>
+                <td>{move || format!("row {} col {}", unit.get().row, unit.get().col)}</td>
+                <td>{move || unit.get().next_action.to_string()}</td>
+                <td>
+                    <ButtonGroup>
+                        <Button color=ButtonColor::Error on_click=move |_| send_req(url_pull())>
+                            "flash"
+                        </Button>
+                        <Button color=ButtonColor::Warning on_click=move |_| send_req(url_push())>
+                            "store"
+                        </Button>
+                        <Button color=ButtonColor::Success on_click=move |_| send_req(url_boot())>
+                            "reboot"
+                        </Button>
+                        <Button color=ButtonColor::Primary on_click=move |_| send_req(url_cancel())>
+                            "wait"
+                        </Button>
+                        <Button
+                            variant=ButtonVariant::Outlined
+                            on_click=move |_| send_req(url_register())
+                        >
+                            "re-register"
+                        </Button>
+                    </ButtonGroup>
+                </td>
+                <td class="expand">{fmt_ca}</td>
+            </tr>
         }
+        .into_view()
+    };
+
+    let url_pull = move || format!("/admin/action/{}/pull", group_name.get());
+    let url_boot = move || format!("/admin/action/{}/reboot", group_name.get());
+    let url_cancel = move || format!("/admin/action/{}/wait", group_name.get());
+
+    let image_button = move |image: String| {
+        let text = format!("Set image to {:?}", image);
+        let url = move || format!("/admin/image/{}/{}", group_name.get(), image);
+        view! {
+            <Button color=ButtonColor::Error on_click=move |_| send_req(url())>
+                {text}
+            </Button>
+        }
+    };
+
+    view! {
+        <h1>{group_name}</h1>
+        <Space vertical=true>
+            <ButtonGroup>
+                <Button color=ButtonColor::Error on_click=move |_| send_req(url_pull())>
+                    "Flash all machines"
+                </Button>
+                <Button color=ButtonColor::Success on_click=move |_| send_req(url_boot())>
+                    "Set all machines to boot into the OS"
+                </Button>
+                <Button color=ButtonColor::Primary on_click=move |_| send_req(url_cancel())>
+                    "Set all machines to wait for next command"
+                </Button>
+                <For each=move || images.get() key=|x| x.clone() children=image_button/>
+            </ButtonGroup>
+            <Table>
+                <tr>
+                    <th></th>
+                    <th>"hostname"</th>
+                    <th>"mac"</th>
+                    <th>"image"</th>
+                    <th>"position"</th>
+                    <th>"next action"</th>
+                    <th>"change action"</th>
+                    <th>"current action"</th>
+                </tr>
+                <For each=move || 0..units.get().len() key=|x| *x children=render_unit/>
+            </Table>
+        </Space>
     }
 }
 
 #[component]
-async fn MainView<G: Html>(cx: Scope<'_>) -> View<G> {
-    let config_signal = create_signal(cx, None::<Config>);
-    let hostmap_signal = create_signal(cx, None::<HashMap<Ipv4Addr, String>>);
-    let units_signal = create_signal(cx, None::<Vec<Unit>>);
-    let images_signal = create_signal(cx, None::<ImageStat>);
+fn App() -> impl IntoView {
+    let (config, set_config) = create_signal(None::<Config>);
+    let (hostmap, set_hostname) = create_signal(None::<HashMap<Ipv4Addr, String>>);
+    let (units, set_units) = create_signal(None::<Vec<Unit>>);
+    let (image_stats, set_image_stats) = create_signal(None::<ImageStat>);
 
-    spawn_local_scoped(cx, async move {
-        let url = format!(
-            "ws://{}/admin/ws",
-            web_sys::window().unwrap().location().host().unwrap()
-        );
-
-        let mut ws = WebSocket::open(&url).unwrap_or_else(|err| {
-            log(&format!("Failed to open websocket: {:?}", err));
-            panic!();
-        });
-
-        loop {
-            let msg = ws
-                .next()
-                .await
-                .unwrap_or_else(|| {
-                    log("Websocket closed");
-                    panic!();
-                })
-                .unwrap_or_else(|err| {
-                    log(&format!("Websocket error: {:?}", err));
-                    panic!();
-                });
-
-            match msg {
-                Message::Text(text) => {
-                    let update: WsUpdate = serde_json::from_str(&text).unwrap_or_else(|err| {
-                        log(&format!("Failed to parse websocket message: {:?}", err));
-                        panic!();
-                    });
-
-                    match update {
-                        WsUpdate::Config(config) => {
-                            config_signal.set(Some(config));
-                        }
-                        WsUpdate::HostMap(hostmap) => {
-                            hostmap_signal.set(Some(hostmap));
-                        }
-                        WsUpdate::Units(units) => {
-                            units_signal.set(Some(units));
-                        }
-                        WsUpdate::ImageStats(images) => {
-                            images_signal.set(Some(images));
-                        }
-                    }
-                }
-                Message::Bytes(_) => {
-                    panic!("Unexpected binary message")
-                }
-            }
-        }
+    let images = Signal::derive(move || {
+        config
+            .get()
+            .map(|x| x.images.clone())
+            .unwrap_or_else(Vec::new)
     });
 
-    let groups = move || {
-        let config_opt = config_signal.get().deref().clone();
-        let units_opt = units_signal.get().deref().clone();
+    let location =
+        Url::parse(&window().location().href().expect("no href")).expect("invalid url href");
+    let status_url = location
+        .join("admin/status")
+        .expect("could not make relative URL");
 
-        View::new_fragment(
-            config_opt
-                .zip(units_opt)
-                .map(|(config, units)| {
-                    config.groups
-                        .iter()
-                        .map(|(name, id)| {
-                            let units = units.clone();
-                            let images = config.images.clone();
-                            let hostmap = hostmap_signal.get().deref().clone().unwrap_or_default();
-                            view! { cx,
-                            GroupInfo(units=units, group_id=*id, group_name=name.clone(), images=images, hostmap=hostmap) }
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        )
+    let handle_message = move |msg| match msg {
+        StatusUpdate::Units(u) => {
+            set_units.set(Some(u));
+        }
+        StatusUpdate::Config(c) => {
+            set_config.set(Some(c));
+        }
+        StatusUpdate::HostMap(h) => {
+            set_hostname.set(Some(h));
+        }
+        StatusUpdate::ImageStats(i) => {
+            set_image_stats.set(Some(i));
+        }
     };
 
-    view! { cx,
-        Images(images_signal=images_signal)
+    spawn_local(async move {
+        let stream = reqwest::get(status_url)
+            .await
+            .expect("could not connect to server");
+        let mut buf = vec![];
+        stream
+            .bytes_stream()
+            .for_each(|x| {
+                let data = x.unwrap();
+                let mut data = &data[..];
+                while let Some((newline_pos, _)) =
+                    data.iter().enumerate().find(|(_, x)| **x == b'\n')
+                {
+                    buf.extend_from_slice(&data[..newline_pos]);
+                    let msg: StatusUpdate =
+                        serde_json::from_slice(&buf).expect("invalid message from server");
+                    buf.clear();
+                    handle_message(msg);
+                    data = &data[newline_pos + 1..];
+                }
+                buf.extend_from_slice(data);
 
-        h1 { "Groups" }
-        (groups())
+                async {}
+            })
+            .await;
+    });
+
+    let time = use_timestamp();
+    let time_in_seconds = create_memo(move |_| (time.get() * 0.001) as i64);
+
+    let render_group = move |id: u8| {
+        let group_name = create_memo(move |_| {
+            config
+                .get()
+                .unwrap()
+                .groups
+                .get_by_second(&id)
+                .unwrap()
+                .clone()
+        });
+        let units = create_memo(move |_| -> Vec<_> {
+            units
+                .get()
+                .unwrap_or_else(Vec::new)
+                .iter()
+                .filter(|x| x.group == id)
+                .cloned()
+                .collect()
+        });
+        let hostmap = Signal::derive(move || hostmap.get().unwrap_or_else(HashMap::new));
+        view! { <Group units group_name images hostmap time=time_in_seconds/> }.into_view()
+    };
+
+    view! {
+        <Images images=image_stats/>
+        <For
+            each=move || {
+                config.get().clone().into_iter().flat_map(|x| x.groups.into_iter().map(|x| x.1))
+            }
+            key=|x| *x
+            children=render_group
+        />
     }
 }
 
 fn main() {
-    sycamore::render(|cx| {
-        view! { cx,
-            MainView {}
-        }
+    console_error_panic_hook::set_once();
+    console_log::init_with_level(log::Level::Debug).unwrap();
+
+    let dark_mode = use_preferred_dark();
+    let theme = create_rw_signal(Theme::dark());
+    create_effect(move |_| {
+        theme.set(if dark_mode.get() {
+            Theme::dark()
+        } else {
+            Theme::light()
+        })
     });
+
+    mount_to_body(move || {
+        view! {
+            <ThemeProvider theme>
+                <GlobalStyle />
+                <App/>
+            </ThemeProvider>
+        }
+    })
 }

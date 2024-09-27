@@ -2,23 +2,21 @@ use std::{net::Ipv4Addr, sync::Arc};
 
 use anyhow::Result;
 use axum::{
-    extract::{
-        self,
-        ws::{self, Message},
-        Path,
-    },
+    body::Body,
+    extract::{self, Path},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
     Router,
 };
+use futures::StreamExt;
 use macaddr::MacAddr6;
 
-use pixie_shared::{HttpConfig, WsUpdate};
+use pixie_shared::{HttpConfig, StatusUpdate};
 use tokio::net::TcpListener;
+use tokio_stream::wrappers::WatchStream;
 use tower_http::{
-    compression::CompressionLayer, services::ServeDir, trace::TraceLayer,
-    validate_request::ValidateRequestHeaderLayer,
+    services::ServeDir, trace::TraceLayer, validate_request::ValidateRequestHeaderLayer,
 };
 
 use crate::state::State;
@@ -146,58 +144,26 @@ async fn gc(extract::State(state): extract::State<Arc<State>>) -> String {
     "".to_owned()
 }
 
-async fn ws(
-    extract::State(state): extract::State<Arc<State>>,
-    ws: extract::ws::WebSocketUpgrade,
-) -> axum::response::Response {
-    ws.on_upgrade(move |mut socket| async move {
-        let msg = WsUpdate::Config(state.config.clone());
-        let msg = serde_json::to_string(&msg).unwrap();
-        let msg = Message::Text(msg);
-        socket.send(msg).await.unwrap();
+async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
+    let initial_messages = vec![
+        StatusUpdate::Config(state.config.clone()),
+        StatusUpdate::HostMap(state.hostmap.clone()),
+    ];
+    let mut units_rx = state.units.subscribe();
+    units_rx.mark_changed();
+    let units_rx = WatchStream::new(units_rx);
 
-        let msg = WsUpdate::HostMap(state.hostmap.clone());
-        let msg = serde_json::to_string(&msg).unwrap();
-        let msg = Message::Text(msg);
-        socket.send(msg).await.unwrap();
+    let mut image_rx = state.image_stats.subscribe();
+    image_rx.mark_changed();
+    let image_rx = WatchStream::new(image_rx);
 
-        let mut units_rx = state.units.subscribe();
-        units_rx.mark_changed();
-
-        let mut image_rx = state.image_stats.subscribe();
-        image_rx.mark_changed();
-
-        'main_loop: loop {
-            tokio::select! {
-                ret = units_rx.changed() => {
-                    ret.unwrap();
-                    let msg = {
-                        let units = units_rx.borrow_and_update();
-                        let msg = WsUpdate::Units(units.clone());
-                        let msg = serde_json::to_string(&msg).unwrap();
-                        ws::Message::Text(msg)
-                    };
-                    socket.send(msg).await.unwrap();
-                }
-                ret = image_rx.changed() => {
-                    ret.unwrap();
-                    let msg = {
-                        let image_stats = image_rx.borrow_and_update();
-                        let msg = WsUpdate::ImageStats(image_stats.clone());
-                        let msg = serde_json::to_string(&msg).unwrap();
-                        ws::Message::Text(msg)
-                    };
-                    socket.send(msg).await.unwrap();
-                }
-                packet = socket.recv() => {
-                    let packet = packet.unwrap().unwrap();
-                    if let Message::Close(_) = packet {
-                        break 'main_loop;
-                    }
-                }
-            };
-        }
-    })
+    let messages =
+        futures::stream::iter(initial_messages.into_iter()).chain(futures::stream::select(
+            image_rx.map(|x| StatusUpdate::ImageStats(x)),
+            units_rx.map(|x| StatusUpdate::Units(x)),
+        ));
+    let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
+    Body::from_stream(lines)
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
@@ -209,7 +175,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let admin_path = state.storage_dir.join("admin");
 
     let router = Router::new()
-        .route("/admin/ws", get(ws))
+        .route("/admin/status", get(status))
         .route("/admin/gc", get(gc))
         .route("/admin/action/:unit/:action", get(action))
         .route("/admin/image/:unit/:image", get(image))
@@ -217,7 +183,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             "/",
             ServeDir::new(&admin_path).append_index_html_on_directories(true),
         )
-        .layer(CompressionLayer::new())
         .layer(ValidateRequestHeaderLayer::basic("admin", password))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
