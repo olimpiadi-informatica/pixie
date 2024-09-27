@@ -126,7 +126,7 @@ pub enum TcpRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg(feature = "std")]
-pub enum WsUpdate {
+pub enum StatusUpdate {
     Config(config::Config),
     HostMap(HashMap<Ipv4Addr, String>),
     Units(Vec<Unit>),
