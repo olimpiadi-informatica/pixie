@@ -30,34 +30,10 @@
     box-shadow: inset #006 0 0 5px 1px;
 }
 
-.tooltip {
-    position: relative;
+.expand {
+  width: 100%;
 }
 
-.tooltip .tooltiptext {
-    visibility: hidden;
-    width: 180px;
-    background-color: black;
-    color: #fff;
-    text-align: center;
-    border-radius: 6px;
-    padding: 5px 0;
-    position: absolute;
-    z-index: 1;
-    top: -8.25px;
-    left: 180%;
-}
-.tooltip:hover .tooltiptext {
-    visibility: visible;
-}
-
-.tooltip .tooltiptext::after {
-    content: "";
-    position: absolute;
-    top: 50%;
-    right: 100%;
-    margin-top: -5px;
-    border-width: 5px;
-    border-style: solid;
-    border-color: transparent black transparent transparent;
+.thaw-button {
+  white-space: nowrap;
 }
