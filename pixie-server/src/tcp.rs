@@ -64,7 +64,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                             col: station.col,
                             curr_action: None,
                             curr_progress: None,
-                            next_action: ActionKind::Register,
+                            next_action: ActionKind::Wait,
                             image: station.image,
                             last_ping_timestamp: 0,
                             last_ping_msg: Vec::new(),
