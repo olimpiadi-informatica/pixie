@@ -13,9 +13,10 @@ use tokio::{
 
 use anyhow::{anyhow, bail, ensure, Result};
 
-use pixie_shared::{DhcpMode, HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, PACKET_LEN};
-
 use crate::{find_mac, find_network, state::State};
+use pixie_shared::{
+    HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
+};
 
 async fn broadcast_chunks(
     state: &State,
@@ -68,7 +69,7 @@ async fn broadcast_chunks(
             let mut xor = [[0; BODY_LEN]; 32];
 
             let hosts_cfg = &state.config.hosts;
-            let chunks_addr = SocketAddrV4::new(ip, hosts_cfg.chunks_port);
+            let chunks_addr = SocketAddrV4::new(ip, CHUNKS_PORT);
 
             for index in 0..num_packets {
                 write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
@@ -86,7 +87,7 @@ async fn broadcast_chunks(
                 let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
                 wait_for +=
-                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.bits_per_second;
+                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
             }
 
             for (index, body) in xor.iter().enumerate().take(num_packets) {
@@ -98,7 +99,7 @@ async fn broadcast_chunks(
                 let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
                 ensure!(sent_len == 34 + len, "Could not send packet");
                 wait_for +=
-                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.bits_per_second;
+                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
             }
         }
     }
@@ -154,7 +155,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
             groups: state.config.groups.clone(),
         };
         let data = postcard::to_allocvec(&hint)?;
-        let hint_addr = SocketAddrV4::new(ip, state.config.hosts.hint_port);
+        let hint_addr = SocketAddrV4::new(ip, HINT_PORT);
         socket.send_to(&data, hint_addr).await?;
         time::sleep(Duration::from_secs(1)).await;
     }
@@ -203,10 +204,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 }
 
 pub async fn main(state: &State) -> Result<()> {
-    let network = find_network(match state.config.dhcp.mode {
-        DhcpMode::Static(low, _) => low,
-        DhcpMode::Proxy(ip) => ip,
-    })?;
+    let (_, network) = find_network(state.config.hosts.listen_on)?;
 
     let (tx, rx) = mpsc::channel(128);
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;

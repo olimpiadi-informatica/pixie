@@ -75,7 +75,8 @@ fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     bail!("Mac address not found");
 }
 
-fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
+/// Find the network where the server has the given IP.
+fn find_network(ip: Ipv4Addr) -> Result<(String, Ipv4Net)> {
     for interface in Interface::get_all()? {
         for address in &interface.addresses {
             let Some(IpAddr::V4(addr)) = address.addr.map(|x| x.ip()) else {
@@ -85,12 +86,12 @@ fn find_network(peer_ip: Ipv4Addr) -> Result<Ipv4Net> {
                 continue;
             };
             let network = Ipv4Net::with_netmask(addr, mask).expect("invalid network mask");
-            if network.contains(&peer_ip) {
-                return Ok(network);
+            if addr == ip {
+                return Ok((interface.name.clone(), network));
             }
         }
     }
-    bail!("Could not find the network for {}", peer_ip);
+    bail!("Could not find the network for {}", ip);
 }
 
 #[derive(Parser, Debug)]

@@ -10,7 +10,7 @@ use crate::os::{
     error::{Error, Result},
     MessageKind, UefiOS, PACKET_SIZE,
 };
-use pixie_shared::{Address, HintPacket, Station, TcpRequest};
+use pixie_shared::{Address, HintPacket, Station, TcpRequest, HINT_PORT};
 
 #[derive(Debug, Default)]
 struct Data {
@@ -18,7 +18,7 @@ struct Data {
     selected: usize,
 }
 
-pub async fn register(os: UefiOS, server_addr: Address, hint_port: u16) -> Result<()> {
+pub async fn register(os: UefiOS, server_addr: Address) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
     let data2 = data.clone();
 
@@ -62,7 +62,7 @@ pub async fn register(os: UefiOS, server_addr: Address, hint_port: u16) -> Resul
         );
     });
 
-    let udp = os.udp_bind(Some(hint_port)).await?;
+    let udp = os.udp_bind(Some(HINT_PORT)).await?;
     let mut buf = [0; PACKET_SIZE];
 
     let mut hint = true;

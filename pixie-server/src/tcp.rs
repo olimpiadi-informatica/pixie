@@ -64,7 +64,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                             col: station.col,
                             curr_action: None,
                             curr_progress: None,
-                            next_action: state.config.boot.default,
+                            next_action: ActionKind::Register,
                             image: station.image,
                             last_ping_timestamp: 0,
                             last_ping_msg: Vec::new(),
@@ -119,22 +119,19 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                         action_kind = unit.next_action;
                     }
                     None => {
-                        action_kind = state.config.boot.unregistered;
+                        action_kind = ActionKind::Register;
                         modified = false;
                     }
                 }
 
                 action = match action_kind {
                     ActionKind::Reboot => Action::Reboot,
-                    ActionKind::Register => Action::Register {
-                        hint_port: state.config.hosts.hint_port,
-                    },
+                    ActionKind::Register => Action::Register,
                     ActionKind::Push => Action::Push {
                         image: unit.unwrap().image.clone(),
                     },
                     ActionKind::Pull => Action::Pull {
                         image: unit.unwrap().image.clone(),
-                        chunks_port: state.config.hosts.chunks_port,
                     },
                     ActionKind::Wait => Action::Wait,
                 };

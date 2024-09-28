@@ -12,42 +12,26 @@ use std::{
 
 use crate::Bijection;
 
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "lowercase")]
-pub enum DhcpMode {
-    /// Unknown clients will be assigned IPs in the specified range.
-    Static(Ipv4Addr, Ipv4Addr),
-    /// Unknown clients are assumed to receive an IP address by another DHCP server.
-    /// The specified IP must belong to the network on which the other DHCP server gives IPs,
-    /// and the DHCP interface must have an IP on this network.
-    Proxy(Ipv4Addr),
-}
-
 /// Registered clients will always be assigned an IP in the form
 /// 10.{group_id}.{column_id}.{row_id}.
 /// Note that for this to work, the specified network interface must have an IP on the 10.0.0.0/8
 /// subnet; BEWARE that dnsmasq can be picky about the order of IP addresses.
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-pub struct DhcpConfig {
-    /// IP behaviour of unregistered clients and while running pixie itself.
-    pub mode: DhcpMode,
-    /// Name of the interface on which clients are reachable.
-    pub interface: String,
+pub struct HostsConfig {
+    /// Listen on address
+    pub listen_on: Ipv4Addr,
+    /// Enables DHCP server for unregistered clients.
+    pub static_dhcp: Option<(Ipv4Addr, Ipv4Addr)>,
     /// Hosts file to use for DHCP hostnames.
     pub hostsfile: Option<PathBuf>,
+
+    pub broadcast_speed: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpConfig {
     pub listen_on: SocketAddrV4,
     pub password: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostsConfig {
-    pub chunks_port: u16,
-    pub hint_port: u16,
-    pub bits_per_second: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,18 +71,10 @@ impl Display for ActionKind {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-pub struct BootConfig {
-    pub unregistered: ActionKind,
-    pub default: ActionKind,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub dhcp: DhcpConfig,
-    pub http: HttpConfig,
     pub hosts: HostsConfig,
-    pub boot: BootConfig,
+    pub http: HttpConfig,
     pub groups: Bijection<String, u8>,
     pub images: Vec<String>,
 }

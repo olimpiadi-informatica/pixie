@@ -2,17 +2,16 @@ use std::{
     fs::File,
     io::{BufWriter, Error, Write},
     net::Ipv4Addr,
-    ops::Deref,
     process::{Child, Command},
     sync::Arc,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use macaddr::MacAddr6;
-use pixie_shared::{DhcpMode, Unit};
+use pixie_shared::Unit;
 
-use crate::state::State;
+use crate::{find_network, state::State};
 
 struct DnsmasqHandle {
     child: Child,
@@ -36,13 +35,16 @@ impl Drop for DnsmasqHandle {
 }
 
 async fn write_config(state: &State) -> Result<()> {
-    let name = state.config.dhcp.interface.deref();
+    let (name, _) = find_network(state.config.hosts.listen_on)?;
 
     let mut dnsmasq_conf = File::create(state.storage_dir.join("dnsmasq.conf"))?;
 
-    let dhcp_dynamic_conf = match state.config.dhcp.mode {
-        DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
-        DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{},proxy", ip),
+    let dhcp_dynamic_conf = match state.config.hosts.static_dhcp {
+        Some((low, high)) => format!("dhcp-range=tag:netboot,{low},{high}"),
+        None => format!(
+            "dhcp-range=tag:netboot,{},proxy",
+            state.config.hosts.listen_on
+        ),
     };
 
     write!(
@@ -123,7 +125,8 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             ))
             .arg("--log-dhcp")
             .arg("--no-daemon")
-            .spawn()?,
+            .spawn()
+            .context("Failed to start dnsmasq")?,
     };
 
     loop {

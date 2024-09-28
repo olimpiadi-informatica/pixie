@@ -54,7 +54,7 @@ impl State {
         };
 
         let mut hostmap = HashMap::new();
-        if let Some(hostsfile) = &config.dhcp.hostsfile {
+        if let Some(hostsfile) = &config.hosts.hostsfile {
             let hosts = hostfile::parse_file(hostsfile)
                 .map_err(|e| anyhow!("Error parsing host file: {e}"))?;
             for host in hosts {

@@ -1,21 +1,14 @@
-dhcp:
-  interface: br0
-  mode: !proxy 192.168.1.100
-  #mode: !static [10.187.100.1, 10.187.200.200]
+hosts:
+  listen_on: 10.0.0.1
+  #static_dhcp: [10.187.100.1, 10.187.200.200]
   hostsfile: /etc/hosts
+  broadcast_speed: 52428800
 http:
   listen_on: 0.0.0.0:8080
   password: secret
-hosts:
-  chunks_port: 4041
-  hint_port: 4042
-  bits_per_second: 52428800
 groups:
   - [room0, 0]
   - [room1, 1]
-boot:
-  unregistered: register
-  default: wait
 images:
   - contestant
   - worker

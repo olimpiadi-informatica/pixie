@@ -11,7 +11,7 @@ use futures::future::{select, Either};
 use lz4_flex::decompress;
 use uefi::proto::console::text::Color;
 
-use pixie_shared::{Address, Image, TcpRequest, UdpRequest, BODY_LEN, HEADER_LEN};
+use pixie_shared::{Address, Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
 
 use crate::os::{
     error::{Error, Result},
@@ -138,7 +138,7 @@ async fn handle_packet(
     Ok(Some((pos, data)))
 }
 
-pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: u16) -> Result<()> {
+pub async fn pull(os: UefiOS, server_addr: Address, image: String) -> Result<()> {
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
     let image = fetch_image(&stream, image).await?;
     stream.close_send().await;
@@ -221,7 +221,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String, chunks_port: 
         }
     }
 
-    let socket = os.udp_bind(Some(chunks_port)).await?;
+    let socket = os.udp_bind(Some(CHUNKS_PORT)).await?;
     let mut buf = [0; PACKET_SIZE];
 
     let mut received = BTreeMap::new();

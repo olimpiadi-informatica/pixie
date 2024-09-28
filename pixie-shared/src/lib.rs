@@ -19,6 +19,10 @@ pub const CHUNK_SIZE: usize = 1 << 22;
 
 pub const ACTION_PORT: u16 = 25640;
 
+pub const CHUNKS_PORT: u16 = 4041;
+pub const HINT_PORT: u16 = 4042;
+pub const PING_PORT: u16 = 4043;
+
 /// The hash of a chunk of a disk.
 ///
 /// This is stored as an array of bytes because [`blake3::Hash`] is not serializable.
@@ -96,9 +100,9 @@ impl From<Address> for SocketAddrV4 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     Reboot,
-    Register { hint_port: u16 },
+    Register,
     Push { image: String },
-    Pull { image: String, chunks_port: u16 },
+    Pull { image: String },
     Wait,
 }
 

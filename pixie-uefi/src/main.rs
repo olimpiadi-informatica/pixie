@@ -134,11 +134,9 @@ async fn run(os: UefiOS) -> Result<!> {
                 match command {
                     Action::Wait => unreachable!(),
                     Action::Reboot => reboot_to_os(os).await,
-                    Action::Register { hint_port } => register(os, server, hint_port).await?,
+                    Action::Register => register(os, server).await?,
                     Action::Push { image } => push(os, server, image).await?,
-                    Action::Pull { image, chunks_port } => {
-                        pull(os, server, image, chunks_port).await?
-                    }
+                    Action::Pull { image } => pull(os, server, image).await?,
                 }
 
                 let tcp = os.connect(server.ip, server.port).await?;
