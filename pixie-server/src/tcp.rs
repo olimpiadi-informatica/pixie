@@ -1,9 +1,4 @@
-use std::{
-    io::ErrorKind,
-    net::SocketAddr,
-    net::{IpAddr, Ipv4Addr},
-    sync::Arc,
-};
+use std::{io::ErrorKind, net::IpAddr, net::SocketAddr, sync::Arc};
 
 use tokio::{
     fs,
@@ -77,14 +72,14 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             Vec::new()
         }
         TcpRequest::UploadChunk(hash, data) => {
-            state.add_chunk(hash, &data).await?;
+            state.add_chunk(hash, &data)?;
             Vec::new()
         }
         TcpRequest::UploadImage(name, image) => {
             if !state.config.images.contains(&name) {
                 return Ok(format!("Unknown image: {}", name).into_bytes());
             }
-            state.add_image(name, image).await?;
+            state.add_image(name, image)?;
 
             Vec::new()
         }
@@ -190,7 +185,7 @@ async fn handle_connection(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
+    let listener = TcpListener::bind((state.config.hosts.listen_on, ACTION_PORT)).await?;
     log::info!("Listening on {}", listener.local_addr()?);
     loop {
         let (stream, addr) = listener.accept().await?;

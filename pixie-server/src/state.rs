@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use macaddr::MacAddr6;
 use mktemp::Temp;
 use tokio::sync::watch;
 
@@ -151,7 +152,7 @@ impl State {
         })
     }
 
-    pub async fn gc_chunks(&self) -> Result<()> {
+    pub fn gc_chunks(&self) -> Result<()> {
         self.image_stats.send_modify(|image_stats| {
             let mut chunk_stats = self.chunk_stats.lock().unwrap();
             let mut cnt = 0;
@@ -171,7 +172,7 @@ impl State {
         Ok(())
     }
 
-    pub async fn add_chunk(&self, hash: ChunkHash, data: &[u8]) -> Result<()> {
+    pub fn add_chunk(&self, hash: ChunkHash, data: &[u8]) -> Result<()> {
         let path = self.storage_dir.join("chunks").join(hex::encode(hash));
 
         self.image_stats.send_modify(|image_stats| {
@@ -192,7 +193,7 @@ impl State {
         Ok(())
     }
 
-    pub async fn add_image(&self, name: String, image: Image) -> Result<()> {
+    pub fn add_image(&self, name: String, image: Image) -> Result<()> {
         if !self.config.images.contains(&name) {
             bail!("Unknown image: {}", name);
         }
@@ -230,5 +231,19 @@ impl State {
         });
 
         Ok(())
+    }
+
+    pub fn set_ping(&self, peer_mac: MacAddr6, time: u64, message: Vec<u8>) {
+        self.units.send_if_modified(|units| {
+            let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
+                log::warn!("Got ping from unknown unit");
+                return false;
+            };
+
+            unit.last_ping_timestamp = time;
+            unit.last_ping_msg = message;
+
+            true
+        });
     }
 }

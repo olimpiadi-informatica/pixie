@@ -3,6 +3,7 @@ use std::{
     fs,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
     ops::Bound,
+    sync::Arc,
 };
 
 use tokio::{
@@ -203,7 +204,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
     }
 }
 
-pub async fn main(state: &State) -> Result<()> {
+pub async fn main(state: Arc<State>) -> Result<()> {
     let (_, network) = find_network(state.config.hosts.listen_on)?;
 
     let (tx, rx) = mpsc::channel(128);
@@ -212,9 +213,9 @@ pub async fn main(state: &State) -> Result<()> {
     socket.set_broadcast(true)?;
 
     tokio::try_join!(
-        broadcast_chunks(state, &socket, network.broadcast(), rx),
-        broadcast_hint(state, &socket, network.broadcast()),
-        handle_requests(state, &socket, tx),
+        broadcast_chunks(&state, &socket, network.broadcast(), rx),
+        broadcast_hint(&state, &socket, network.broadcast()),
+        handle_requests(&state, &socket, tx),
     )?;
 
     Ok(())

@@ -1,17 +1,13 @@
-use std::{
-    net::{IpAddr, Ipv4Addr},
-    time::SystemTime,
-};
+use std::{net::IpAddr, sync::Arc, time::SystemTime};
 
 use anyhow::{bail, Result};
-use pixie_shared::PACKET_LEN;
 use tokio::net::UdpSocket;
 
 use crate::{find_mac, state::State};
+use pixie_shared::{PACKET_LEN, PING_PORT};
 
-pub async fn main(state: &State) -> Result<()> {
-    // TODO: do we like port 4043?
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 4043)).await?;
+pub async fn main(state: Arc<State>) -> Result<()> {
+    let socket = UdpSocket::bind((state.config.hosts.listen_on, PING_PORT)).await?;
     log::info!("Listening on {}", socket.local_addr()?);
 
     let mut buf = [0; PACKET_LEN];
@@ -28,19 +24,10 @@ pub async fn main(state: &State) -> Result<()> {
             }
         };
 
-        state.units.send_if_modified(|units| {
-            let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-                log::warn!("Got ping from unknown unit");
-                return false;
-            };
-
-            unit.last_ping_timestamp = SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            unit.last_ping_msg = buf[..len].to_vec();
-
-            true
-        });
+        let time = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        state.set_ping(peer_mac, time, buf[..len].to_owned());
     }
 }

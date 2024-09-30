@@ -140,7 +140,7 @@ async fn image(
 }
 
 async fn gc(extract::State(state): extract::State<Arc<State>>) -> String {
-    state.gc_chunks().await.unwrap();
+    state.gc_chunks().unwrap();
     "".to_owned()
 }
 

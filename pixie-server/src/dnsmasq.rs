@@ -47,6 +47,8 @@ async fn write_config(state: &State) -> Result<()> {
         ),
     };
 
+    let storage_str = state.storage_dir.to_str().unwrap();
+
     write!(
         dnsmasq_conf,
         r#"
@@ -78,7 +80,6 @@ dhcp-vendorclass=set:netboot,PXEClient:Arch:00007
 dhcp-vendorclass=set:netboot,PXEClient:Arch:00009
 dhcp-vendorclass=set:netboot,pixie
 "#,
-        storage_str = state.storage_dir.to_str().unwrap()
     )?;
 
     Ok(())

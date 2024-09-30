@@ -19,6 +19,7 @@ use clap::Parser;
 use interfaces::Interface;
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
+use tokio::task::JoinHandle;
 
 use crate::state::State;
 
@@ -126,13 +127,18 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(State::load(options.storage_dir)?);
 
-    tokio::try_join!(
-        dnsmasq::main(state.clone()),
-        http::main(state.clone()),
-        udp::main(&state),
-        tcp::main(state.clone()),
-        ping::main(&state),
-    )?;
+    async fn flatten(task: JoinHandle<Result<()>>) -> Result<()> {
+        task.await??;
+        Ok(())
+    }
+
+    let dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
+    let http_task = flatten(tokio::spawn(http::main(state.clone())));
+    let udp_task = flatten(tokio::spawn(udp::main(state.clone())));
+    let tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
+    let ping_task = flatten(tokio::spawn(ping::main(state.clone())));
+
+    tokio::try_join!(dnsmasq_task, http_task, udp_task, tcp_task, ping_task)?;
 
     Ok(())
 }
