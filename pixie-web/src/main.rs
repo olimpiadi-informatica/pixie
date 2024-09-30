@@ -46,9 +46,9 @@ impl fmt::Display for Bytes {
 #[component]
 fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
     let image_row = move |(name, image): (String, (u64, u64))| {
-        let url_pull = format!("/admin/action/{name}/pull");
-        let url_boot = format!("/admin/action/{name}/reboot");
-        let url_cancel = format!("/admin/action/{name}/wait");
+        let url_pull = format!("admin/action/{name}/pull");
+        let url_boot = format!("admin/action/{name}/reboot");
+        let url_cancel = format!("admin/action/{name}/wait");
         view! {
             <tr>
                 <td>{name}</td>
@@ -119,6 +119,7 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
         </Table>
     }
 }
+
 #[component]
 fn Group(
     #[prop(into)] units: Signal<Vec<Unit>>,
@@ -132,11 +133,11 @@ fn Group(
         let ping_ago = move || time.get() - unit.get().last_ping_timestamp as i64;
 
         let mac = move || unit.get().mac.to_string();
-        let url_pull = move || format!("/admin/action/{}/pull", mac());
-        let url_push = move || format!("/admin/action/{}/push", mac());
-        let url_boot = move || format!("/admin/action/{}/reboot", mac());
-        let url_cancel = move || format!("/admin/action/{}/wait", mac());
-        let url_register = move || format!("/admin/action/{}/register", mac());
+        let url_pull = move || format!("admin/action/{}/pull", mac());
+        let url_push = move || format!("admin/action/{}/push", mac());
+        let url_boot = move || format!("admin/action/{}/reboot", mac());
+        let url_cancel = move || format!("admin/action/{}/wait", mac());
+        let url_register = move || format!("admin/action/{}/register", mac());
 
         let fmt_ca = move || {
             let unit = unit.get();
@@ -208,13 +209,13 @@ fn Group(
         .into_view()
     };
 
-    let url_pull = move || format!("/admin/action/{}/pull", group_name.get());
-    let url_boot = move || format!("/admin/action/{}/reboot", group_name.get());
-    let url_cancel = move || format!("/admin/action/{}/wait", group_name.get());
+    let url_pull = move || format!("admin/action/{}/pull", group_name.get());
+    let url_boot = move || format!("admin/action/{}/reboot", group_name.get());
+    let url_cancel = move || format!("admin/action/{}/wait", group_name.get());
 
     let image_button = move |image: String| {
         let text = format!("Set image to {:?}", image);
-        let url = move || format!("/admin/image/{}/{}", group_name.get(), image);
+        let url = move || format!("admin/image/{}/{}", group_name.get(), image);
         view! {
             <Button color=ButtonColor::Error on_click=move |_| send_req(url())>
                 {text}
@@ -275,18 +276,10 @@ fn App() -> impl IntoView {
         .expect("could not make relative URL");
 
     let handle_message = move |msg| match msg {
-        StatusUpdate::Units(u) => {
-            set_units.set(Some(u));
-        }
-        StatusUpdate::Config(c) => {
-            set_config.set(Some(c));
-        }
-        StatusUpdate::HostMap(h) => {
-            set_hostname.set(Some(h));
-        }
-        StatusUpdate::ImageStats(i) => {
-            set_image_stats.set(Some(i));
-        }
+        StatusUpdate::Units(u) => set_units.set(Some(u)),
+        StatusUpdate::Config(c) => set_config.set(Some(c)),
+        StatusUpdate::HostMap(h) => set_hostname.set(Some(h)),
+        StatusUpdate::ImageStats(i) => set_image_stats.set(Some(i)),
     };
 
     spawn_local(async move {

@@ -4,7 +4,7 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{self, Path},
-    http::StatusCode,
+    http::{Response, StatusCode},
     response::IntoResponse,
     routing::get,
     Router,
@@ -159,11 +159,15 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
 
     let messages =
         futures::stream::iter(initial_messages.into_iter()).chain(futures::stream::select(
-            image_rx.map(|x| StatusUpdate::ImageStats(x)),
-            units_rx.map(|x| StatusUpdate::Units(x)),
+            image_rx.map(StatusUpdate::ImageStats),
+            units_rx.map(StatusUpdate::Units),
         ));
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
-    Body::from_stream(lines)
+
+    let mut res = Response::new(Body::from_stream(lines));
+    res.headers_mut()
+        .insert("Content-Type", "application/json".parse().unwrap());
+    res
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
