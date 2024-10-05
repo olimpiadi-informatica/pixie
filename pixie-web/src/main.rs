@@ -138,6 +138,7 @@ fn Group(
         let url_boot = move || format!("admin/action/{}/reboot", mac());
         let url_cancel = move || format!("admin/action/{}/wait", mac());
         let url_register = move || format!("admin/action/{}/register", mac());
+        let url_forget = move || format!("admin/forget/{}", mac());
 
         let fmt_ca = move || {
             let unit = unit.get();
@@ -204,6 +205,11 @@ fn Group(
                     </ButtonGroup>
                 </td>
                 <td class="expand">{fmt_ca}</td>
+                <td>
+                    <Button color=ButtonColor::Error on_click=move |_| send_req(url_forget())>
+                    "forget"
+                    </Button>
+                </td>
             </tr>
         }
         .into_view()
@@ -248,6 +254,7 @@ fn Group(
                     <th>"next action"</th>
                     <th>"change action"</th>
                     <th>"current action"</th>
+                    <th></th>
                 </tr>
                 <For each=move || 0..units.get().len() key=|x| *x children=render_unit/>
             </Table>

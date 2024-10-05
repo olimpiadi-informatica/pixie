@@ -12,7 +12,7 @@ use axum::{
 use futures::StreamExt;
 use macaddr::MacAddr6;
 
-use pixie_shared::{HttpConfig, StatusUpdate};
+use pixie_shared::{HttpConfig, StatusUpdate, Unit};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
 use tower_http::{
@@ -20,6 +20,42 @@ use tower_http::{
 };
 
 use crate::state::State;
+
+enum UnitSelector {
+    MacAddr(MacAddr6),
+    IpAddr(Ipv4Addr),
+    All,
+    Group(u8),
+    Image(String),
+}
+
+impl UnitSelector {
+    fn parse(state: &State, selector: String) -> Option<UnitSelector> {
+        if let Ok(mac) = selector.parse::<MacAddr6>() {
+            Some(UnitSelector::MacAddr(mac))
+        } else if let Ok(ip) = selector.parse::<Ipv4Addr>() {
+            Some(UnitSelector::IpAddr(ip))
+        } else if selector == "all" {
+            Some(UnitSelector::All)
+        } else if let Some(&group) = state.config.groups.get_by_first(&selector) {
+            Some(UnitSelector::Group(group))
+        } else if state.config.images.contains(&selector) {
+            Some(UnitSelector::Image(selector))
+        } else {
+            None
+        }
+    }
+
+    fn select(&self, unit: &Unit) -> bool {
+        match self {
+            UnitSelector::MacAddr(mac) => unit.mac == *mac,
+            UnitSelector::IpAddr(ip) => unit.static_ip() == *ip,
+            UnitSelector::All => true,
+            UnitSelector::Group(group) => unit.group == *group,
+            UnitSelector::Image(image) => unit.image == *image,
+        }
+    }
+}
 
 async fn action(
     Path((unit_filter, action_name)): Path<(String, String)>,
@@ -32,44 +68,21 @@ async fn action(
         );
     };
 
-    let mut updated = 0usize;
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid unit selector\n".to_owned(),
+        );
+    };
 
+    let mut updated = 0;
     state.units.send_if_modified(|units| {
-        if let Ok(mac) = unit_filter.parse::<MacAddr6>() {
-            for unit in units.iter_mut() {
-                if unit.mac == mac {
-                    unit.next_action = action;
-                    updated += 1;
-                }
-            }
-        } else if let Ok(ip) = unit_filter.parse::<Ipv4Addr>() {
-            for unit in units.iter_mut() {
-                if unit.static_ip() == ip {
-                    unit.next_action = action;
-                    updated += 1;
-                }
-            }
-        } else if unit_filter == "all" {
-            for unit in units.iter_mut() {
+        for unit in units.iter_mut() {
+            if unit_selector.select(unit) {
                 unit.next_action = action;
                 updated += 1;
             }
-        } else if let Some(&group) = state.config.groups.get_by_first(&unit_filter) {
-            for unit in units.iter_mut() {
-                if unit.group == group {
-                    unit.next_action = action;
-                    updated += 1;
-                }
-            }
-        } else if state.config.images.contains(&unit_filter) {
-            for unit in units.iter_mut() {
-                if unit.image == unit_filter {
-                    unit.next_action = action;
-                    updated += 1;
-                }
-            }
         }
-
         updated > 0
     });
 
@@ -91,44 +104,21 @@ async fn image(
         );
     }
 
-    let mut updated = 0usize;
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid unit selector\n".to_owned(),
+        );
+    };
 
+    let mut updated = 0;
     state.units.send_if_modified(|units| {
-        if let Ok(mac) = unit_filter.parse::<MacAddr6>() {
-            for unit in units.iter_mut() {
-                if unit.mac == mac {
-                    unit.image = image.clone();
-                    updated += 1;
-                }
-            }
-        } else if let Ok(ip) = unit_filter.parse::<Ipv4Addr>() {
-            for unit in units.iter_mut() {
-                if unit.static_ip() == ip {
-                    unit.image = image.clone();
-                    updated += 1;
-                }
-            }
-        } else if unit_filter == "all" {
-            for unit in units.iter_mut() {
+        for unit in units.iter_mut() {
+            if unit_selector.select(unit) {
                 unit.image = image.clone();
                 updated += 1;
             }
-        } else if let Some(&group) = state.config.groups.get_by_first(&unit_filter) {
-            for unit in units.iter_mut() {
-                if unit.group == group {
-                    unit.image = image.clone();
-                    updated += 1;
-                }
-            }
-        } else if state.config.images.contains(&unit_filter) {
-            for unit in units.iter_mut() {
-                if unit.image == unit_filter {
-                    unit.image = image.clone();
-                    updated += 1;
-                }
-            }
         }
-
         updated > 0
     });
 
@@ -139,9 +129,35 @@ async fn image(
     }
 }
 
-async fn gc(extract::State(state): extract::State<Arc<State>>) -> String {
+async fn forget(
+    Path(unit_filter): Path<String>,
+    extract::State(state): extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid unit selector\n".to_owned(),
+        );
+    };
+
+    let mut updated = 0;
+    state.units.send_if_modified(|units| {
+        let len_before = units.len();
+        units.retain(|unit| !unit_selector.select(unit));
+        updated = len_before - units.len();
+        updated > 0
+    });
+
+    if updated > 0 {
+        (StatusCode::OK, format!("{updated} computer(s) removed\n"))
+    } else {
+        (StatusCode::BAD_REQUEST, "Unknown PC\n".to_owned())
+    }
+}
+
+async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
     state.gc_chunks().unwrap();
-    "".to_owned()
+    "Garbage collection completed\n"
 }
 
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
@@ -183,6 +199,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .route("/admin/gc", get(gc))
         .route("/admin/action/:unit/:action", get(action))
         .route("/admin/image/:unit/:image", get(image))
+        .route("/admin/forget/:unit", get(forget))
         .nest_service(
             "/",
             ServeDir::new(&admin_path).append_index_html_on_directories(true),
