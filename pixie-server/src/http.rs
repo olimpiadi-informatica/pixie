@@ -176,10 +176,12 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
     ));
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
 
-    let mut res = Response::new(Body::from_stream(lines));
-    res.headers_mut()
-        .insert("Content-Type", "application/json".parse().unwrap());
-    res
+    Response::builder()
+        .header("Content-Type", "application/json")
+        .header("Cache-Control", "no-cache")
+        .header("X-Accel-Buffering", "no")
+        .body(Body::from_stream(lines))
+        .unwrap()
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
@@ -190,7 +192,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
 
     let admin_path = state.storage_dir.join("admin");
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/admin/status", get(status))
         .route("/admin/gc", get(gc))
         .route("/admin/action/:unit/:action", get(action))
@@ -199,13 +201,14 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .nest_service(
             "/",
             ServeDir::new(&admin_path).append_index_html_on_directories(true),
-        )
-        .layer(ValidateRequestHeaderLayer::basic("admin", password))
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        );
+    if let Some(password) = password {
+        router = router.layer(ValidateRequestHeaderLayer::basic("admin", password));
+    }
+    router = router.layer(TraceLayer::new_for_http());
 
     let listener = TcpListener::bind(listen_on).await?;
-    axum::serve(listener, router).await?;
+    axum::serve(listener, router.with_state(state)).await?;
 
     Ok(())
 }
