@@ -7,8 +7,9 @@ use gpt_disk_io::{
     BlockIo,
 };
 use uefi::{
+    boot::ScopedProtocol,
     proto::media::{block::BlockIO, disk::DiskIo},
-    table::boot::{OpenProtocolParams, ScopedProtocol},
+    table::boot::OpenProtocolParams,
     Handle,
 };
 
@@ -20,14 +21,10 @@ use super::{
 fn open_disk(
     os: UefiOS,
     handle: Handle,
-) -> Result<(
-    ScopedProtocol<'static, DiskIo>,
-    ScopedProtocol<'static, BlockIO>,
-)> {
-    let bs = os.borrow().boot_services;
-    let image_handle = os.borrow().boot_services.image_handle();
+) -> Result<(ScopedProtocol<DiskIo>, ScopedProtocol<BlockIO>)> {
+    let image_handle = uefi::boot::image_handle();
     let bio = unsafe {
-        bs.open_protocol::<BlockIO>(
+        uefi::boot::open_protocol::<BlockIO>(
             OpenProtocolParams {
                 agent: image_handle,
                 controller: None,
@@ -48,8 +45,8 @@ pub struct DiskPartition {
 }
 
 pub struct Disk {
-    disk: ScopedProtocol<'static, DiskIo>,
-    block: ScopedProtocol<'static, BlockIO>,
+    disk: ScopedProtocol<DiskIo>,
+    block: ScopedProtocol<BlockIO>,
     os: UefiOS,
 }
 

@@ -1,7 +1,6 @@
 use core::arch::x86_64::_rdtsc;
 
 use smoltcp::time::Instant;
-use uefi::prelude::BootServices;
 
 pub struct Timer {
     ticks_at_start: i64,
@@ -14,12 +13,12 @@ impl Timer {
         unsafe { _rdtsc() as i64 }
     }
 
-    pub fn new(boot_services: &BootServices) -> Timer {
+    pub fn new() -> Timer {
         // Read timer clock & wait to stabilize the counter.
         Self::rdtsc();
-        boot_services.stall(20000);
+        uefi::boot::stall(20000);
         let tsc_before = Self::rdtsc();
-        boot_services.stall(20000);
+        uefi::boot::stall(20000);
         let tsc_after = Self::rdtsc();
 
         Timer {
@@ -35,5 +34,11 @@ impl Timer {
 
     pub fn instant(&self) -> Instant {
         Instant::from_micros(self.micros())
+    }
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self::new()
     }
 }

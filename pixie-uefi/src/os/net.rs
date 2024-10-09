@@ -18,8 +18,8 @@ use smoltcp::{
 };
 
 use uefi::{
+    boot::ScopedProtocol,
     proto::network::snp::{ReceiveFlags, SimpleNetwork},
-    table::boot::ScopedProtocol,
     Status,
 };
 
@@ -33,7 +33,7 @@ use super::{timer::Timer, UefiOS};
 
 pub const PACKET_SIZE: usize = 1514;
 
-type Snp = &'static ScopedProtocol<'static, SimpleNetwork>;
+type Snp = &'static ScopedProtocol<SimpleNetwork>;
 
 struct SnpDevice {
     snp: Snp,
@@ -180,10 +180,10 @@ impl NetworkInterface {
             &device.snp.mode().current_address.0[..6],
         ));
 
-        let mut interface_config = Config::new();
+        let mut interface_config = Config::new(hw_addr);
         interface_config.random_seed = os.rng().rand_u64();
-        interface_config.hardware_addr = Some(hw_addr);
-        let interface = Interface::new(interface_config, &mut device);
+        let now = Instant::from_micros(os.timer().micros());
+        let interface = Interface::new(interface_config, &mut device, now);
         let mut dhcp_socket = Dhcpv4Socket::new();
         dhcp_socket.set_outgoing_options(&[DhcpOption {
             kind: 60,
@@ -499,8 +499,8 @@ impl UdpHandle {
             } else {
                 // Cannot fail if can_recv() returned true.
                 let recvd = socket.recv_slice(buf2).unwrap();
-                let ip = (recvd.1).addr.as_bytes().try_into().unwrap();
-                let port = (recvd.1).port;
+                let ip = (recvd.1).endpoint.addr.as_bytes().try_into().unwrap();
+                let port = (recvd.1).endpoint.port;
                 Poll::Ready((recvd.0, Address { ip, port }))
             }
         })

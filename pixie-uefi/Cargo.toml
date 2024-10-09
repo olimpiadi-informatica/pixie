@@ -13,15 +13,14 @@ bench = false
 blake3 = { version = "1.5.0", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
 core_detect = "1.0.0"
 futures = { version = "0.3.29", default-features = false, features = ["alloc", "async-await"] }
-gpt_disk_io = "0.15.0"
-lz4_flex = { version = "0.10.0", default-features = false }
+gpt_disk_io = "0.16.0"
+lz4_flex = { version = "0.11.3", default-features = false }
 managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 postcard = { version = "1.0.8", default-features = false, features = ["alloc"] }
 rand = { version = "0.8.5", default-features = false }
 rand_xoshiro = { version = "0.6.0", default-features = false }
-smoltcp = { version = "0.9.1", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async"] }
-uefi = { version = "0.21.0", features = ["alloc"] }
-uefi-services = { version = "0.18.0", default-features = false, features = ["panic_handler"] }
+smoltcp = { version = "0.11.0", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async"] }
+uefi = { version = "0.32.0", features = ["alloc", "global_allocator", "panic_handler"] }
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"

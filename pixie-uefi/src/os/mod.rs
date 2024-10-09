@@ -3,7 +3,6 @@ use core::{
     ffi::c_void,
     fmt::{self, Display, Write},
     future::{poll_fn, Future, PollFn},
-    mem::transmute,
     ptr::NonNull,
     task::{Context, Poll},
 };
@@ -16,7 +15,7 @@ use alloc::{
     vec::Vec,
 };
 use uefi::{
-    prelude::{BootServices, RuntimeServices},
+    boot::ScopedProtocol,
     proto::{
         console::text::{Color, Input, Key, Output},
         device_path::{
@@ -27,9 +26,8 @@ use uefi::{
         Protocol,
     },
     table::{
-        boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
+        boot::{EventType, TimerTrigger, Tpl},
         runtime::{VariableAttributes, VariableVendor},
-        Boot, SystemTable,
     },
     CStr16, Event, Handle, Status,
 };
@@ -74,13 +72,11 @@ impl Display for BytesFmt {
 }
 
 struct UefiOSImpl {
-    boot_services: &'static BootServices,
-    runtime_services: &'static RuntimeServices,
     timer: Timer,
     rng: Rng,
     tasks: Vec<Arc<Task>>,
-    input: Option<ScopedProtocol<'static, Input>>,
-    output: Option<ScopedProtocol<'static, Output>>,
+    input: Option<ScopedProtocol<Input>>,
+    output: Option<ScopedProtocol<Output>>,
     net: Option<NetworkInterface>,
     messages: VecDeque<(String, MessageKind)>,
     ui_buf: Vec<(String, Color, Color)>,
@@ -163,7 +159,7 @@ unsafe extern "efiapi" fn exit_boot_services(_e: Event, _ctx: Option<NonNull<c_v
 }
 
 impl UefiOS {
-    pub fn start<F, Fut>(mut system_table: SystemTable<Boot>, mut f: F) -> !
+    pub fn start<F, Fut>(mut f: F) -> !
     where
         F: FnMut(UefiOS) -> Fut + 'static,
         Fut: Future<Output = Result<!>>,
@@ -171,41 +167,25 @@ impl UefiOS {
         // Never call this function twice.
         assert!(OS.borrow().is_none());
 
-        uefi_services::init(&mut system_table).unwrap();
+        uefi::helpers::init().unwrap();
 
         // Ensure we never exit boot services.
         // SAFETY: the callback panics on exit from boot services, and thus handles exit from boot
         // services correctly by definition.
         unsafe {
-            system_table
-                .boot_services()
-                .create_event(
-                    EventType::SIGNAL_EXIT_BOOT_SERVICES,
-                    Tpl::NOTIFY,
-                    Some(exit_boot_services),
-                    None,
-                )
-                .unwrap();
+            uefi::boot::create_event(
+                EventType::SIGNAL_EXIT_BOOT_SERVICES,
+                Tpl::NOTIFY,
+                Some(exit_boot_services),
+                None,
+            )
+            .unwrap();
         }
 
-        // SAFETY: it is now safe to assume that boot and runtime services will be available forever.
-        let boot_services = unsafe {
-            transmute::<&uefi::prelude::BootServices, &uefi::prelude::BootServices>(
-                system_table.boot_services(),
-            )
-        };
-        let runtime_services = unsafe {
-            transmute::<&uefi::prelude::RuntimeServices, &uefi::prelude::RuntimeServices>(
-                system_table.runtime_services(),
-            )
-        };
-
-        let timer = Timer::new(boot_services);
+        let timer = Timer::new();
         let rng = Rng::new();
 
         *OS.borrow_mut() = Some(UefiOSImpl {
-            boot_services,
-            runtime_services,
             timer,
             rng,
             tasks: Vec::new(),
@@ -245,10 +225,7 @@ impl UefiOS {
 
         os.spawn("[watchdog]", async move {
             loop {
-                let err = os
-                    .borrow()
-                    .boot_services
-                    .set_watchdog_timer(300, 0x10000, None);
+                let err = uefi::boot::set_watchdog_timer(300, 0x10000, None);
 
                 if let Err(err) = err {
                     if err.status() != Status::UNSUPPORTED {
@@ -373,14 +350,11 @@ impl UefiOS {
 
     /// **WARNING**: this function halts all tasks
     pub fn deep_sleep_us(&self, us: u64) {
-        let bs = self.borrow().boot_services;
         // SAFETY: we are not using a callback
-        let e = unsafe {
-            bs.create_event(EventType::TIMER, Tpl::NOTIFY, None, None)
-                .unwrap()
-        };
-        bs.set_timer(&e, TimerTrigger::Relative(10 * us)).unwrap();
-        bs.wait_for_event(&mut [e]).unwrap();
+        let e =
+            unsafe { uefi::boot::create_event(EventType::TIMER, Tpl::NOTIFY, None, None).unwrap() };
+        uefi::boot::set_timer(&e, TimerTrigger::Relative(10 * us)).unwrap();
+        uefi::boot::wait_for_event(&mut [e]).unwrap();
     }
 
     pub fn get_variable(
@@ -391,17 +365,7 @@ impl UefiOS {
         // name.len() should be enough, but...
         let mut name_buf = vec![0u16; name.len() * 2 + 16];
         let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
-        let size = self
-            .borrow_mut()
-            .runtime_services
-            .get_variable_size(name, vendor)
-            .map_err(|e| Error::Generic(format!("Error getting variable: {:?}", e)))?;
-
-        let mut var_buf = vec![0u8; size];
-        let (var, attrs) = self
-            .borrow_mut()
-            .runtime_services
-            .get_variable(name, vendor, &mut var_buf)
+        let (var, attrs) = uefi::runtime::get_variable_boxed(name, vendor)
             .map_err(|e| Error::Generic(format!("Error getting variable: {:?}", e)))?;
         Ok((var.to_vec(), attrs))
     }
@@ -416,9 +380,7 @@ impl UefiOS {
         // name.len() should be enough, but...
         let mut name_buf = vec![0u16; name.len() * 2 + 16];
         let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
-        self.borrow_mut()
-            .runtime_services
-            .set_variable(name, vendor, attrs, data)
+        uefi::runtime::set_variable(name, vendor, attrs, data)
             .map_err(|e| Error::Generic(format!("Error setting variable: {:?}", e)))?;
         Ok(())
     }
@@ -428,29 +390,17 @@ impl UefiOS {
     }
 
     pub fn device_path_to_string(&self, device: &DevicePath) -> String {
-        let os = self.borrow();
-        let handle = os
-            .boot_services
-            .get_handle_for_protocol::<DevicePathToText>()
-            .unwrap();
-        let device_path_to_text = os
-            .boot_services
-            .open_protocol_exclusive::<DevicePathToText>(handle)
-            .unwrap();
+        let handle = uefi::boot::get_handle_for_protocol::<DevicePathToText>().unwrap();
+        let device_path_to_text =
+            uefi::boot::open_protocol_exclusive::<DevicePathToText>(handle).unwrap();
         device_path_to_text
-            .convert_device_path_to_text(
-                os.boot_services,
-                device,
-                DisplayOnly(true),
-                AllowShortcuts(true),
-            )
+            .convert_device_path_to_text(device, DisplayOnly(true), AllowShortcuts(true))
             .unwrap()
             .to_string()
     }
 
     /// Find the topmost device that implements this protocol.
     fn handle_on_device<P: Protocol>(&self, device: &DevicePath) -> Handle {
-        let os = self.borrow();
         for i in 0..device.node_iter().count() {
             let mut buf = vec![];
             let mut dev = DevicePathBuilder::with_vec(&mut buf);
@@ -458,7 +408,7 @@ impl UefiOS {
                 dev = dev.push(&node).unwrap();
             }
             let mut dev = dev.finalize().unwrap();
-            if let Ok(h) = os.boot_services.locate_device_path::<P>(&mut dev) {
+            if let Ok(h) = uefi::boot::locate_device_path::<P>(&mut dev) {
                 return h;
             }
         }
@@ -467,20 +417,17 @@ impl UefiOS {
     }
 
     fn all_handles<P: Protocol>(&self) -> Result<Vec<Handle>> {
-        Ok(self.borrow().boot_services.find_handles::<P>()?)
+        Ok(uefi::boot::find_handles::<P>()?)
     }
 
-    fn open_handle<P: Protocol>(&self, handle: Handle) -> Result<ScopedProtocol<'static, P>> {
-        Ok(self
-            .borrow()
-            .boot_services
-            .open_protocol_exclusive::<P>(handle)?)
+    fn open_handle<P: Protocol>(&self, handle: Handle) -> Result<ScopedProtocol<P>> {
+        Ok(uefi::boot::open_protocol_exclusive::<P>(handle)?)
     }
 
     fn open_protocol_on_device<P: Protocol>(
         &self,
         device: &DevicePath,
-    ) -> Result<ScopedProtocol<'static, P>> {
+    ) -> Result<ScopedProtocol<P>> {
         self.open_handle::<P>(self.handle_on_device::<P>(device))
     }
 
@@ -623,11 +570,7 @@ impl UefiOS {
     }
 
     pub fn reset(&self) -> ! {
-        self.borrow().runtime_services.reset(
-            uefi::table::runtime::ResetType::Warm,
-            Status::SUCCESS,
-            None,
-        )
+        uefi::runtime::reset(uefi::table::runtime::ResetType::WARM, Status::SUCCESS, None)
     }
 }
 

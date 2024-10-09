@@ -149,6 +149,6 @@ async fn run(os: UefiOS) -> Result<!> {
 }
 
 #[entry]
-fn main(_handle: Handle, system_table: SystemTable<Boot>) -> Status {
-    UefiOS::start(system_table, run)
+fn main() -> Status {
+    UefiOS::start(run)
 }
