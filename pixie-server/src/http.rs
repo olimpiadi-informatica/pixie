@@ -161,23 +161,19 @@ async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoRespo
 }
 
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
-    let initial_messages = vec![
-        StatusUpdate::Config(state.config.clone()),
-        StatusUpdate::HostMap(state.hostmap.clone()),
-    ];
-    let mut units_rx = state.units.subscribe();
-    units_rx.mark_changed();
-    let units_rx = WatchStream::new(units_rx);
+    let initial_messages = [StatusUpdate::Config(state.config.clone())];
 
-    let mut image_rx = state.image_stats.subscribe();
-    image_rx.mark_changed();
-    let image_rx = WatchStream::new(image_rx);
+    let units_rx = WatchStream::new(state.units.subscribe());
+    let image_rx = WatchStream::new(state.image_stats.subscribe());
+    let hostmap_rx = WatchStream::new(state.hostmap.subscribe());
 
-    let messages =
-        futures::stream::iter(initial_messages.into_iter()).chain(futures::stream::select(
+    let messages = futures::stream::iter(initial_messages).chain(futures::stream::select(
+        futures::stream::select(
             image_rx.map(StatusUpdate::ImageStats),
             units_rx.map(StatusUpdate::Units),
-        ));
+        ),
+        hostmap_rx.map(StatusUpdate::HostMap),
+    ));
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
 
     let mut res = Response::new(Body::from_stream(lines));

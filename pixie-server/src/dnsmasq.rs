@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufWriter, Error, Write},
     net::Ipv4Addr,
@@ -99,13 +100,16 @@ async fn write_hosts(state: &State, hosts: &[(MacAddr6, Ipv4Addr, Option<String>
     Ok(())
 }
 
-fn get_hosts(state: &State, units: &[Unit]) -> Vec<(MacAddr6, Ipv4Addr, Option<String>)> {
+fn get_hosts(
+    hostmap: &HashMap<Ipv4Addr, String>,
+    units: &[Unit],
+) -> Vec<(MacAddr6, Ipv4Addr, Option<String>)> {
     units
         .iter()
         .map(|unit| {
             let mac = unit.mac;
             let ip = unit.static_ip();
-            let hostname = state.hostmap.get(&ip).cloned();
+            let hostname = hostmap.get(&ip).cloned();
             (mac, ip, hostname)
         })
         .collect()
@@ -113,9 +117,13 @@ fn get_hosts(state: &State, units: &[Unit]) -> Vec<(MacAddr6, Ipv4Addr, Option<S
 
 pub async fn main(state: Arc<State>) -> Result<()> {
     let mut units_rx = state.units.subscribe();
+    let mut hostmap_rx = state.hostmap.subscribe();
 
     write_config(&state).await?;
-    let mut hosts = get_hosts(&state, &units_rx.borrow_and_update());
+    let mut hosts = get_hosts(
+        &hostmap_rx.borrow_and_update(),
+        &units_rx.borrow_and_update(),
+    );
     write_hosts(&state, &hosts).await?;
 
     let dnsmasq = DnsmasqHandle {
@@ -132,14 +140,18 @@ pub async fn main(state: Arc<State>) -> Result<()> {
 
     loop {
         tokio::select! {
-            _ = units_rx.changed() => {
-                let hosts2 = get_hosts(&state, &units_rx.borrow_and_update());
-                if hosts != hosts2 {
-                    hosts = hosts2;
-                    write_hosts(&state, &hosts).await?;
-                    dnsmasq.reload()?;
-                }
-            }
+            ret = units_rx.changed() => ret.unwrap(),
+            ret = hostmap_rx.changed() => ret.unwrap(),
+        }
+
+        let hosts2 = get_hosts(
+            &hostmap_rx.borrow_and_update(),
+            &units_rx.borrow_and_update(),
+        );
+        if hosts != hosts2 {
+            hosts = hosts2;
+            write_hosts(&state, &hosts).await?;
+            dnsmasq.reload()?;
         }
     }
 }

@@ -35,7 +35,7 @@ fn get_image_csize(image: &Image) -> u64 {
 pub struct State {
     pub storage_dir: PathBuf,
     pub config: Config,
-    pub hostmap: HashMap<Ipv4Addr, String>,
+    pub hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
 
     pub units: watch::Sender<Vec<Unit>>,
     // TODO: use an Option
@@ -64,6 +64,7 @@ impl State {
                 }
             }
         }
+        let hostmap = watch::Sender::new(hostmap);
 
         let units_path = storage_dir.join("registered.json");
         let units = watch::Sender::new({
@@ -150,6 +151,21 @@ impl State {
             }),
             chunk_stats: Mutex::new(chunk_stats),
         })
+    }
+
+    pub fn reload(&self) -> Result<()> {
+        let mut hostmap = HashMap::new();
+        if let Some(hostsfile) = &self.config.hosts.hostsfile {
+            let hosts = hostfile::parse_file(hostsfile)
+                .map_err(|e| anyhow!("Error parsing host file: {e}"))?;
+            for host in hosts {
+                if let IpAddr::V4(ip) = host.ip {
+                    hostmap.insert(ip, host.names[0].clone());
+                }
+            }
+        }
+        self.hostmap.send_replace(hostmap);
+        Ok(())
     }
 
     pub fn gc_chunks(&self) -> Result<()> {

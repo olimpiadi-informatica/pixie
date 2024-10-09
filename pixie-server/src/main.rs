@@ -127,6 +127,15 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(State::load(options.storage_dir)?);
 
+    let state2 = state.clone();
+    tokio::spawn(async move {
+        let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+            .expect("failed to register signal handler");
+        while let Some(()) = signal.recv().await {
+            state2.reload().unwrap();
+        }
+    });
+
     async fn flatten(task: JoinHandle<Result<()>>) -> Result<()> {
         task.await??;
         Ok(())
