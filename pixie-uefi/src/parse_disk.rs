@@ -76,15 +76,14 @@ async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
     let block_size = 1u64 << (10 + log_block_size);
 
     let blocks_per_group = le32(&superblock, 0x20) as u64;
-    let groups = (blocks_count + blocks_per_group - 1) / blocks_per_group;
+    let groups = blocks_count.div_ceil(blocks_per_group);
 
     let first_data_block = le32(&superblock, 0x14) as u64;
     let desc_size = le16(&superblock, 0xfe) as u64;
     let reserved_gdt_blocks = le16(&superblock, 0xce);
 
-    let blocks_for_special_group = 1
-        + ((desc_size * groups + block_size - 1) / block_size) as usize
-        + reserved_gdt_blocks as usize;
+    let blocks_for_special_group =
+        1 + (desc_size * groups).div_ceil(block_size) as usize + reserved_gdt_blocks as usize;
 
     let mut group_descriptors = vec![0; (desc_size * groups) as usize];
     let mut bitmap = vec![0; block_size as usize];
@@ -152,7 +151,7 @@ async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
         x @ 128..=224 => panic!("too many sectors per cluster: {}", x),
     };
     let bytes_per_cluster = bytes_per_sector * sectors_per_cluster;
-    let num_clusters = (end as usize - start as usize + bytes_per_cluster - 1) / bytes_per_cluster;
+    let num_clusters = (end as usize - start as usize).div_ceil(bytes_per_cluster);
 
     let bytes_per_file_record = match boot_sector[0x40] {
         x @ 0..=127 => x as usize * bytes_per_cluster,

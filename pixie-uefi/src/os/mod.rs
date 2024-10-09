@@ -1,11 +1,10 @@
 use core::{
-    cell::{Ref, RefCell, RefMut},
+    cell::{Ref, RefMut},
     ffi::c_void,
     fmt::{self, Display, Write},
     future::{poll_fn, Future, PollFn},
     mem::transmute,
     ptr::NonNull,
-    sync::atomic::AtomicBool,
     task::{Context, Poll},
 };
 
@@ -42,6 +41,7 @@ use self::{
     executor::{Executor, Task},
     net::NetworkInterface,
     rng::Rng,
+    sync::SyncRefCell,
     timer::Timer,
 };
 
@@ -52,6 +52,7 @@ mod executor;
 pub mod mpsc;
 mod net;
 mod rng;
+mod sync;
 mod timer;
 
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
@@ -84,6 +85,7 @@ struct UefiOSImpl {
     messages: VecDeque<(String, MessageKind)>,
     ui_buf: Vec<(String, Color, Color)>,
     ui_pos: usize,
+    ui_drawer: Option<Box<dyn Fn(UefiOS) + 'static>>,
 }
 
 impl UefiOSImpl {
@@ -144,10 +146,7 @@ impl UefiOSImpl {
     }
 }
 
-#[allow(clippy::type_complexity)]
-static mut UI_DRAWER: RefCell<Option<Box<dyn Fn(UefiOS) + 'static>>> = RefCell::new(None);
-static mut OS: Option<RefCell<UefiOSImpl>> = None;
-static OS_CONSTRUCTED: AtomicBool = AtomicBool::new(false);
+static OS: SyncRefCell<Option<UefiOSImpl>> = SyncRefCell::new(None);
 
 #[non_exhaustive]
 #[derive(Clone, Copy)]
@@ -170,7 +169,7 @@ impl UefiOS {
         Fut: Future<Output = Result<!>>,
     {
         // Never call this function twice.
-        assert!(!OS_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
+        assert!(OS.borrow().is_none());
 
         uefi_services::init(&mut system_table).unwrap();
 
@@ -190,31 +189,34 @@ impl UefiOS {
         }
 
         // SAFETY: it is now safe to assume that boot and runtime services will be available forever.
-        let boot_services = unsafe { transmute(system_table.boot_services()) };
-        let runtime_services = unsafe { transmute(system_table.runtime_services()) };
+        let boot_services = unsafe {
+            transmute::<&uefi::prelude::BootServices, &uefi::prelude::BootServices>(
+                system_table.boot_services(),
+            )
+        };
+        let runtime_services = unsafe {
+            transmute::<&uefi::prelude::RuntimeServices, &uefi::prelude::RuntimeServices>(
+                system_table.runtime_services(),
+            )
+        };
 
         let timer = Timer::new(boot_services);
         let rng = Rng::new();
 
-        OS_CONSTRUCTED.store(true, core::sync::atomic::Ordering::Relaxed);
-
-        // SAFETY: we guarantee this is the only place we could be modifying OS from, and that
-        // nothing can read it until we do so.
-        unsafe {
-            OS = Some(RefCell::new(UefiOSImpl {
-                boot_services,
-                runtime_services,
-                timer,
-                rng,
-                tasks: Vec::new(),
-                input: None,
-                output: None,
-                net: None,
-                messages: VecDeque::new(),
-                ui_buf: vec![],
-                ui_pos: 0,
-            }))
-        }
+        *OS.borrow_mut() = Some(UefiOSImpl {
+            boot_services,
+            runtime_services,
+            timer,
+            rng,
+            tasks: Vec::new(),
+            input: None,
+            output: None,
+            net: None,
+            messages: VecDeque::new(),
+            ui_buf: vec![],
+            ui_pos: 0,
+            ui_drawer: None,
+        });
 
         let os = UefiOS { cant_build: () };
 
@@ -230,13 +232,9 @@ impl UefiOS {
 
         output.clear().unwrap();
 
-        unsafe {
-            OS.as_mut().unwrap().borrow_mut().net = Some(net);
-            OS.as_mut().unwrap().borrow_mut().input = Some(input);
-            OS.as_mut().unwrap().borrow_mut().output = Some(output);
-        }
-
-        Executor::init();
+        os.borrow_mut().net = Some(net);
+        os.borrow_mut().input = Some(input);
+        os.borrow_mut().output = Some(output);
 
         os.spawn("init", async move {
             loop {
@@ -246,10 +244,8 @@ impl UefiOS {
         });
 
         os.spawn("[watchdog]", async move {
-            // Disable watchdog. SAFETY: there are no other threads at this point.
             loop {
-                let err = unsafe { OS.as_ref() }
-                    .unwrap()
+                let err = os
                     .borrow()
                     .boot_services
                     .set_watchdog_timer(300, 0x10000, None);
@@ -272,8 +268,8 @@ impl UefiOS {
         os.spawn(
             "[net_poll]",
             poll_fn(move |cx| {
-                let os = os.os().borrow_mut();
-                let (mut net, timer) = RefMut::map_split(os, |os| (&mut os.net, &mut os.timer));
+                let (mut net, timer) =
+                    RefMut::map_split(os.borrow_mut(), |os| (&mut os.net, &mut os.timer));
                 net.as_mut().unwrap().poll(&timer);
                 // TODO(veluca): figure out whether we can suspend the task.
                 cx.waker().wake_by_ref();
@@ -311,28 +307,28 @@ impl UefiOS {
         Executor::run(os)
     }
 
-    fn os(&self) -> &'static RefCell<UefiOSImpl> {
-        // SAFETY: OS is only modified during construction of UefiOS; moreover, it is guaranteed
-        // not to be None.
-        // No concurrent modifications are possible, as `UefiOS` cannot be constructed in another
-        // thread.
-        unsafe { OS.as_ref().unwrap_unchecked() }
+    fn borrow(&self) -> Ref<'static, UefiOSImpl> {
+        Ref::map(OS.borrow(), |f| f.as_ref().unwrap())
+    }
+
+    fn borrow_mut(&self) -> RefMut<'static, UefiOSImpl> {
+        RefMut::map(OS.borrow_mut(), |f| f.as_mut().unwrap())
     }
 
     pub fn timer(&self) -> Ref<'static, Timer> {
-        Ref::map(self.os().borrow(), |f| &f.timer)
+        Ref::map(self.borrow(), |f| &f.timer)
     }
 
     pub fn rng(&self) -> RefMut<'static, Rng> {
-        RefMut::map(self.os().borrow_mut(), |f| &mut f.rng)
+        RefMut::map(self.borrow_mut(), |f| &mut f.rng)
     }
 
     fn tasks(&self) -> RefMut<'static, Vec<Arc<Task>>> {
-        RefMut::map(self.os().borrow_mut(), |f| &mut f.tasks)
+        RefMut::map(self.borrow_mut(), |f| &mut f.tasks)
     }
 
     pub fn net(&self) -> RefMut<'static, NetworkInterface> {
-        RefMut::map(self.os().borrow_mut(), |f| f.net.as_mut().unwrap())
+        RefMut::map(self.borrow_mut(), |f| f.net.as_mut().unwrap())
     }
 
     pub fn wait_for_ip(self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
@@ -377,7 +373,7 @@ impl UefiOS {
 
     /// **WARNING**: this function halts all tasks
     pub fn deep_sleep_us(&self, us: u64) {
-        let bs = self.os().borrow().boot_services;
+        let bs = self.borrow().boot_services;
         // SAFETY: we are not using a callback
         let e = unsafe {
             bs.create_event(EventType::TIMER, Tpl::NOTIFY, None, None)
@@ -396,7 +392,6 @@ impl UefiOS {
         let mut name_buf = vec![0u16; name.len() * 2 + 16];
         let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
         let size = self
-            .os()
             .borrow_mut()
             .runtime_services
             .get_variable_size(name, vendor)
@@ -404,7 +399,6 @@ impl UefiOS {
 
         let mut var_buf = vec![0u8; size];
         let (var, attrs) = self
-            .os()
             .borrow_mut()
             .runtime_services
             .get_variable(name, vendor, &mut var_buf)
@@ -422,8 +416,7 @@ impl UefiOS {
         // name.len() should be enough, but...
         let mut name_buf = vec![0u16; name.len() * 2 + 16];
         let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
-        self.os()
-            .borrow_mut()
+        self.borrow_mut()
             .runtime_services
             .set_variable(name, vendor, attrs, data)
             .map_err(|e| Error::Generic(format!("Error setting variable: {:?}", e)))?;
@@ -435,7 +428,7 @@ impl UefiOS {
     }
 
     pub fn device_path_to_string(&self, device: &DevicePath) -> String {
-        let os = self.os().borrow();
+        let os = self.borrow();
         let handle = os
             .boot_services
             .get_handle_for_protocol::<DevicePathToText>()
@@ -457,7 +450,7 @@ impl UefiOS {
 
     /// Find the topmost device that implements this protocol.
     fn handle_on_device<P: Protocol>(&self, device: &DevicePath) -> Handle {
-        let os = self.os().borrow();
+        let os = self.borrow();
         for i in 0..device.node_iter().count() {
             let mut buf = vec![];
             let mut dev = DevicePathBuilder::with_vec(&mut buf);
@@ -474,12 +467,11 @@ impl UefiOS {
     }
 
     fn all_handles<P: Protocol>(&self) -> Result<Vec<Handle>> {
-        Ok(self.os().borrow().boot_services.find_handles::<P>()?)
+        Ok(self.borrow().boot_services.find_handles::<P>()?)
     }
 
     fn open_handle<P: Protocol>(&self, handle: Handle) -> Result<ScopedProtocol<'static, P>> {
         Ok(self
-            .os()
             .borrow()
             .boot_services
             .open_protocol_exclusive::<P>(handle)?)
@@ -506,7 +498,7 @@ impl UefiOS {
 
     pub async fn read_key(&self) -> Result<Key> {
         Ok(poll_fn(move |cx| {
-            let key = self.os().borrow_mut().input.as_mut().unwrap().read_key();
+            let key = self.borrow_mut().input.as_mut().unwrap().read_key();
             if let Err(e) = key {
                 return Poll::Ready(Err(e));
             }
@@ -521,7 +513,7 @@ impl UefiOS {
     }
 
     pub fn write_with_color(&self, msg: &str, fg: Color, bg: Color) {
-        self.os().borrow_mut().write_with_color(msg, fg, bg);
+        self.borrow_mut().write_with_color(msg, fg, bg);
     }
 
     fn draw_ui(&self) {
@@ -529,7 +521,7 @@ impl UefiOS {
         {
             let time = self.timer().micros() as f32 * 0.000_001;
             let ip = self.net().ip();
-            let mut os = self.os().borrow_mut();
+            let mut os = self.borrow_mut();
 
             let mode = os.output.as_mut().unwrap().current_mode().unwrap().unwrap();
             let cols = mode.columns();
@@ -586,34 +578,31 @@ impl UefiOS {
             }
             os.write_with_color("\n", Color::Black, Color::Black);
         }
-        // SAFETY: there are no threads, and UI_DRAWER can never be modified (only its contents
-        // can, and RefCell protects that).
-        let ui_drawer = unsafe { UI_DRAWER.borrow_mut() };
-        if let Some(ui) = &*ui_drawer {
-            ui(*self);
+        {
+            let ui = self.borrow_mut().ui_drawer.take();
+            if let Some(ui) = &ui {
+                ui(*self);
+            }
+            self.borrow_mut().ui_drawer = ui;
         }
         // Actually draw the changes.
-        self.os().borrow_mut().flush_ui_buf();
+        self.borrow_mut().flush_ui_buf();
     }
 
     pub fn force_ui_redraw(&self) {
-        if self.os().borrow().output.is_none() {
+        if self.borrow().output.is_none() {
             return;
         }
         self.draw_ui()
     }
 
     pub fn set_ui_drawer<F: Fn(UefiOS) + 'static>(&self, f: F) {
-        let f: Option<Box<dyn Fn(UefiOS)>> = Some(Box::new(f));
-        // SAFETY: there are no threads, and UI_DRAWER is never modified.
-        unsafe {
-            UI_DRAWER.replace(f);
-        }
+        self.borrow_mut().ui_drawer = Some(Box::new(f));
     }
 
     pub fn append_message(&self, msg: String, kind: MessageKind) {
         {
-            let mut os = self.os().borrow_mut();
+            let mut os = self.borrow_mut();
             os.messages.push_back((msg, kind));
             const MAX_MESSAGES: usize = 5;
             if os.messages.len() > MAX_MESSAGES {
@@ -634,7 +623,7 @@ impl UefiOS {
     }
 
     pub fn reset(&self) -> ! {
-        self.os().borrow().runtime_services.reset(
+        self.borrow().runtime_services.reset(
             uefi::table::runtime::ResetType::Warm,
             Status::SUCCESS,
             None,

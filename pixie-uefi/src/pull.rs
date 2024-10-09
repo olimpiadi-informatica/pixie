@@ -27,7 +27,7 @@ struct PartialChunk {
 
 impl PartialChunk {
     fn new(csize: usize) -> Self {
-        let num_packets = (csize + BODY_LEN - 1) / BODY_LEN;
+        let num_packets = csize.div_ceil(BODY_LEN);
         let data = vec![0; 32 * BODY_LEN + csize];
         let missing_first = vec![true; 32 + num_packets];
         let missing_second: [u16; 32] = (0..32)

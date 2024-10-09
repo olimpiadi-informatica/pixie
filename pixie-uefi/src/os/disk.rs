@@ -24,8 +24,8 @@ fn open_disk(
     ScopedProtocol<'static, DiskIo>,
     ScopedProtocol<'static, BlockIO>,
 )> {
-    let bs = os.os().borrow().boot_services;
-    let image_handle = os.os().borrow().boot_services.image_handle();
+    let bs = os.borrow().boot_services;
+    let image_handle = os.borrow().boot_services.image_handle();
     let bio = unsafe {
         bs.open_protocol::<BlockIO>(
             OpenProtocolParams {

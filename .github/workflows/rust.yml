@@ -21,6 +21,6 @@ jobs:
           for t in pixie-*; do
             pushd $t
             cargo fmt --check
-            cargo clippy
+            cargo clippy -- -D warnings
             popd
           done

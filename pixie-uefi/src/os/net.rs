@@ -82,7 +82,7 @@ struct SnpTxToken<'a> {
     buf: &'a mut [u8],
 }
 
-impl<'a> TxToken for SnpTxToken<'a> {
+impl TxToken for SnpTxToken<'_> {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
@@ -99,7 +99,7 @@ impl<'a> TxToken for SnpTxToken<'a> {
     }
 }
 
-impl<'a> RxToken for SnpRxToken<'a> {
+impl RxToken for SnpRxToken<'_> {
     fn consume<R, F>(self, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,

@@ -1,4 +1,4 @@
-use core::{cell::RefCell, pin::Pin, sync::atomic::AtomicBool, task::Context};
+use core::{cell::RefCell, pin::Pin, task::Context};
 
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
 use futures::{
@@ -6,19 +6,13 @@ use futures::{
     Future,
 };
 
-use super::UefiOS;
+use super::{sync::SyncRefCell, UefiOS};
 
 pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
 
-static mut EXECUTOR: Option<RefCell<Executor>> = None;
-static EXECUTOR_CONSTRUCTED: AtomicBool = AtomicBool::new(false);
-
-fn executor() -> &'static RefCell<Executor> {
-    assert!(EXECUTOR_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
-    // SAFETY: guarded by EXECUTOR_CONSTRUCTED. There are no threads, so no problems with
-    // concurrent access.
-    unsafe { EXECUTOR.as_ref().unwrap() }
-}
+static EXECUTOR: SyncRefCell<Executor> = SyncRefCell::new(Executor {
+    tasks: VecDeque::new(),
+});
 
 struct TaskInner {
     pub in_queue: bool,
@@ -59,7 +53,7 @@ impl ArcWake for Task {
     fn wake_by_ref(task: &Arc<Self>) {
         if !task.inner.borrow().in_queue {
             task.inner.borrow_mut().in_queue = true;
-            executor().borrow_mut().tasks.push_back(task.clone());
+            EXECUTOR.borrow_mut().tasks.push_back(task.clone());
         }
     }
 }
@@ -70,21 +64,9 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn init() {
-        assert!(!EXECUTOR_CONSTRUCTED.load(core::sync::atomic::Ordering::Relaxed));
-        // SAFETY: guarded by EXECUTOR_CONSTRUCTED. There are no threads, so no problems with
-        // concurrent access.
-        unsafe {
-            EXECUTOR = Some(RefCell::new(Executor {
-                tasks: VecDeque::new(),
-            }));
-            EXECUTOR_CONSTRUCTED.store(true, core::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
     pub fn run(os: UefiOS) -> ! {
         loop {
-            let task = executor()
+            let task = EXECUTOR
                 .borrow_mut()
                 .tasks
                 .pop_front()
@@ -105,6 +87,6 @@ impl Executor {
     }
 
     pub(super) fn spawn(task: Arc<Task>) {
-        executor().borrow_mut().tasks.push_back(task);
+        EXECUTOR.borrow_mut().tasks.push_back(task);
     }
 }
