@@ -1,6 +1,7 @@
 hosts:
   listen_on: 10.0.0.1
-  #static_dhcp: [10.187.100.1, 10.187.200.200]
+  dhcp: !static [10.187.100.1, 10.187.200.200]
+  #dhcp: !proxy 192.168.1.100
   hostsfile: /etc/hosts
   broadcast_speed: 52428800
 http:

@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use macaddr::MacAddr6;
-use pixie_shared::Unit;
+use pixie_shared::{DhcpMode, Unit};
 
 use crate::{find_network, state::State};
 
@@ -40,12 +40,9 @@ async fn write_config(state: &State) -> Result<()> {
 
     let mut dnsmasq_conf = File::create(state.storage_dir.join("dnsmasq.conf"))?;
 
-    let dhcp_dynamic_conf = match state.config.hosts.static_dhcp {
-        Some((low, high)) => format!("dhcp-range=tag:netboot,{low},{high}"),
-        None => format!(
-            "dhcp-range=tag:netboot,{},proxy",
-            state.config.hosts.listen_on
-        ),
+    let dhcp_dynamic_conf = match state.config.hosts.dhcp {
+        DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
+        DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{},proxy", ip),
     };
 
     let storage_str = state.storage_dir.to_str().unwrap();
