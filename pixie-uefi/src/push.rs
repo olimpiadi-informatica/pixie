@@ -73,9 +73,23 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
     let chunks = parse_disk::parse_disk(&mut disk).await?;
 
     // Split up chunks.
+    let ChunkInfo { start, size } = chunks.last().unwrap();
+    let last_end = start + size;
     let mut final_chunks = Vec::<ChunkInfo>::new();
+    const MIN_CHUNK_SIZE: usize = 1<<16;
+    let mut last_chunk_end = 0;
     for ChunkInfo { mut start, size } in chunks {
-        let end = start + size;
+        let mut end = start + size;
+        if end <= last_chunk_end {
+            // os.append_message(format!("{} {}", end, last_chunk_end), MessageKind::Warning);
+            continue;
+        }
+        start = start / MIN_CHUNK_SIZE * MIN_CHUNK_SIZE;
+        end = (end.div_ceil(MIN_CHUNK_SIZE) * MIN_CHUNK_SIZE).min(last_end);
+        if start < last_chunk_end {
+            start = last_chunk_end;
+        }
+        last_chunk_end = end;
 
         if let Some(last) = final_chunks.last() {
             assert!(last.start + last.size <= start);

@@ -25,10 +25,8 @@ use uefi::{
         },
         Protocol,
     },
-    table::{
-        boot::{EventType, TimerTrigger, Tpl},
-        runtime::{VariableAttributes, VariableVendor},
-    },
+    boot::{EventType, TimerTrigger, Tpl},
+    runtime::{VariableAttributes, VariableVendor},
     CStr16, Event, Handle, Status,
 };
 
@@ -570,7 +568,7 @@ impl UefiOS {
     }
 
     pub fn reset(&self) -> ! {
-        uefi::runtime::reset(uefi::table::runtime::ResetType::WARM, Status::SUCCESS, None)
+        uefi::runtime::reset(uefi::runtime::ResetType::WARM, Status::SUCCESS, None)
     }
 }
 

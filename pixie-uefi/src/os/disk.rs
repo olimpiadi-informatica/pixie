@@ -9,7 +9,7 @@ use gpt_disk_io::{
 use uefi::{
     boot::ScopedProtocol,
     proto::media::{block::BlockIO, disk::DiskIo},
-    table::boot::OpenProtocolParams,
+    boot::OpenProtocolParams,
     Handle,
 };
 
@@ -30,7 +30,7 @@ fn open_disk(
                 controller: None,
                 handle,
             },
-            uefi::table::boot::OpenProtocolAttributes::GetProtocol,
+            uefi::boot::OpenProtocolAttributes::GetProtocol,
         )
     };
     Ok((os.open_handle(handle)?, bio?))

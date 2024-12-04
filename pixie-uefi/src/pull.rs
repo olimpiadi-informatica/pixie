@@ -60,6 +60,7 @@ struct Stats {
     chunks: usize,
     unique: usize,
     fetch: usize,
+    checked: usize,
     recv: usize,
     pack_recv: usize,
     requested: usize,
@@ -158,6 +159,7 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String) -> Result<()>
         chunks: image.disk.len(),
         unique: chunks_info.len(),
         fetch: 0,
+        checked: 0,
         recv: 0,
         pack_recv: 0,
         requested: 0,
@@ -172,6 +174,11 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String) -> Result<()>
         );
         os.write_with_color(
             &format!("{} unique chunks\n", stats2.borrow().unique),
+            Color::White,
+            Color::Black,
+        );
+        os.write_with_color(
+            &format!("{} positions checked\n", stats2.borrow().checked),
             Color::White,
             Color::Black,
         );
@@ -204,6 +211,8 @@ pub async fn pull(os: UefiOS, server_addr: Address, image: String) -> Result<()>
         let mut buf = vec![0; size];
         for &offset in &pos {
             disk.read(offset as u64, &mut buf).await.unwrap();
+            stats.borrow_mut().checked += 1;
+
             if blake3::hash(&buf).as_bytes() == &hash {
                 found = Some(offset);
                 break;
