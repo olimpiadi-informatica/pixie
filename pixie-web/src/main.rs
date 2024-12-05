@@ -110,7 +110,7 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
                 <td>
                     <Button
                         color=ButtonColor::Primary
-                        on_click=move |_| send_req("/admin/gc".into())
+                        on_click=move |_| send_req("admin/gc".into())
                     >
                         "Reclaim disk space"
                     </Button>
