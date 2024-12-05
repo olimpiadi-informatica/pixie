@@ -134,23 +134,17 @@
 <a href="#133" id="133">133</a>
 <a href="#134" id="134">134</a>
 <a href="#135" id="135">135</a>
-<a href="#136" id="136">136</a>
-<a href="#137" id="137">137</a>
-<a href="#138" id="138">138</a>
-<a href="#139" id="139">139</a>
-<a href="#140" id="140">140</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(not(feature = <span class="string">"std"</span>), no_std)]
+<a href="#136" id="136">136</a></pre></div><pre class="rust"><code><span class="attr">#![cfg_attr(not(feature = <span class="string">"std"</span>), no_std)]
 
 </span><span class="kw">extern crate </span>alloc;
 
 <span class="kw">use </span>alloc::{collections::BTreeMap, string::String, vec::Vec};
 <span class="kw">use </span>blake3::OUT_LEN;
+<span class="kw">use </span>core::net::Ipv4Addr;
 <span class="kw">use </span>serde::{Deserialize, Serialize};
 
 <span class="attr">#[cfg(feature = <span class="string">"std"</span>)]
-</span><span class="kw">use </span>std::{
-    collections::HashMap,
-    net::{Ipv4Addr, SocketAddrV4},
-};
+</span><span class="kw">use </span>std::{collections::HashMap, net::SocketAddrV4};
 
 <span class="kw">pub mod </span>bijection;
 <span class="kw">pub use </span>bijection::Bijection;
@@ -222,11 +216,9 @@
 <span class="kw">pub const </span>HEADER_LEN: usize = <span class="number">34</span>;
 <span class="kw">pub const </span>BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
-<span class="kw">pub type </span>Ip = [u8; <span class="number">4</span>];
-
-<span class="attr">#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+<span class="attr">#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 </span><span class="kw">pub struct </span>Address {
-    <span class="kw">pub </span>ip: Ip,
+    <span class="kw">pub </span>ip: Ipv4Addr,
     <span class="kw">pub </span>port: u16,
 }
 
