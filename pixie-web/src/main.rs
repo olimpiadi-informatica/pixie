@@ -283,7 +283,10 @@ fn App() -> impl IntoView {
         .expect("could not make relative URL");
 
     let handle_message = move |msg| match msg {
-        StatusUpdate::Units(u) => set_units.set(Some(u)),
+        StatusUpdate::Units(mut u) => {
+            u.sort_by_key(|x| x.static_ip());
+            set_units.set(Some(u));
+        }
         StatusUpdate::Config(c) => set_config.set(Some(c)),
         StatusUpdate::HostMap(h) => set_hostname.set(Some(h)),
         StatusUpdate::ImageStats(i) => set_image_stats.set(Some(i)),
