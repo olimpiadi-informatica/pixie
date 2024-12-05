@@ -4,26 +4,26 @@ name = "pixie-server"
 version = "0.1.0"
 
 [dependencies]
-anyhow = "1.0.75"
+anyhow = "1.0.94"
 blake3 = "1"
-clap = { version = "4.4.11", features = ["derive"] }
+clap = { version = "4.5.22", features = ["derive"] }
 env_logger = "0.11.5"
 interfaces = "0.0.9"
 ipnet = { version = "2.9.0", features = ["serde"] }
-libc = "0.2.150"
+libc = "0.2.167"
 log = "0.4.20"
 macaddr = { version = "1.0.1", features = ["serde"] }
 mktemp = "0.5.1"
 postcard = { version = "1.0.8", default-features = false, features = ["alloc"] }
-serde = "1.0.193"
+serde = "1.0.215"
 serde_derive = "1.0.193"
 serde_yaml = "0.9"
 tokio = { version = "1.34.0", features = ["macros", "fs", "rt-multi-thread", "sync", "signal"] }
-serde_json = "1.0.108"
+serde_json = "1.0.133"
 hostfile = "1.0.0"
 hex = "0.4.3"
-axum = { version = "0.7.2", features = ["ws"] }
-tower-http = { version = "0.6.1", features = ["fs", "compression-gzip", "auth", "trace"] }
+axum = { version = "0.7.9", features = ["ws"] }
+tower-http = { version = "0.6.2", features = ["fs", "compression-gzip", "auth", "trace"] }
 bytes = "1.5.0"
 http-body-util = "0.1.0"
 futures = "0.3.30"
