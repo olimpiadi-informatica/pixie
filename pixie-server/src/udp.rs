@@ -64,7 +64,7 @@ async fn broadcast_chunks(
                 Err(e) => Err(e)?,
             };
 
-            let num_packets = (data.len() + BODY_LEN - 1) / BODY_LEN;
+            let num_packets = data.len().div_ceil(BODY_LEN);
             write_buf[..32].clone_from_slice(&index);
 
             let mut xor = [[0; BODY_LEN]; 32];
