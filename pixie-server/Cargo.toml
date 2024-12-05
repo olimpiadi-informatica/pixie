@@ -24,7 +24,7 @@ hostfile = "1.0.0"
 hex = "0.4.3"
 axum = { version = "0.7.2", features = ["ws"] }
 tower-http = { version = "0.6.1", features = ["fs", "compression-gzip", "auth", "trace"] }
-bytes = "1.5.0"
+bytes = "1.9.0"
 http-body-util = "0.1.0"
 futures = "0.3.30"
 tokio-stream = { version = "0.1.16", features = ["sync"] }
