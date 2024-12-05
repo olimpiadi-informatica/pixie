@@ -286,7 +286,7 @@
                 <span class="prelude-val">Err</span>(e) =&gt; <span class="prelude-val">Err</span>(e)<span class="question-mark">?</span>,
             };
 
-            <span class="kw">let </span>num_packets = (data.len() + BODY_LEN - <span class="number">1</span>) / BODY_LEN;
+            <span class="kw">let </span>num_packets = data.len().div_ceil(BODY_LEN);
             write_buf[..<span class="number">32</span>].clone_from_slice(<span class="kw-2">&amp;</span>index);
 
             <span class="kw">let </span><span class="kw-2">mut </span>xor = [[<span class="number">0</span>; BODY_LEN]; <span class="number">32</span>];
