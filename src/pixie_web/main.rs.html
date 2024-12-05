@@ -377,7 +377,10 @@
 <a href="#376" id="376">376</a>
 <a href="#377" id="377">377</a>
 <a href="#378" id="378">378</a>
-<a href="#379" id="379">379</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt, net::Ipv4Addr};
+<a href="#379" id="379">379</a>
+<a href="#380" id="380">380</a>
+<a href="#381" id="381">381</a>
+<a href="#382" id="382">382</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{collections::HashMap, fmt, net::Ipv4Addr};
 
 <span class="kw">use </span>futures::StreamExt;
 <span class="kw">use </span>leptos::<span class="kw-2">*</span>;
@@ -662,7 +665,10 @@
         .expect(<span class="string">"could not make relative URL"</span>);
 
     <span class="kw">let </span>handle_message = <span class="kw">move </span>|msg| <span class="kw">match </span>msg {
-        StatusUpdate::Units(u) =&gt; set_units.set(<span class="prelude-val">Some</span>(u)),
+        StatusUpdate::Units(<span class="kw-2">mut </span>u) =&gt; {
+            u.sort_by_key(|x| x.static_ip());
+            set_units.set(<span class="prelude-val">Some</span>(u));
+        }
         StatusUpdate::Config(c) =&gt; set_config.set(<span class="prelude-val">Some</span>(c)),
         StatusUpdate::HostMap(h) =&gt; set_hostname.set(<span class="prelude-val">Some</span>(h)),
         StatusUpdate::ImageStats(i) =&gt; set_image_stats.set(<span class="prelude-val">Some</span>(i)),
