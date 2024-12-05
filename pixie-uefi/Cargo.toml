@@ -19,8 +19,8 @@ managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 postcard = { version = "1.0.8", default-features = false, features = ["alloc"] }
 rand = { version = "0.8.5", default-features = false }
 rand_xoshiro = { version = "0.6.0", default-features = false }
-smoltcp = { version = "0.11.0", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async"] }
-uefi = { version = "0.32.0", features = ["alloc", "global_allocator", "panic_handler"] }
+smoltcp = { version = "0.12.0", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async", "socket-tcp-cubic"] }
+uefi = { version = "0.33.0", features = ["alloc", "global_allocator", "panic_handler"] }
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"

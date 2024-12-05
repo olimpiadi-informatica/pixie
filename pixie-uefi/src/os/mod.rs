@@ -3,6 +3,7 @@ use core::{
     ffi::c_void,
     fmt::{self, Display, Write},
     future::{poll_fn, Future, PollFn},
+    net::Ipv4Addr,
     ptr::NonNull,
     task::{Context, Poll},
 };
@@ -15,7 +16,7 @@ use alloc::{
     vec::Vec,
 };
 use uefi::{
-    boot::ScopedProtocol,
+    boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
     proto::{
         console::text::{Color, Input, Key, Output},
         device_path::{
@@ -25,10 +26,7 @@ use uefi::{
         },
         Protocol,
     },
-    table::{
-        boot::{EventType, TimerTrigger, Tpl},
-        runtime::{VariableAttributes, VariableVendor},
-    },
+    runtime::{VariableAttributes, VariableVendor},
     CStr16, Event, Handle, Status,
 };
 
@@ -435,7 +433,7 @@ impl UefiOS {
         Disk::new(*self)
     }
 
-    pub async fn connect(&self, ip: [u8; 4], port: u16) -> Result<TcpStream> {
+    pub async fn connect(&self, ip: Ipv4Addr, port: u16) -> Result<TcpStream> {
         TcpStream::new(*self, ip, port).await
     }
 
@@ -570,7 +568,7 @@ impl UefiOS {
     }
 
     pub fn reset(&self) -> ! {
-        uefi::runtime::reset(uefi::table::runtime::ResetType::WARM, Status::SUCCESS, None)
+        uefi::runtime::reset(uefi::runtime::ResetType::WARM, Status::SUCCESS, None)
     }
 }
 
