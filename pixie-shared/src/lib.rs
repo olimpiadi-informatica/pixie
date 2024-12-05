@@ -4,13 +4,11 @@ extern crate alloc;
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;
+use core::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "std")]
-use std::{
-    collections::HashMap,
-    net::{Ipv4Addr, SocketAddrV4},
-};
+use std::{collections::HashMap, net::SocketAddrV4};
 
 pub mod bijection;
 pub use bijection::Bijection;
@@ -82,11 +80,9 @@ pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
-pub type Ip = [u8; 4];
-
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Address {
-    pub ip: Ip,
+    pub ip: Ipv4Addr,
     pub port: u16,
 }
 

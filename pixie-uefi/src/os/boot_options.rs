@@ -4,7 +4,7 @@ use alloc::{
 };
 use uefi::{
     proto::device_path::DevicePath,
-    table::runtime::{VariableAttributes, VariableVendor},
+    runtime::{VariableAttributes, VariableVendor},
     CString16,
 };
 

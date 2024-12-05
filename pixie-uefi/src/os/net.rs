@@ -1,16 +1,15 @@
-use core::{future::poll_fn, task::Poll};
+use core::{future::poll_fn, net::IpAddr, task::Poll};
 
 use alloc::boxed::Box;
 use futures::future::select;
 
 use smoltcp::{
-    iface::{Config, Interface, SocketHandle, SocketSet},
+    iface::{Config, Interface, PollResult, SocketHandle, SocketSet},
     phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
     socket::{
         dhcpv4::{Event, Socket as Dhcpv4Socket},
         tcp::{Socket as TcpSocket, State},
-        udp,
-        udp::Socket as UdpSocket,
+        udp::{self, Socket as UdpSocket},
     },
     storage::RingBuffer,
     time::{Duration, Instant},
@@ -102,7 +101,7 @@ impl TxToken for SnpTxToken<'_> {
 impl RxToken for SnpRxToken<'_> {
     fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
         f(self.packet)
     }
@@ -224,7 +223,7 @@ impl NetworkInterface {
         let status = self
             .interface
             .poll(now, &mut self.device, &mut self.socket_set);
-        if !status {
+        if status == PollResult::None {
             return false;
         }
 
@@ -265,20 +264,21 @@ pub struct TcpStream {
 // create that many, but still it would be nice to fix eventually.
 // Also, trying to use a closed connection may result in panics.
 impl TcpStream {
-    pub async fn new(os: UefiOS, ip: [u8; 4], port: u16) -> Result<TcpStream> {
+    pub async fn new(os: UefiOS, ip: Ipv4Address, port: u16) -> Result<TcpStream> {
         os.wait_for_ip().await;
         const TCP_BUF_SIZE: usize = 1 << 22;
         let mut tcp_socket = TcpSocket::new(
             RingBuffer::new(vec![0; TCP_BUF_SIZE]),
             RingBuffer::new(vec![0; TCP_BUF_SIZE]),
         );
+        tcp_socket.set_congestion_control(smoltcp::socket::tcp::CongestionControl::Cubic);
         tcp_socket.set_timeout(Some(Duration::from_secs(5)));
         tcp_socket.set_keep_alive(Some(Duration::from_secs(1)));
         let sport = os.net().get_ephemeral_port();
         tcp_socket.connect(
             os.net().interface.context(),
             IpEndpoint {
-                addr: IpAddress::Ipv4(Ipv4Address(ip)),
+                addr: IpAddress::Ipv4(ip),
                 port,
             },
             sport,
@@ -467,9 +467,9 @@ impl UdpHandle {
         Ok(ret)
     }
 
-    pub async fn send(&self, ip: [u8; 4], port: u16, data: &[u8]) -> Result<()> {
+    pub async fn send(&self, ip: Ipv4Address, port: u16, data: &[u8]) -> Result<()> {
         let endpoint = IpEndpoint {
-            addr: IpAddress::Ipv4(Ipv4Address(ip)),
+            addr: ip.into(),
             port,
         };
 
@@ -499,7 +499,9 @@ impl UdpHandle {
             } else {
                 // Cannot fail if can_recv() returned true.
                 let recvd = socket.recv_slice(buf2).unwrap();
-                let ip = (recvd.1).endpoint.addr.as_bytes().try_into().unwrap();
+                let IpAddr::V4(ip) = (recvd.1).endpoint.addr.into() else {
+                    unreachable!();
+                };
                 let port = (recvd.1).endpoint.port;
                 Poll::Ready((recvd.0, Address { ip, port }))
             }
