@@ -111,14 +111,12 @@ impl State {
                 })
                 .collect::<Result<_>>()?;
 
-        let images: BTreeMap<String, (u64, u64)> = config
-            .images
-            .iter()
-            .map(|image_name| {
-                let path = storage_dir.join("images").join(image_name);
-                if !path.is_file() {
-                    return Ok((image_name.clone(), (0, 0)));
-                }
+        let images: BTreeMap<String, (u64, u64)> = fs::read_dir(storage_dir.join("images"))
+            .unwrap()
+            .map(|image_entry| {
+                let image_entry = image_entry?;
+                let image_name = image_entry.file_name().into_string().unwrap();
+                let path = image_entry.path();
                 let content = fs::read(&path)?;
                 let image = postcard::from_bytes::<Image>(&content)?;
                 let csize = get_image_csize(&image);
@@ -127,7 +125,7 @@ impl State {
                     size += chunk.size as u64;
                     chunk_stats.get_mut(&chunk.hash).unwrap().ref_cnt += 1;
                 }
-                Ok((image_name.clone(), (size, csize)))
+                Ok((image_name, (size, csize)))
             })
             .collect::<Result<_>>()?;
 
@@ -214,7 +212,12 @@ impl State {
             bail!("Unknown image: {}", name);
         }
 
-        let path = self.storage_dir.join("images").join(&name);
+        let now = chrono::Utc::now();
+        let name_pinned = format!(
+            "{}-{}",
+            name,
+            now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
         let data = postcard::to_allocvec(&image)?;
 
         let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
@@ -223,26 +226,29 @@ impl State {
         self.image_stats.send_modify(|image_stats| {
             let mut chunk_stats = self.chunk_stats.lock().unwrap();
 
-            if path.exists() {
-                let old_image = fs::read(&path).unwrap();
-                let old_image = postcard::from_bytes::<Image>(&old_image).unwrap();
-                for chunk in old_image.disk {
-                    let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                    info.ref_cnt -= 1;
-                    if info.ref_cnt == 0 {
-                        image_stats.reclaimable += info.csize;
+            for name in [name, name_pinned] {
+                let path = self.storage_dir.join("images").join(&name);
+                if path.exists() {
+                    let old_image = fs::read(&path).unwrap();
+                    let old_image = postcard::from_bytes::<Image>(&old_image).unwrap();
+                    for chunk in old_image.disk {
+                        let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                        info.ref_cnt -= 1;
+                        if info.ref_cnt == 0 {
+                            image_stats.reclaimable += info.csize;
+                        }
                     }
                 }
-            }
 
-            atomic_write(&path, &data).unwrap();
-            image_stats.images.insert(name, (size, csize));
-            for chunk in image.disk {
-                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                if info.ref_cnt == 0 {
-                    image_stats.reclaimable -= info.csize;
+                atomic_write(&path, &data).unwrap();
+                image_stats.images.insert(name, (size, csize));
+                for chunk in &image.disk {
+                    let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                    if info.ref_cnt == 0 {
+                        image_stats.reclaimable -= info.csize;
+                    }
+                    info.ref_cnt += 1;
                 }
-                info.ref_cnt += 1;
             }
         });
 
