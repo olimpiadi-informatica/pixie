@@ -263,7 +263,13 @@
 <a href="#262" id="262">262</a>
 <a href="#263" id="263">263</a>
 <a href="#264" id="264">264</a>
-<a href="#265" id="265">265</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
+<a href="#265" id="265">265</a>
+<a href="#266" id="266">266</a>
+<a href="#267" id="267">267</a>
+<a href="#268" id="268">268</a>
+<a href="#269" id="269">269</a>
+<a href="#270" id="270">270</a>
+<a href="#271" id="271">271</a></pre></div><pre class="rust"><code><span class="kw">use </span>std::{
     collections::{BTreeMap, HashMap},
     fs::{<span class="self">self</span>, File},
     net::{IpAddr, Ipv4Addr},
@@ -376,14 +382,12 @@
                 })
                 .collect::&lt;<span class="prelude-ty">Result</span>&lt;<span class="kw">_</span>&gt;&gt;()<span class="question-mark">?</span>;
 
-        <span class="kw">let </span>images: BTreeMap&lt;String, (u64, u64)&gt; = config
-            .images
-            .iter()
-            .map(|image_name| {
-                <span class="kw">let </span>path = storage_dir.join(<span class="string">"images"</span>).join(image_name);
-                <span class="kw">if </span>!path.is_file() {
-                    <span class="kw">return </span><span class="prelude-val">Ok</span>((image_name.clone(), (<span class="number">0</span>, <span class="number">0</span>)));
-                }
+        <span class="kw">let </span>images: BTreeMap&lt;String, (u64, u64)&gt; = fs::read_dir(storage_dir.join(<span class="string">"images"</span>))
+            .unwrap()
+            .map(|image_entry| {
+                <span class="kw">let </span>image_entry = image_entry<span class="question-mark">?</span>;
+                <span class="kw">let </span>image_name = image_entry.file_name().into_string().unwrap();
+                <span class="kw">let </span>path = image_entry.path();
                 <span class="kw">let </span>content = fs::read(<span class="kw-2">&amp;</span>path)<span class="question-mark">?</span>;
                 <span class="kw">let </span>image = postcard::from_bytes::&lt;Image&gt;(<span class="kw-2">&amp;</span>content)<span class="question-mark">?</span>;
                 <span class="kw">let </span>csize = get_image_csize(<span class="kw-2">&amp;</span>image);
@@ -392,7 +396,7 @@
                     size += chunk.size <span class="kw">as </span>u64;
                     chunk_stats.get_mut(<span class="kw-2">&amp;</span>chunk.hash).unwrap().ref_cnt += <span class="number">1</span>;
                 }
-                <span class="prelude-val">Ok</span>((image_name.clone(), (size, csize)))
+                <span class="prelude-val">Ok</span>((image_name, (size, csize)))
             })
             .collect::&lt;<span class="prelude-ty">Result</span>&lt;<span class="kw">_</span>&gt;&gt;()<span class="question-mark">?</span>;
 
@@ -479,7 +483,12 @@
             <span class="macro">bail!</span>(<span class="string">"Unknown image: {}"</span>, name);
         }
 
-        <span class="kw">let </span>path = <span class="self">self</span>.storage_dir.join(<span class="string">"images"</span>).join(<span class="kw-2">&amp;</span>name);
+        <span class="kw">let </span>now = chrono::Utc::now();
+        <span class="kw">let </span>name_pinned = <span class="macro">format!</span>(
+            <span class="string">"{}-{}"</span>,
+            name,
+            now.to_rfc3339_opts(chrono::SecondsFormat::Secs, <span class="bool-val">true</span>)
+        );
         <span class="kw">let </span>data = postcard::to_allocvec(<span class="kw-2">&amp;</span>image)<span class="question-mark">?</span>;
 
         <span class="kw">let </span>size = image.disk.iter().map(|chunk| chunk.size <span class="kw">as </span>u64).sum();
@@ -488,26 +497,29 @@
         <span class="self">self</span>.image_stats.send_modify(|image_stats| {
             <span class="kw">let </span><span class="kw-2">mut </span>chunk_stats = <span class="self">self</span>.chunk_stats.lock().unwrap();
 
-            <span class="kw">if </span>path.exists() {
-                <span class="kw">let </span>old_image = fs::read(<span class="kw-2">&amp;</span>path).unwrap();
-                <span class="kw">let </span>old_image = postcard::from_bytes::&lt;Image&gt;(<span class="kw-2">&amp;</span>old_image).unwrap();
-                <span class="kw">for </span>chunk <span class="kw">in </span>old_image.disk {
-                    <span class="kw">let </span>info = chunk_stats.get_mut(<span class="kw-2">&amp;</span>chunk.hash).unwrap();
-                    info.ref_cnt -= <span class="number">1</span>;
-                    <span class="kw">if </span>info.ref_cnt == <span class="number">0 </span>{
-                        image_stats.reclaimable += info.csize;
+            <span class="kw">for </span>name <span class="kw">in </span>[name, name_pinned] {
+                <span class="kw">let </span>path = <span class="self">self</span>.storage_dir.join(<span class="string">"images"</span>).join(<span class="kw-2">&amp;</span>name);
+                <span class="kw">if </span>path.exists() {
+                    <span class="kw">let </span>old_image = fs::read(<span class="kw-2">&amp;</span>path).unwrap();
+                    <span class="kw">let </span>old_image = postcard::from_bytes::&lt;Image&gt;(<span class="kw-2">&amp;</span>old_image).unwrap();
+                    <span class="kw">for </span>chunk <span class="kw">in </span>old_image.disk {
+                        <span class="kw">let </span>info = chunk_stats.get_mut(<span class="kw-2">&amp;</span>chunk.hash).unwrap();
+                        info.ref_cnt -= <span class="number">1</span>;
+                        <span class="kw">if </span>info.ref_cnt == <span class="number">0 </span>{
+                            image_stats.reclaimable += info.csize;
+                        }
                     }
                 }
-            }
 
-            atomic_write(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>data).unwrap();
-            image_stats.images.insert(name, (size, csize));
-            <span class="kw">for </span>chunk <span class="kw">in </span>image.disk {
-                <span class="kw">let </span>info = chunk_stats.get_mut(<span class="kw-2">&amp;</span>chunk.hash).unwrap();
-                <span class="kw">if </span>info.ref_cnt == <span class="number">0 </span>{
-                    image_stats.reclaimable -= info.csize;
+                atomic_write(<span class="kw-2">&amp;</span>path, <span class="kw-2">&amp;</span>data).unwrap();
+                image_stats.images.insert(name, (size, csize));
+                <span class="kw">for </span>chunk <span class="kw">in </span><span class="kw-2">&amp;</span>image.disk {
+                    <span class="kw">let </span>info = chunk_stats.get_mut(<span class="kw-2">&amp;</span>chunk.hash).unwrap();
+                    <span class="kw">if </span>info.ref_cnt == <span class="number">0 </span>{
+                        image_stats.reclaimable -= info.csize;
+                    }
+                    info.ref_cnt += <span class="number">1</span>;
                 }
-                info.ref_cnt += <span class="number">1</span>;
             }
         });
 
