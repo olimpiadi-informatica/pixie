@@ -79,7 +79,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             if !state.config.images.contains(&name) {
                 return Ok(format!("Unknown image: {}", name).into_bytes());
             }
-            state.add_image(name, image)?;
+            state.add_image(name, &image)?;
 
             Vec::new()
         }

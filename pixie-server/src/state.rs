@@ -6,7 +6,7 @@ use std::{
     sync::Mutex,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use macaddr::MacAddr6;
 use mktemp::Temp;
 use tokio::sync::watch;
@@ -166,7 +166,7 @@ impl State {
         Ok(())
     }
 
-    pub fn gc_chunks(&self) -> Result<()> {
+    pub fn gc_chunks(&self) {
         self.image_stats.send_modify(|image_stats| {
             let mut chunk_stats = self.chunk_stats.lock().unwrap();
             let mut cnt = 0;
@@ -183,7 +183,6 @@ impl State {
                 }
             });
         });
-        Ok(())
     }
 
     pub fn add_chunk(&self, hash: ChunkHash, data: &[u8]) -> Result<()> {
@@ -207,49 +206,111 @@ impl State {
         Ok(())
     }
 
-    pub fn add_image(&self, name: String, image: Image) -> Result<()> {
-        if !self.config.images.contains(&name) {
-            bail!("Unknown image: {}", name);
-        }
-
-        let now = chrono::Utc::now();
-        let name_pinned = format!(
-            "{}-{}",
-            name,
-            now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        );
+    fn write_image(
+        &self,
+        name: String,
+        image: &Image,
+        image_stats: &mut ImageStat,
+        chunk_stats: &mut BTreeMap<[u8; 32], ChunkStat>,
+    ) -> Result<()> {
+        let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
+        let csize = get_image_csize(image);
         let data = postcard::to_allocvec(&image)?;
 
-        let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
-        let csize = get_image_csize(&image);
+        let path = self.storage_dir.join("images").join(&name);
+        let old = image_stats.images.insert(name, (size, csize));
+
+        if old.is_some() {
+            let old_image = fs::read(&path).unwrap();
+            let old_image = postcard::from_bytes::<Image>(&old_image).unwrap();
+            for chunk in old_image.disk {
+                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                info.ref_cnt -= 1;
+                if info.ref_cnt == 0 {
+                    image_stats.reclaimable += info.csize;
+                }
+            }
+        }
+
+        atomic_write(&path, &data).unwrap();
+        for chunk in &image.disk {
+            let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+            if info.ref_cnt == 0 {
+                image_stats.reclaimable -= info.csize;
+            }
+            info.ref_cnt += 1;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_image(&self, name: String, image: &Image) -> Result<()> {
+        ensure!(
+            self.config.images.contains(&name),
+            "Unknown image: {}",
+            name
+        );
+
+        let now = chrono::Utc::now();
+        let version = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let name_with_version = format!("{}@{}", name, version);
 
         self.image_stats.send_modify(|image_stats| {
             let mut chunk_stats = self.chunk_stats.lock().unwrap();
 
-            for name in [name, name_pinned] {
-                let path = self.storage_dir.join("images").join(&name);
-                if path.exists() {
-                    let old_image = fs::read(&path).unwrap();
-                    let old_image = postcard::from_bytes::<Image>(&old_image).unwrap();
-                    for chunk in old_image.disk {
-                        let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                        info.ref_cnt -= 1;
-                        if info.ref_cnt == 0 {
-                            image_stats.reclaimable += info.csize;
-                        }
-                    }
-                }
+            self.write_image(name, image, image_stats, &mut chunk_stats)
+                .unwrap();
+            self.write_image(name_with_version, image, image_stats, &mut chunk_stats)
+                .unwrap();
+        });
 
-                atomic_write(&path, &data).unwrap();
-                image_stats.images.insert(name, (size, csize));
-                for chunk in &image.disk {
-                    let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                    if info.ref_cnt == 0 {
-                        image_stats.reclaimable -= info.csize;
-                    }
-                    info.ref_cnt += 1;
+        Ok(())
+    }
+
+    pub fn rollback(&self, full_name: &str) -> Result<()> {
+        let mut it = full_name.split('@');
+        let name = it.next().unwrap().to_owned();
+        let _version = it.next().unwrap_or_default();
+        ensure!(it.next().is_none(), "Invalid image name");
+        ensure!(self.config.images.contains(&name), "Unknown image: {name}",);
+
+        self.image_stats.send_modify(|image_stats| {
+            let mut chunk_stats = self.chunk_stats.lock().unwrap();
+
+            let path = self.storage_dir.join("images").join(full_name);
+            let data = fs::read(&path).unwrap();
+            let image = postcard::from_bytes::<Image>(&data).unwrap();
+
+            self.write_image(name, &image, image_stats, &mut chunk_stats)
+                .unwrap();
+        });
+
+        Ok(())
+    }
+
+    pub fn delete_image(&self, full_name: &str) -> Result<()> {
+        let mut it = full_name.split('@');
+        let _name = it.next().unwrap().to_owned();
+        let _version = it.next().unwrap_or_default();
+        ensure!(it.next().is_none(), "Invalid image name");
+
+        self.image_stats.send_modify(|image_stats| {
+            let mut chunk_stats = self.chunk_stats.lock().unwrap();
+
+            let path = self.storage_dir.join("images").join(full_name);
+            let data = fs::read(&path).unwrap();
+            let image = postcard::from_bytes::<Image>(&data).unwrap();
+
+            for chunk in image.disk {
+                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
+                info.ref_cnt -= 1;
+                if info.ref_cnt == 0 {
+                    image_stats.reclaimable += info.csize;
                 }
             }
+
+            fs::remove_file(&path).unwrap();
+            image_stats.images.remove(full_name);
         });
 
         Ok(())

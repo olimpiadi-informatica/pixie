@@ -155,9 +155,35 @@ async fn forget(
     }
 }
 
+async fn rollback(
+    Path(image): Path<String>,
+    extract::State(state): extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    match state.rollback(&image) {
+        Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{}\n", e),
+        ),
+    }
+}
+
+async fn delete_image(
+    Path(image): Path<String>,
+    extract::State(state): extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    match state.delete_image(&image) {
+        Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("{}\n", e),
+        ),
+    }
+}
+
 async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
-    state.gc_chunks().unwrap();
-    "Garbage collection completed\n"
+    state.gc_chunks();
+    axum::http::StatusCode::NO_CONTENT
 }
 
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
@@ -198,6 +224,8 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .route("/admin/action/:unit/:action", get(action))
         .route("/admin/image/:unit/:image", get(image))
         .route("/admin/forget/:unit", get(forget))
+        .route("/admin/rollback/:image", get(rollback))
+        .route("/admin/delete/:image", get(delete_image))
         .nest_service(
             "/",
             ServeDir::new(&admin_path).append_index_html_on_directories(true),

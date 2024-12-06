@@ -45,13 +45,22 @@ impl fmt::Display for Bytes {
 
 #[component]
 fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
-    let image_row = move |(name, image): (String, (u64, u64))| {
-        let url_pull = format!("admin/action/{name}/pull");
-        let url_boot = format!("admin/action/{name}/reboot");
-        let url_cancel = format!("admin/action/{name}/wait");
+    let image_row = move |(full_name, image): (String, (u64, u64))| {
+        let url_pull = format!("admin/action/{full_name}/pull");
+        let url_boot = format!("admin/action/{full_name}/reboot");
+        let url_cancel = format!("admin/action/{full_name}/wait");
+        let url_rollback = format!("admin/rollback/{full_name}");
+        let url_delete = format!("admin/delete/{full_name}");
+
+        let mut it = full_name.split('@');
+        let name = it.next().unwrap().to_owned();
+        let version = it.next().map(ToOwned::to_owned);
+        let has_version = version.is_some();
+
         view! {
             <tr>
                 <td>{name}</td>
+                <td>{version}</td>
                 <td>{Bytes(image.0).to_string()}</td>
                 <td>{Bytes(image.1).to_string()}</td>
                 <td>
@@ -74,6 +83,27 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
                         >
                             "Set all machines to wait for next command"
                         </Button>
+                        {
+                            if has_version {
+                                view! {
+                                    <Button
+                                        variant=ButtonVariant::Outlined
+                                        on_click=move |_| send_req(url_rollback.clone())
+                                        >
+                                        "Rollback image"
+                                    </Button>
+                                    <Button
+                                        color=ButtonColor::Error
+                                        on_click=move |_| send_req(url_delete.clone())
+                                        >
+                                        "Delete image"
+                                    </Button>
+                                }
+                                .into_view()
+                            } else {
+                                view! {}.into_view()
+                            }
+                        }
                     </ButtonGroup>
                 </td>
             </tr>
@@ -89,6 +119,7 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
         <Table>
             <tr>
                 <th>"Image"</th>
+                <th>"Version"</th>
                 <th>"Size"</th>
                 <th>"Compressed"</th>
                 <th></th>
@@ -100,11 +131,13 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
             />
             <tr>
                 <td>"Total"</td>
+                <td></td>
                 <td>{move || Bytes(total_csize().unwrap_or_default()).to_string()}</td>
                 <td></td>
             </tr>
             <tr>
                 <td>"Reclaimable"</td>
+                <td></td>
                 <td>{move || Bytes(reclaimable().unwrap_or_default()).to_string()}</td>
                 <td></td>
                 <td>
