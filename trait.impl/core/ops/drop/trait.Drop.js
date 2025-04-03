@@ -1,5 +1,5 @@
 (function() {
-    var implementors = Object.fromEntries([["pixie_server",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.83.0/core/ops/drop/trait.Drop.html\" title=\"trait core::ops::drop::Drop\">Drop</a> for <a class=\"struct\" href=\"pixie_server/dnsmasq/struct.DnsmasqHandle.html\" title=\"struct pixie_server::dnsmasq::DnsmasqHandle\">DnsmasqHandle</a>"]]]]);
+    var implementors = Object.fromEntries([["pixie_server",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.86.0/core/ops/drop/trait.Drop.html\" title=\"trait core::ops::drop::Drop\">Drop</a> for <a class=\"struct\" href=\"pixie_server/dnsmasq/struct.DnsmasqHandle.html\" title=\"struct pixie_server::dnsmasq::DnsmasqHandle\">DnsmasqHandle</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
