@@ -10,9 +10,9 @@ console_log = "1.0.0"
 futures = "0.3.30"
 leptos = { version = "0.6.15", features = ["csr"] }
 leptos-use = "0.13.5"
-log = "0.4.22"
+log = "0.4.27"
 #macaddr = "1.0.1"
 pixie-shared = { version = "0.1.0", path = "../pixie-shared", features = ["macaddr", "std"] }
-reqwest = { version = "0.12.7", default-features = false, features = ["stream"] }
-serde_json = "1.0.128"
+reqwest = { version = "0.12.12", default-features = false, features = ["stream"] }
+serde_json = "1.0.140"
 thaw = { version = "0.3.4", features = ["csr"] }
