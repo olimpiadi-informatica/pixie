@@ -1,4 +1,8 @@
-use std::{io::ErrorKind, net::IpAddr, net::SocketAddr, sync::Arc};
+use std::{
+    io::ErrorKind,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
 
 use tokio::{
     fs,
@@ -185,7 +189,7 @@ async fn handle_connection(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let listener = TcpListener::bind((state.config.hosts.listen_on, ACTION_PORT)).await?;
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
     log::info!("Listening on {}", listener.local_addr()?);
     loop {
         let (stream, addr) = listener.accept().await?;

@@ -1,4 +1,8 @@
-use std::{net::IpAddr, sync::Arc, time::SystemTime};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+    time::SystemTime,
+};
 
 use anyhow::{bail, Result};
 use tokio::net::UdpSocket;
@@ -7,7 +11,7 @@ use crate::{find_mac, state::State};
 use pixie_shared::{PACKET_LEN, PING_PORT};
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let socket = UdpSocket::bind((state.config.hosts.listen_on, PING_PORT)).await?;
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PING_PORT)).await?;
     log::info!("Listening on {}", socket.local_addr()?);
 
     let mut buf = [0; PACKET_LEN];
