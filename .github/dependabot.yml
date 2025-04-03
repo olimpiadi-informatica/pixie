@@ -9,7 +9,7 @@ updates:
     directories:
     - "/pixie-*"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     groups:
       patches:
         applies-to: version-updates
