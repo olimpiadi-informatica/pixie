@@ -65,26 +65,29 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
                 <td>{Bytes(image.1).to_string()}</td>
                 <td>
                     <ButtonGroup>
-                        <Button
-                            color=ButtonColor::Error
-                            on_click=move |_| send_req(url_pull.clone())
-                        >
-                            "Flash all machines"
-                        </Button>
-                        <Button
-                            color=ButtonColor::Success
-                            on_click=move |_| send_req(url_boot.clone())
-                        >
-                            "Set all machines to boot into the OS"
-                        </Button>
-                        <Button
-                            color=ButtonColor::Primary
-                            on_click=move |_| send_req(url_cancel.clone())
-                        >
-                            "Set all machines to wait for next command"
-                        </Button>
                         {
-                            if has_version {
+                            if !has_version {
+                                view! {
+                                    <Button
+                                        color=ButtonColor::Error
+                                        on_click=move |_| send_req(url_pull.clone())
+                                    >
+                                        "Flash all machines"
+                                    </Button>
+                                    <Button
+                                        color=ButtonColor::Success
+                                        on_click=move |_| send_req(url_boot.clone())
+                                    >
+                                        "Set all machines to boot into the OS"
+                                    </Button>
+                                    <Button
+                                        color=ButtonColor::Primary
+                                        on_click=move |_| send_req(url_cancel.clone())
+                                    >
+                                        "Set all machines to wait for next command"
+                                    </Button>
+                                }.into_view()
+                            } else {
                                 view! {
                                     <Button
                                         variant=ButtonVariant::Outlined
@@ -100,8 +103,6 @@ fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
                                     </Button>
                                 }
                                 .into_view()
-                            } else {
-                                view! {}.into_view()
                             }
                         }
                     </ButtonGroup>
