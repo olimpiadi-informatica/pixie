@@ -5,25 +5,30 @@ use std::collections::BTreeMap;
 use tokio::sync::watch;
 
 impl State {
-    pub fn gc_chunks(&self) {
+    pub fn gc_chunks(&self) -> Result<()> {
+        let mut res = Ok(());
         self.images_stats.send_modify(|images_stats| {
             let mut chunks_stats = self
                 .chunks_stats
                 .lock()
                 .expect("chunks_stats lock is poisoned");
             chunks_stats.retain(|k, v| {
-                if v.ref_cnt == 0 {
+                if res.is_ok() && v.ref_cnt == 0 {
                     let path = self.storage_dir.join("chunks").join(hex::encode(k));
-                    // TODO(virv): handle errors
-                    std::fs::remove_file(path).unwrap();
-                    images_stats.total_csize -= v.csize;
-                    images_stats.reclaimable -= v.csize;
-                    false
+                    res = std::fs::remove_file(path);
+                    if res.is_ok() {
+                        images_stats.total_csize -= v.csize;
+                        images_stats.reclaimable -= v.csize;
+                        false
+                    } else {
+                        true
+                    }
                 } else {
                     true
                 }
             });
         });
+        Ok(res?)
     }
 
     pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
@@ -128,7 +133,7 @@ impl State {
 
     pub fn rollback_image(&self, full_name: &str) -> Result<()> {
         let mut it = full_name.split('@');
-        let name = it.next().unwrap().to_owned();
+        let name = it.next().expect("Invalid image name").to_owned();
         let _version = it.next().unwrap_or_default();
         ensure!(it.next().is_none(), "Invalid image name");
         ensure!(self.config.images.contains(&name), "Unknown image: {name}",);
@@ -137,7 +142,10 @@ impl State {
         let path = self.storage_dir.join("images").join(full_name);
         self.images_stats.send_modify(|images_stats| {
             res = (|| {
-                let mut chunks_stats = self.chunks_stats.lock().unwrap();
+                let mut chunks_stats = self
+                    .chunks_stats
+                    .lock()
+                    .expect("chunks_stats lock is poisoned");
                 let data = std::fs::read(&path)?;
                 let image =
                     postcard::from_bytes::<Image>(&data).expect("failed to deserialize image");
@@ -150,7 +158,7 @@ impl State {
 
     pub fn delete_image(&self, full_name: &str) -> Result<()> {
         let mut it = full_name.split('@');
-        let _name = it.next().unwrap().to_owned();
+        let _name = it.next().expect("Invalid image name").to_owned();
         let _version = it.next().unwrap_or_default();
         ensure!(it.next().is_none(), "Invalid image name");
 

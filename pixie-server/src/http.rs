@@ -104,13 +104,15 @@ async fn delete_image(
 ) -> impl IntoResponse {
     match state.delete_image(&image) {
         Ok(()) => (StatusCode::NO_CONTENT, String::new()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")),
     }
 }
 
 async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
-    state.gc_chunks();
-    StatusCode::NO_CONTENT
+    match state.gc_chunks() {
+        Ok(()) => (StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")),
+    }
 }
 
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
