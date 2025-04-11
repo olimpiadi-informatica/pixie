@@ -1,5 +1,4 @@
-use std::{net::Ipv4Addr, sync::Arc};
-
+use crate::state::State;
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -11,15 +10,13 @@ use axum::{
 };
 use futures::StreamExt;
 use macaddr::MacAddr6;
-
 use pixie_shared::{HttpConfig, StatusUpdate, Unit};
+use std::{net::Ipv4Addr, sync::Arc};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
 use tower_http::{
     services::ServeDir, trace::TraceLayer, validate_request::ValidateRequestHeaderLayer,
 };
-
-use crate::state::State;
 
 enum UnitSelector {
     MacAddr(MacAddr6),
@@ -159,7 +156,7 @@ async fn rollback(
     Path(image): Path<String>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    match state.rollback(&image) {
+    match state.rollback_image(&image) {
         Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -190,8 +187,8 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
     let initial_messages = [StatusUpdate::Config(state.config.clone())];
 
     let units_rx = WatchStream::new(state.units.subscribe());
-    let image_rx = WatchStream::new(state.image_stats.subscribe());
-    let hostmap_rx = WatchStream::new(state.hostmap.subscribe());
+    let image_rx = WatchStream::new(state.subscribe_images());
+    let hostmap_rx = WatchStream::new(state.subscribe_hostmap());
 
     let messages = futures::stream::iter(initial_messages).chain(futures::stream::select(
         futures::stream::select(

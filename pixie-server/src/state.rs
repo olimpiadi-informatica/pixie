@@ -1,3 +1,7 @@
+use anyhow::{anyhow, ensure, Context, Result};
+use macaddr::MacAddr6;
+use mktemp::Temp;
+use pixie_shared::{ChunkStats, ChunksStats, Config, Image, ImagesStats, Station, Unit};
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
@@ -5,13 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-
-use anyhow::{anyhow, ensure, Context, Result};
-use macaddr::MacAddr6;
-use mktemp::Temp;
 use tokio::sync::watch;
-
-use pixie_shared::{ChunkHash, ChunkStat, Config, Image, ImageStat, Station, Unit};
 
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     // TODO(virv): find a better way to make a temporary file
@@ -21,27 +19,16 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn get_image_csize(image: &Image) -> u64 {
-    let mut chunks: Vec<_> = image
-        .disk
-        .iter()
-        .map(|chunk| (chunk.hash, chunk.csize))
-        .collect();
-    chunks.sort_unstable_by_key(|(hash, _)| *hash);
-    chunks.dedup_by_key(|(hash, _)| *hash);
-    chunks.into_iter().map(|(_, size)| size as u64).sum()
-}
-
 pub struct State {
     pub storage_dir: PathBuf,
     pub config: Config,
-    pub hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
+    hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
 
     pub units: watch::Sender<Vec<Unit>>,
     // TODO: use an Option
-    pub last: Mutex<Station>,
-    pub image_stats: watch::Sender<ImageStat>,
-    pub chunk_stats: Mutex<BTreeMap<[u8; 32], ChunkStat>>,
+    last: Mutex<Station>,
+    images_stats: watch::Sender<ImagesStats>,
+    chunks_stats: Mutex<ChunksStats>,
 }
 
 impl State {
@@ -95,21 +82,20 @@ impl State {
             ..Default::default()
         });
 
-        let mut chunk_stats: BTreeMap<[u8; 32], ChunkStat> =
-            fs::read_dir(storage_dir.join("chunks"))
-                .unwrap()
-                .map(|file| {
-                    let file = file?;
-                    let metadata = file.metadata().unwrap();
-                    let csize = metadata.len();
+        let mut chunks_stats: ChunksStats = fs::read_dir(storage_dir.join("chunks"))
+            .unwrap()
+            .map(|file| {
+                let file = file?;
+                let metadata = file.metadata().unwrap();
+                let csize = metadata.len();
 
-                    let name = file.file_name();
-                    let name = hex::decode(name.to_str().unwrap()).unwrap();
-                    let name = <[u8; 32]>::try_from(&name[..]).unwrap();
+                let name = file.file_name();
+                let name = hex::decode(name.to_str().unwrap()).unwrap();
+                let name = <[u8; 32]>::try_from(&name[..]).unwrap();
 
-                    Ok((name, ChunkStat { csize, ref_cnt: 0 }))
-                })
-                .collect::<Result<_>>()?;
+                Ok((name, ChunkStats { csize, ref_cnt: 0 }))
+            })
+            .collect::<Result<_>>()?;
 
         let images: BTreeMap<String, (u64, u64)> = fs::read_dir(storage_dir.join("images"))
             .unwrap()
@@ -119,22 +105,22 @@ impl State {
                 let path = image_entry.path();
                 let content = fs::read(&path)?;
                 let image = postcard::from_bytes::<Image>(&content)?;
-                let csize = get_image_csize(&image);
+                let csize = image.csize();
                 let mut size = 0;
                 for chunk in image.disk {
                     size += chunk.size as u64;
-                    chunk_stats.get_mut(&chunk.hash).unwrap().ref_cnt += 1;
+                    chunks_stats.get_mut(&chunk.hash).unwrap().ref_cnt += 1;
                 }
                 Ok((image_name, (size, csize)))
             })
             .collect::<Result<_>>()?;
 
-        let reclaimable = chunk_stats
+        let reclaimable = chunks_stats
             .values()
             .filter(|stat| stat.ref_cnt == 0)
             .map(|stat| stat.csize)
             .sum();
-        let total_csize = chunk_stats.values().map(|stat| stat.csize).sum();
+        let total_csize = chunks_stats.values().map(|stat| stat.csize).sum();
 
         Ok(Self {
             storage_dir,
@@ -142,12 +128,12 @@ impl State {
             hostmap,
             units,
             last,
-            image_stats: watch::Sender::new(ImageStat {
+            images_stats: watch::Sender::new(ImagesStats {
                 total_csize,
                 reclaimable,
                 images,
             }),
-            chunk_stats: Mutex::new(chunk_stats),
+            chunks_stats: Mutex::new(chunks_stats),
         })
     }
 
@@ -166,157 +152,11 @@ impl State {
         Ok(())
     }
 
-    pub fn gc_chunks(&self) {
-        self.image_stats.send_modify(|image_stats| {
-            let mut chunk_stats = self.chunk_stats.lock().unwrap();
-            let mut cnt = 0;
-            chunk_stats.retain(|k, v| {
-                if v.ref_cnt == 0 {
-                    let path = self.storage_dir.join("chunks").join(hex::encode(k));
-                    fs::remove_file(path).unwrap();
-                    image_stats.total_csize -= v.csize;
-                    image_stats.reclaimable -= v.csize;
-                    cnt += 1;
-                    false
-                } else {
-                    true
-                }
-            });
-        });
+    pub fn subscribe_hostmap(&self) -> watch::Receiver<HashMap<Ipv4Addr, String>> {
+        self.hostmap.subscribe()
     }
 
-    pub fn add_chunk(&self, hash: ChunkHash, data: &[u8]) -> Result<()> {
-        let path = self.storage_dir.join("chunks").join(hex::encode(hash));
-
-        self.image_stats.send_modify(|image_stats| {
-            let mut chunk_stats = self.chunk_stats.lock().unwrap();
-
-            let chunk = ChunkStat {
-                csize: data.len() as u64,
-                ref_cnt: 0,
-            };
-            let ins = chunk_stats.insert(hash, chunk).is_none();
-            if ins {
-                atomic_write(&path, data).unwrap();
-                image_stats.total_csize += data.len() as u64;
-                image_stats.reclaimable += data.len() as u64;
-            }
-        });
-
-        Ok(())
-    }
-
-    fn write_image(
-        &self,
-        name: String,
-        image: &Image,
-        image_stats: &mut ImageStat,
-        chunk_stats: &mut BTreeMap<[u8; 32], ChunkStat>,
-    ) -> Result<()> {
-        let size = image.disk.iter().map(|chunk| chunk.size as u64).sum();
-        let csize = get_image_csize(image);
-        let data = postcard::to_allocvec(&image)?;
-
-        let path = self.storage_dir.join("images").join(&name);
-        let old = image_stats.images.insert(name, (size, csize));
-
-        if old.is_some() {
-            let old_image = fs::read(&path).unwrap();
-            let old_image = postcard::from_bytes::<Image>(&old_image).unwrap();
-            for chunk in old_image.disk {
-                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                info.ref_cnt -= 1;
-                if info.ref_cnt == 0 {
-                    image_stats.reclaimable += info.csize;
-                }
-            }
-        }
-
-        atomic_write(&path, &data).unwrap();
-        for chunk in &image.disk {
-            let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-            if info.ref_cnt == 0 {
-                image_stats.reclaimable -= info.csize;
-            }
-            info.ref_cnt += 1;
-        }
-
-        Ok(())
-    }
-
-    pub fn add_image(&self, name: String, image: &Image) -> Result<()> {
-        ensure!(
-            self.config.images.contains(&name),
-            "Unknown image: {}",
-            name
-        );
-
-        let now = chrono::Utc::now();
-        let version = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let name_with_version = format!("{}@{}", name, version);
-
-        self.image_stats.send_modify(|image_stats| {
-            let mut chunk_stats = self.chunk_stats.lock().unwrap();
-
-            self.write_image(name, image, image_stats, &mut chunk_stats)
-                .unwrap();
-            self.write_image(name_with_version, image, image_stats, &mut chunk_stats)
-                .unwrap();
-        });
-
-        Ok(())
-    }
-
-    pub fn rollback(&self, full_name: &str) -> Result<()> {
-        let mut it = full_name.split('@');
-        let name = it.next().unwrap().to_owned();
-        let _version = it.next().unwrap_or_default();
-        ensure!(it.next().is_none(), "Invalid image name");
-        ensure!(self.config.images.contains(&name), "Unknown image: {name}",);
-
-        self.image_stats.send_modify(|image_stats| {
-            let mut chunk_stats = self.chunk_stats.lock().unwrap();
-
-            let path = self.storage_dir.join("images").join(full_name);
-            let data = fs::read(&path).unwrap();
-            let image = postcard::from_bytes::<Image>(&data).unwrap();
-
-            self.write_image(name, &image, image_stats, &mut chunk_stats)
-                .unwrap();
-        });
-
-        Ok(())
-    }
-
-    pub fn delete_image(&self, full_name: &str) -> Result<()> {
-        let mut it = full_name.split('@');
-        let _name = it.next().unwrap().to_owned();
-        let _version = it.next().unwrap_or_default();
-        ensure!(it.next().is_none(), "Invalid image name");
-
-        self.image_stats.send_modify(|image_stats| {
-            let mut chunk_stats = self.chunk_stats.lock().unwrap();
-
-            let path = self.storage_dir.join("images").join(full_name);
-            let data = fs::read(&path).unwrap();
-            let image = postcard::from_bytes::<Image>(&data).unwrap();
-
-            for chunk in image.disk {
-                let info = chunk_stats.get_mut(&chunk.hash).unwrap();
-                info.ref_cnt -= 1;
-                if info.ref_cnt == 0 {
-                    image_stats.reclaimable += info.csize;
-                }
-            }
-
-            fs::remove_file(&path).unwrap();
-            image_stats.images.remove(full_name);
-        });
-
-        Ok(())
-    }
-
-    pub fn set_ping(&self, peer_mac: MacAddr6, time: u64, message: Vec<u8>) {
+    pub fn set_unit_ping(&self, peer_mac: MacAddr6, time: u64, message: Vec<u8>) {
         self.units.send_if_modified(|units| {
             let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
                 log::warn!("Got ping from unknown unit");
@@ -328,5 +168,195 @@ impl State {
 
             true
         });
+    }
+
+    pub fn get_last(&self) -> Station {
+        self.last.lock().expect("last mutex is poisoned").clone()
+    }
+
+    pub fn set_last(&self, station: Station) {
+        *self.last.lock().expect("last mutex is poisoned") = station;
+    }
+
+    pub fn gc_chunks(&self) {
+        self.images_stats.send_modify(|images_stats| {
+            let mut chunks_stats = self
+                .chunks_stats
+                .lock()
+                .expect("chunks_stats lock is poisoned");
+            chunks_stats.retain(|k, v| {
+                if v.ref_cnt == 0 {
+                    let path = self.storage_dir.join("chunks").join(hex::encode(k));
+                    // TODO(virv): handle errors
+                    fs::remove_file(path).unwrap();
+                    images_stats.total_csize -= v.csize;
+                    images_stats.reclaimable -= v.csize;
+                    false
+                } else {
+                    true
+                }
+            });
+        });
+    }
+
+    pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
+        let mut res = Ok(());
+        let hash = *blake3::hash(data).as_bytes();
+        let path = self.storage_dir.join("chunks").join(hex::encode(hash));
+        self.images_stats.send_if_modified(|images_stats| {
+            res = (|| {
+                let mut chunks_stats = self
+                    .chunks_stats
+                    .lock()
+                    .expect("chunks_stats lock is poisoned");
+                let chunk = ChunkStats {
+                    csize: data.len() as u64,
+                    ref_cnt: 0,
+                };
+                let ins = chunks_stats.insert(hash, chunk).is_none();
+                if ins {
+                    atomic_write(&path, data)?;
+                    images_stats.total_csize += data.len() as u64;
+                    images_stats.reclaimable += data.len() as u64;
+                }
+                Ok(())
+            })();
+            res.is_ok()
+        });
+        res
+    }
+
+    fn write_image(
+        &self,
+        name: String,
+        new_image: &Image,
+        images_stats: &mut ImagesStats,
+        chunks_stats: &mut BTreeMap<[u8; 32], ChunkStats>,
+    ) -> Result<()> {
+        let path = self.storage_dir.join("images").join(&name);
+
+        let old_chunks = if images_stats.images.contains_key(&name) {
+            let old_image = fs::read(&path)?;
+            let old_image: Image =
+                postcard::from_bytes(&old_image).expect("failed to deserialize image");
+            old_image.disk
+        } else {
+            Vec::new()
+        };
+
+        for chunk in &new_image.disk {
+            ensure!(
+                chunks_stats.contains_key(&chunk.hash),
+                "chunk {} not found",
+                hex::encode(chunk.hash)
+            );
+        }
+
+        let data = postcard::to_allocvec(&new_image).expect("failed to serialize image");
+        atomic_write(&path, &data).context("failed to write image")?;
+
+        images_stats
+            .images
+            .insert(name, (new_image.size(), new_image.csize()));
+
+        for chunk in &new_image.disk {
+            let info = chunks_stats.get_mut(&chunk.hash).expect("chunk not found");
+            if info.ref_cnt == 0 {
+                images_stats.reclaimable -= info.csize;
+            }
+            info.ref_cnt += 1;
+        }
+
+        for chunk in &old_chunks {
+            let info = chunks_stats.get_mut(&chunk.hash).expect("chunk not found");
+            info.ref_cnt -= 1;
+            if info.ref_cnt == 0 {
+                images_stats.reclaimable += info.csize;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn add_image(&self, name: String, image: &Image) -> Result<()> {
+        ensure!(self.config.images.contains(&name), "Unknown image: {name}",);
+
+        let mut res = Ok(());
+        self.images_stats.send_modify(|images_stats| {
+            res = (|| {
+                let mut chunks_stats = self
+                    .chunks_stats
+                    .lock()
+                    .expect("chunks_stats lock is poisoned");
+                let now = chrono::Utc::now();
+                let version = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                let name_with_version = format!("{}@{}", name, version);
+                self.write_image(name, image, images_stats, &mut chunks_stats)?;
+                self.write_image(name_with_version, image, images_stats, &mut chunks_stats)?;
+                Ok(())
+            })();
+        });
+        res
+    }
+
+    pub fn rollback_image(&self, full_name: &str) -> Result<()> {
+        let mut it = full_name.split('@');
+        let name = it.next().unwrap().to_owned();
+        let _version = it.next().unwrap_or_default();
+        ensure!(it.next().is_none(), "Invalid image name");
+        ensure!(self.config.images.contains(&name), "Unknown image: {name}",);
+
+        let mut res = Ok(());
+        let path = self.storage_dir.join("images").join(full_name);
+        self.images_stats.send_modify(|images_stats| {
+            res = (|| {
+                let mut chunks_stats = self.chunks_stats.lock().unwrap();
+                let data = fs::read(&path)?;
+                let image =
+                    postcard::from_bytes::<Image>(&data).expect("failed to deserialize image");
+                self.write_image(name, &image, images_stats, &mut chunks_stats)?;
+                Ok(())
+            })();
+        });
+        res
+    }
+
+    pub fn delete_image(&self, full_name: &str) -> Result<()> {
+        let mut it = full_name.split('@');
+        let _name = it.next().unwrap().to_owned();
+        let _version = it.next().unwrap_or_default();
+        ensure!(it.next().is_none(), "Invalid image name");
+
+        let mut res = Ok(());
+        self.images_stats.send_modify(|images_stats| {
+            res = (|| {
+                let mut chunks_stats = self
+                    .chunks_stats
+                    .lock()
+                    .expect("chunks_stats lock is poisoned");
+                let old = images_stats.images.remove(full_name);
+                if old.is_none() {
+                    return Ok(());
+                }
+                let path = self.storage_dir.join("images").join(full_name);
+                let data = fs::read(&path)?;
+                let image: Image =
+                    postcard::from_bytes(&data).expect("failed to deserialize image");
+                fs::remove_file(&path)?;
+                for chunk in image.disk {
+                    let info = chunks_stats.get_mut(&chunk.hash).expect("chunk not found");
+                    info.ref_cnt -= 1;
+                    if info.ref_cnt == 0 {
+                        images_stats.reclaimable += info.csize;
+                    }
+                }
+                Ok(())
+            })();
+        });
+        res
+    }
+
+    pub fn subscribe_images(&self) -> watch::Receiver<ImagesStats> {
+        self.images_stats.subscribe()
     }
 }

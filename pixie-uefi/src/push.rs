@@ -165,7 +165,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         while let Some((start, hash, data, csize, cdata)) = rx4.recv().await {
             let check_ack = cdata.is_some();
             if let Some(cdata) = cdata {
-                let req = TcpRequest::UploadChunk(hash, cdata);
+                let req = TcpRequest::UploadChunk(cdata);
                 let buf = postcard::to_allocvec(&req)?;
                 stream_upload_chunk.send_u64_le(buf.len() as u64).await?;
                 stream_upload_chunk.send(&buf).await?;

@@ -1,3 +1,8 @@
+use crate::{find_mac, find_network, state::State};
+use anyhow::{bail, ensure, Result};
+use pixie_shared::{
+    HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
+};
 use std::{
     collections::BTreeSet,
     fs,
@@ -5,18 +10,10 @@ use std::{
     ops::Bound,
     sync::Arc,
 };
-
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{self, Receiver, Sender},
     time::{self, Duration, Instant},
-};
-
-use anyhow::{anyhow, bail, ensure, Result};
-
-use crate::{find_mac, find_network, state::State};
-use pixie_shared::{
-    HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
 };
 
 async fn broadcast_chunks(
@@ -109,11 +106,7 @@ async fn broadcast_chunks(
 }
 
 fn compute_hint(state: &State) -> Result<Station> {
-    let mut last = state
-        .last
-        .lock()
-        .map_err(|_| anyhow!("hint lock poisoned"))?
-        .clone();
+    let mut last = state.get_last();
 
     let positions = state
         .units

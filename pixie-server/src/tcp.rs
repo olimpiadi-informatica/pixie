@@ -1,21 +1,17 @@
+use crate::{find_mac, state::State};
+use anyhow::{bail, Result};
+use macaddr::MacAddr6;
+use pixie_shared::{Action, ActionKind, TcpRequest, Unit, ACTION_PORT};
 use std::{
     io::ErrorKind,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
-
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-
-use anyhow::{anyhow, bail, Result};
-use macaddr::MacAddr6;
-
-use pixie_shared::{Action, ActionKind, TcpRequest, Unit, ACTION_PORT};
-
-use crate::{find_mac, state::State};
 
 async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> Result<Vec<u8>> {
     Ok(match req {
@@ -40,11 +36,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                 return Ok(format!("Unknown group: {}", station.group).into_bytes());
             };
 
-            let mut guard = state
-                .last
-                .lock()
-                .map_err(|_| anyhow!("last mutex is poisoned"))?;
-            *guard = station.clone();
+            state.set_last(station.clone());
 
             state.units.send_modify(|units| {
                 let unit = units.iter_mut().position(|unit| unit.mac == peer_mac);
@@ -75,8 +67,8 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
 
             Vec::new()
         }
-        TcpRequest::UploadChunk(hash, data) => {
-            state.add_chunk(hash, &data)?;
+        TcpRequest::UploadChunk(data) => {
+            state.add_chunk(&data)?;
             Vec::new()
         }
         TcpRequest::UploadImage(name, image) => {
