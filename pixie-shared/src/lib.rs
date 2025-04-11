@@ -47,8 +47,25 @@ pub struct Image {
     pub disk: Vec<Chunk>,
 }
 
+impl Image {
+    pub fn size(&self) -> u64 {
+        self.disk.iter().map(|chunk| chunk.size as u64).sum()
+    }
+
+    pub fn csize(&self) -> u64 {
+        let mut chunks: Vec<_> = self
+            .disk
+            .iter()
+            .map(|chunk| (chunk.hash, chunk.csize))
+            .collect();
+        chunks.sort_unstable_by_key(|(hash, _)| *hash);
+        chunks.dedup_by_key(|(hash, _)| *hash);
+        chunks.into_iter().map(|(_, size)| size as u64).sum()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ImageStat {
+pub struct ImagesStats {
     pub total_csize: u64,
     pub reclaimable: u64,
     /// size and csize
@@ -56,10 +73,12 @@ pub struct ImageStat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkStat {
+pub struct ChunkStats {
     pub csize: u64,
     pub ref_cnt: usize,
 }
+
+pub type ChunksStats = BTreeMap<ChunkHash, ChunkStats>;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Station {
@@ -111,10 +130,10 @@ pub enum UdpRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TcpRequest {
-    GetChunkSize(ChunkHash),
+    GetChunkCSize(ChunkHash),
     GetImage(String),
     Register(Station),
-    UploadChunk(ChunkHash, Vec<u8>),
+    UploadChunk(Vec<u8>),
     UploadImage(String, Image),
     GetAction,
     ActionComplete,
@@ -126,7 +145,7 @@ pub enum StatusUpdate {
     Config(config::Config),
     HostMap(HashMap<Ipv4Addr, String>),
     Units(Vec<Unit>),
-    ImageStats(ImageStat),
+    ImageStats(ImagesStats),
 }
 
 #[cfg(feature = "std")]

@@ -1,22 +1,21 @@
+use crate::{
+    find_mac, find_network,
+    state::{State, UnitSelector},
+};
+use anyhow::{bail, ensure, Context, Result};
+use pixie_shared::{
+    HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
+};
 use std::{
     collections::BTreeSet,
-    fs,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
     ops::Bound,
     sync::Arc,
 };
-
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{self, Receiver, Sender},
     time::{self, Duration, Instant},
-};
-
-use anyhow::{anyhow, bail, ensure, Result};
-
-use crate::{find_mac, find_network, state::State};
-use pixie_shared::{
-    HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
 };
 
 async fn broadcast_chunks(
@@ -54,15 +53,10 @@ async fn broadcast_chunks(
             index = *hash;
             queue.remove(&index);
 
-            let filename = state.storage_dir.join("chunks").join(hex::encode(index));
-            let data = match fs::read(&filename) {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    log::warn!("chunk {} not found", hex::encode(index));
-                    continue;
-                }
-                Err(e) => Err(e)?,
-            };
+            let data = state
+                .get_chunk(index)
+                .with_context(|| format!("get chunk {}", hex::encode(index)))?
+                .unwrap();
 
             let num_packets = data.len().div_ceil(BODY_LEN);
             write_buf[..32].clone_from_slice(&index);
@@ -109,17 +103,13 @@ async fn broadcast_chunks(
 }
 
 fn compute_hint(state: &State) -> Result<Station> {
-    let mut last = state
-        .last
-        .lock()
-        .map_err(|_| anyhow!("hint lock poisoned"))?
-        .clone();
+    let mut last = state.get_last();
 
-    let positions = state
-        .units
-        .borrow()
-        .iter()
-        .filter(|unit| unit.group == *state.config.groups.get_by_first(&last.group).unwrap())
+    let units = state.get_units(UnitSelector::Group(
+        *state.config.groups.get_by_first(&last.group).unwrap(),
+    ));
+    let positions = units
+        .into_iter()
         .map(|unit| (unit.row, unit.col))
         .collect::<Vec<_>>();
 
@@ -182,15 +172,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                         continue 'recv_packet;
                     }
                 };
-                state.units.send_if_modified(|units| {
-                    let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-                        log::warn!("Got ActionProgress from unknown unit");
-                        return false;
-                    };
-
-                    unit.curr_progress = Some((frac, tot));
-                    true
-                });
+                state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
                 for hash in chunks {

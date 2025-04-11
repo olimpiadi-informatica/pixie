@@ -103,7 +103,7 @@ pub struct Unit {
     #[serde(default)]
     pub last_ping_timestamp: u64,
     #[serde(default)]
-    pub last_ping_msg: Vec<u8>,
+    pub last_ping_comment: Vec<u8>,
 }
 
 impl Unit {

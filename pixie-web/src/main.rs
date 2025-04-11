@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt, net::Ipv4Addr};
 use futures::StreamExt;
 use leptos::*;
 use leptos_use::{use_preferred_dark, use_timestamp};
-use pixie_shared::{Config, ImageStat, StatusUpdate, Unit};
+use pixie_shared::{Config, ImagesStats, StatusUpdate, Unit};
 use reqwest::Url;
 use thaw::{
     Button, ButtonColor, ButtonGroup, ButtonVariant, GlobalStyle, Popover, PopoverPlacement,
@@ -44,7 +44,7 @@ impl fmt::Display for Bytes {
 }
 
 #[component]
-fn Images(#[prop(into)] images: Signal<Option<ImageStat>>) -> impl IntoView {
+fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
     let image_row = move |(full_name, image): (String, (u64, u64))| {
         let url_pull = format!("admin/action/{full_name}/pull");
         let url_boot = format!("admin/action/{full_name}/reboot");
@@ -186,7 +186,7 @@ fn Group(
                 format!(
                     "ping: {} seconds ago, {}",
                     ping_ago(),
-                    String::from_utf8_lossy(&unit.last_ping_msg)
+                    String::from_utf8_lossy(&unit.last_ping_comment)
                 )
             }
         };
@@ -301,7 +301,7 @@ fn App() -> impl IntoView {
     let (config, set_config) = create_signal(None::<Config>);
     let (hostmap, set_hostname) = create_signal(None::<HashMap<Ipv4Addr, String>>);
     let (units, set_units) = create_signal(None::<Vec<Unit>>);
-    let (image_stats, set_image_stats) = create_signal(None::<ImageStat>);
+    let (image_stats, set_image_stats) = create_signal(None::<ImagesStats>);
 
     let images = Signal::derive(move || {
         config
