@@ -49,7 +49,7 @@ pub struct State {
     pub config: Config,
     hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
 
-    pub units: watch::Sender<Vec<Unit>>,
+    units: watch::Sender<Vec<Unit>>,
     // TODO: use an Option
     last: Mutex<Station>,
     images_stats: watch::Sender<ImagesStats>,

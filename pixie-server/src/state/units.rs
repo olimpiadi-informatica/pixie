@@ -1,6 +1,7 @@
 use crate::state::State;
+use anyhow::{bail, Result};
 use macaddr::MacAddr6;
-use pixie_shared::{ActionKind, Station, Unit};
+use pixie_shared::{Action, ActionKind, Station, Unit};
 use std::net::Ipv4Addr;
 use tokio::sync::watch;
 
@@ -52,6 +53,92 @@ impl State {
 
     pub fn subscribe_units(&self) -> watch::Receiver<Vec<Unit>> {
         self.units.subscribe()
+    }
+
+    pub fn register_unit(&self, mac: MacAddr6, station: Station) -> Result<()> {
+        if !self.config.images.contains(&station.image) {
+            bail!("Unknown image: {}", station.image);
+        }
+        let Some(&group) = self.config.groups.get_by_first(&station.group) else {
+            bail!("Unknown group: {}", station.group);
+        };
+
+        self.units.send_modify(|units| {
+            if let Some(unit) = units.iter_mut().find(|unit| unit.mac == mac) {
+                unit.group = group;
+                unit.row = station.row;
+                unit.col = station.col;
+                unit.image = station.image;
+            } else {
+                let unit = Unit {
+                    mac,
+                    group,
+                    row: station.row,
+                    col: station.col,
+                    curr_action: None,
+                    curr_progress: None,
+                    next_action: ActionKind::Wait,
+                    image: station.image,
+                    last_ping_timestamp: 0,
+                    last_ping_comment: Vec::new(),
+                };
+                units.push(unit);
+            }
+        });
+        Ok(())
+    }
+
+    pub fn unit_complete_action(&self, selector: UnitSelector) -> usize {
+        self.set_unit_inner(selector, |unit| {
+            unit.curr_action = None;
+            unit.curr_progress = None;
+        })
+    }
+
+    pub fn get_unit_action(&self, peer_mac: MacAddr6) -> Action {
+        let mut action = Action::Wait;
+        self.units.send_if_modified(|units| {
+            let unit = units.iter_mut().find(|unit| unit.mac == peer_mac);
+
+            let modified;
+
+            if let Some(unit) = unit {
+                let action_kind = if let Some(action) = unit.curr_action {
+                    modified = false;
+                    action
+                } else {
+                    match unit.next_action {
+                        ActionKind::Push | ActionKind::Pull | ActionKind::Register => {
+                            unit.curr_action = Some(unit.next_action);
+                            unit.next_action = ActionKind::Wait;
+                            modified = true;
+                        }
+                        ActionKind::Reboot | ActionKind::Wait => {
+                            modified = false;
+                        }
+                    }
+                    unit.next_action
+                };
+
+                action = match action_kind {
+                    ActionKind::Reboot => Action::Reboot,
+                    ActionKind::Register => Action::Register,
+                    ActionKind::Push => Action::Push {
+                        image: unit.image.clone(),
+                    },
+                    ActionKind::Pull => Action::Pull {
+                        image: unit.image.clone(),
+                    },
+                    ActionKind::Wait => Action::Wait,
+                };
+            } else {
+                action = Action::Register;
+                modified = false;
+            }
+
+            modified
+        });
+        action
     }
 
     fn set_unit_inner(&self, selector: UnitSelector, f: impl Fn(&mut Unit)) -> usize {
