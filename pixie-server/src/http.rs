@@ -1,5 +1,4 @@
-use std::{net::Ipv4Addr, sync::Arc};
-
+use crate::state::{State, UnitSelector};
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -10,64 +9,18 @@ use axum::{
     Router,
 };
 use futures::StreamExt;
-use macaddr::MacAddr6;
-
-use pixie_shared::{HttpConfig, StatusUpdate, Unit};
+use pixie_shared::{ActionKind, HttpConfig, StatusUpdate};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
 use tower_http::{
     services::ServeDir, trace::TraceLayer, validate_request::ValidateRequestHeaderLayer,
 };
 
-use crate::state::State;
-
-enum UnitSelector {
-    MacAddr(MacAddr6),
-    IpAddr(Ipv4Addr),
-    All,
-    Group(u8),
-    Image(String),
-}
-
-impl UnitSelector {
-    fn parse(state: &State, selector: String) -> Option<UnitSelector> {
-        if let Ok(mac) = selector.parse::<MacAddr6>() {
-            Some(UnitSelector::MacAddr(mac))
-        } else if let Ok(ip) = selector.parse::<Ipv4Addr>() {
-            Some(UnitSelector::IpAddr(ip))
-        } else if selector == "all" {
-            Some(UnitSelector::All)
-        } else if let Some(&group) = state.config.groups.get_by_first(&selector) {
-            Some(UnitSelector::Group(group))
-        } else if state.config.images.contains(&selector) {
-            Some(UnitSelector::Image(selector))
-        } else {
-            None
-        }
-    }
-
-    fn select(&self, unit: &Unit) -> bool {
-        match self {
-            UnitSelector::MacAddr(mac) => unit.mac == *mac,
-            UnitSelector::IpAddr(ip) => unit.static_ip() == *ip,
-            UnitSelector::All => true,
-            UnitSelector::Group(group) => unit.group == *group,
-            UnitSelector::Image(image) => unit.image == *image,
-        }
-    }
-}
-
 async fn action(
-    Path((unit_filter, action_name)): Path<(String, String)>,
+    Path((unit_filter, action)): Path<(String, ActionKind)>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    let Ok(action) = action_name.parse() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!("Unknown action: {:?}\n", action_name),
-        );
-    };
-
     let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -75,17 +28,7 @@ async fn action(
         );
     };
 
-    let mut updated = 0;
-    state.units.send_if_modified(|units| {
-        for unit in units.iter_mut() {
-            if unit_selector.select(unit) {
-                unit.next_action = action;
-                updated += 1;
-            }
-        }
-        updated > 0
-    });
-
+    let updated = state.set_unit_next_action(unit_selector, action);
     if updated > 0 {
         (StatusCode::OK, format!("{updated} computer(s) affected\n"))
     } else {
@@ -111,21 +54,10 @@ async fn image(
         );
     };
 
-    let mut updated = 0;
-    state.units.send_if_modified(|units| {
-        for unit in units.iter_mut() {
-            if unit_selector.select(unit) {
-                unit.image = image.clone();
-                updated += 1;
-            }
-        }
-        updated > 0
-    });
-
-    if updated > 0 {
-        (StatusCode::OK, format!("{updated} computer(s) affected\n"))
-    } else {
-        (StatusCode::BAD_REQUEST, "Unknown PC\n".to_owned())
+    match state.set_unit_image(unit_selector, image) {
+        Ok(updated @ 1..) => (StatusCode::OK, format!("{updated} computer(s) affected\n")),
+        Ok(0) => (StatusCode::BAD_REQUEST, "Unknown PC\n".to_owned()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Error: {e}\n")),
     }
 }
 
@@ -140,14 +72,7 @@ async fn forget(
         );
     };
 
-    let mut updated = 0;
-    state.units.send_if_modified(|units| {
-        let len_before = units.len();
-        units.retain(|unit| !unit_selector.select(unit));
-        updated = len_before - units.len();
-        updated > 0
-    });
-
+    let updated = state.forget_unit(unit_selector);
     if updated > 0 {
         (StatusCode::OK, format!("{updated} computer(s) removed\n"))
     } else {
@@ -159,12 +84,9 @@ async fn rollback(
     Path(image): Path<String>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    match state.rollback(&image) {
-        Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{}\n", e),
-        ),
+    match state.rollback_image(&image) {
+        Ok(()) => (StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e)),
     }
 }
 
@@ -173,25 +95,24 @@ async fn delete_image(
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
     match state.delete_image(&image) {
-        Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{}\n", e),
-        ),
+        Ok(()) => (StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")),
     }
 }
 
 async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
-    state.gc_chunks();
-    axum::http::StatusCode::NO_CONTENT
+    match state.gc_chunks() {
+        Ok(()) => (StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")),
+    }
 }
 
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
     let initial_messages = [StatusUpdate::Config(state.config.clone())];
 
-    let units_rx = WatchStream::new(state.units.subscribe());
-    let image_rx = WatchStream::new(state.image_stats.subscribe());
-    let hostmap_rx = WatchStream::new(state.hostmap.subscribe());
+    let units_rx = WatchStream::new(state.subscribe_units());
+    let image_rx = WatchStream::new(state.subscribe_images());
+    let hostmap_rx = WatchStream::new(state.subscribe_hostmap());
 
     let messages = futures::stream::iter(initial_messages).chain(futures::stream::select(
         futures::stream::select(

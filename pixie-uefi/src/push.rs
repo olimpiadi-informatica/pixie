@@ -11,7 +11,7 @@ use crate::{
     },
     parse_disk,
 };
-use pixie_shared::{Address, Chunk, Image, Offset, TcpRequest, UdpRequest, CHUNK_SIZE};
+use pixie_shared::{Address, Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
 
 #[derive(Debug)]
 pub struct ChunkInfo {
@@ -86,7 +86,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         }
 
         while start < end {
-            let split = end.min((start / CHUNK_SIZE + 1) * CHUNK_SIZE);
+            let split = (start + 1).next_multiple_of(MAX_CHUNK_SIZE).min(end);
             final_chunks.push(ChunkInfo {
                 start,
                 size: split - start,
@@ -124,7 +124,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
     let task2 = async {
         let mut tx2 = tx2;
         while let Some((start, hash, data)) = rx1.recv().await {
-            let req = TcpRequest::GetChunkSize(hash);
+            let req = TcpRequest::GetChunkCSize(hash);
             let buf = postcard::to_allocvec(&req)?;
             stream_get_csize.send_u64_le(buf.len() as u64).await?;
             stream_get_csize.send(&buf).await?;
@@ -165,7 +165,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         while let Some((start, hash, data, csize, cdata)) = rx4.recv().await {
             let check_ack = cdata.is_some();
             if let Some(cdata) = cdata {
-                let req = TcpRequest::UploadChunk(hash, cdata);
+                let req = TcpRequest::UploadChunk(cdata);
                 let buf = postcard::to_allocvec(&req)?;
                 stream_upload_chunk.send_u64_le(buf.len() as u64).await?;
                 stream_upload_chunk.send(&buf).await?;

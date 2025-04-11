@@ -5,6 +5,12 @@ mod state;
 mod tcp;
 mod udp;
 
+use crate::state::State;
+use anyhow::{bail, ensure, Context, Result};
+use clap::Parser;
+use interfaces::Interface;
+use ipnet::Ipv4Net;
+use macaddr::MacAddr6;
 use std::{
     fs,
     io::{BufRead, BufReader},
@@ -13,15 +19,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::Arc,
 };
-
-use anyhow::{bail, ensure, Context, Result};
-use clap::Parser;
-use interfaces::Interface;
-use ipnet::Ipv4Net;
-use macaddr::MacAddr6;
 use tokio::task::JoinHandle;
-
-use crate::state::State;
 
 fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     struct Zombie {

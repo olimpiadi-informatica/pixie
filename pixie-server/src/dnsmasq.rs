@@ -1,3 +1,7 @@
+use crate::{find_network, state::State};
+use anyhow::{Context, Result};
+use macaddr::MacAddr6;
+use pixie_shared::{DhcpMode, Unit};
 use std::{
     collections::HashMap,
     fs::File,
@@ -6,13 +10,6 @@ use std::{
     process::{Child, Command},
     sync::Arc,
 };
-
-use anyhow::{Context, Result};
-
-use macaddr::MacAddr6;
-use pixie_shared::{DhcpMode, Unit};
-
-use crate::{find_network, state::State};
 
 struct DnsmasqHandle {
     child: Child,
@@ -113,8 +110,8 @@ fn get_hosts(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let mut units_rx = state.units.subscribe();
-    let mut hostmap_rx = state.hostmap.subscribe();
+    let mut units_rx = state.subscribe_units();
+    let mut hostmap_rx = state.subscribe_hostmap();
 
     write_config(&state).await?;
     let mut hosts = get_hosts(

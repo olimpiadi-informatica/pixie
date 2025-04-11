@@ -1,14 +1,15 @@
+use crate::{
+    find_mac,
+    state::{State, UnitSelector},
+};
+use anyhow::{bail, Result};
+use pixie_shared::{PACKET_LEN, PING_PORT};
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::SystemTime,
 };
-
-use anyhow::{bail, Result};
 use tokio::net::UdpSocket;
-
-use crate::{find_mac, state::State};
-use pixie_shared::{PACKET_LEN, PING_PORT};
 
 pub async fn main(state: Arc<State>) -> Result<()> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PING_PORT)).await?;
@@ -32,6 +33,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        state.set_ping(peer_mac, time, buf[..len].to_owned());
+        state.set_unit_ping(UnitSelector::MacAddr(peer_mac), time, &buf[..len]);
     }
 }
