@@ -110,7 +110,7 @@ fn get_hosts(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let mut units_rx = state.units.subscribe();
+    let mut units_rx = state.subscribe_units();
     let mut hostmap_rx = state.subscribe_hostmap();
 
     write_config(&state).await?;

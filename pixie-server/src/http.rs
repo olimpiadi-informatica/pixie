@@ -1,4 +1,4 @@
-use crate::state::State;
+use crate::state::{State, UnitSelector};
 use anyhow::Result;
 use axum::{
     body::Body,
@@ -9,50 +9,13 @@ use axum::{
     Router,
 };
 use futures::StreamExt;
-use macaddr::MacAddr6;
-use pixie_shared::{HttpConfig, StatusUpdate, Unit};
-use std::{net::Ipv4Addr, sync::Arc};
+use pixie_shared::{HttpConfig, StatusUpdate};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
 use tower_http::{
     services::ServeDir, trace::TraceLayer, validate_request::ValidateRequestHeaderLayer,
 };
-
-enum UnitSelector {
-    MacAddr(MacAddr6),
-    IpAddr(Ipv4Addr),
-    All,
-    Group(u8),
-    Image(String),
-}
-
-impl UnitSelector {
-    fn parse(state: &State, selector: String) -> Option<UnitSelector> {
-        if let Ok(mac) = selector.parse::<MacAddr6>() {
-            Some(UnitSelector::MacAddr(mac))
-        } else if let Ok(ip) = selector.parse::<Ipv4Addr>() {
-            Some(UnitSelector::IpAddr(ip))
-        } else if selector == "all" {
-            Some(UnitSelector::All)
-        } else if let Some(&group) = state.config.groups.get_by_first(&selector) {
-            Some(UnitSelector::Group(group))
-        } else if state.config.images.contains(&selector) {
-            Some(UnitSelector::Image(selector))
-        } else {
-            None
-        }
-    }
-
-    fn select(&self, unit: &Unit) -> bool {
-        match self {
-            UnitSelector::MacAddr(mac) => unit.mac == *mac,
-            UnitSelector::IpAddr(ip) => unit.static_ip() == *ip,
-            UnitSelector::All => true,
-            UnitSelector::Group(group) => unit.group == *group,
-            UnitSelector::Image(image) => unit.image == *image,
-        }
-    }
-}
 
 async fn action(
     Path((unit_filter, action_name)): Path<(String, String)>,
@@ -72,17 +35,7 @@ async fn action(
         );
     };
 
-    let mut updated = 0;
-    state.units.send_if_modified(|units| {
-        for unit in units.iter_mut() {
-            if unit_selector.select(unit) {
-                unit.next_action = action;
-                updated += 1;
-            }
-        }
-        updated > 0
-    });
-
+    let updated = state.set_unit_next_action(unit_selector, action);
     if updated > 0 {
         (StatusCode::OK, format!("{updated} computer(s) affected\n"))
     } else {
@@ -108,17 +61,7 @@ async fn image(
         );
     };
 
-    let mut updated = 0;
-    state.units.send_if_modified(|units| {
-        for unit in units.iter_mut() {
-            if unit_selector.select(unit) {
-                unit.image = image.clone();
-                updated += 1;
-            }
-        }
-        updated > 0
-    });
-
+    let updated = state.set_unit_image(unit_selector, &image);
     if updated > 0 {
         (StatusCode::OK, format!("{updated} computer(s) affected\n"))
     } else {
@@ -137,14 +80,7 @@ async fn forget(
         );
     };
 
-    let mut updated = 0;
-    state.units.send_if_modified(|units| {
-        let len_before = units.len();
-        units.retain(|unit| !unit_selector.select(unit));
-        updated = len_before - units.len();
-        updated > 0
-    });
-
+    let updated = state.forget_unit(unit_selector);
     if updated > 0 {
         (StatusCode::OK, format!("{updated} computer(s) removed\n"))
     } else {
@@ -157,11 +93,8 @@ async fn rollback(
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
     match state.rollback_image(&image) {
-        Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{}\n", e),
-        ),
+        Ok(()) => (StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e)),
     }
 }
 
@@ -170,23 +103,20 @@ async fn delete_image(
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
     match state.delete_image(&image) {
-        Ok(()) => (axum::http::StatusCode::NO_CONTENT, String::new()),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("{}\n", e),
-        ),
+        Ok(()) => (StatusCode::NO_CONTENT, String::new()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e)),
     }
 }
 
 async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
     state.gc_chunks();
-    axum::http::StatusCode::NO_CONTENT
+    StatusCode::NO_CONTENT
 }
 
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
     let initial_messages = [StatusUpdate::Config(state.config.clone())];
 
-    let units_rx = WatchStream::new(state.units.subscribe());
+    let units_rx = WatchStream::new(state.subscribe_units());
     let image_rx = WatchStream::new(state.subscribe_images());
     let hostmap_rx = WatchStream::new(state.subscribe_hostmap());
 

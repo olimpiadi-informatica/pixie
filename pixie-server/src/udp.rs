@@ -1,4 +1,7 @@
-use crate::{find_mac, find_network, state::State};
+use crate::{
+    find_mac, find_network,
+    state::{State, UnitSelector},
+};
 use anyhow::{bail, ensure, Result};
 use pixie_shared::{
     HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
@@ -108,11 +111,11 @@ async fn broadcast_chunks(
 fn compute_hint(state: &State) -> Result<Station> {
     let mut last = state.get_last();
 
-    let positions = state
-        .units
-        .borrow()
-        .iter()
-        .filter(|unit| unit.group == *state.config.groups.get_by_first(&last.group).unwrap())
+    let units = state.get_units(UnitSelector::Group(
+        *state.config.groups.get_by_first(&last.group).unwrap(),
+    ));
+    let positions = units
+        .into_iter()
         .map(|unit| (unit.row, unit.col))
         .collect::<Vec<_>>();
 
@@ -175,15 +178,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                         continue 'recv_packet;
                     }
                 };
-                state.units.send_if_modified(|units| {
-                    let Some(unit) = units.iter_mut().find(|unit| unit.mac == peer_mac) else {
-                        log::warn!("Got ActionProgress from unknown unit");
-                        return false;
-                    };
-
-                    unit.curr_progress = Some((frac, tot));
-                    true
-                });
+                state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
                 for hash in chunks {

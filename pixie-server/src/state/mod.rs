@@ -13,6 +13,8 @@ use std::{
 };
 use tokio::sync::watch;
 
+pub use units::UnitSelector;
+
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     // TODO(virv): find a better way to make a temporary file
     let tmp_file = Temp::new_file_in(path.parent().unwrap())?.release();

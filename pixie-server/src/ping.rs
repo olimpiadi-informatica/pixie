@@ -1,4 +1,7 @@
-use crate::{find_mac, state::State};
+use crate::{
+    find_mac,
+    state::{State, UnitSelector},
+};
 use anyhow::{bail, Result};
 use pixie_shared::{PACKET_LEN, PING_PORT};
 use std::{
@@ -30,6 +33,6 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        state.set_unit_ping(peer_mac, time, buf[..len].to_owned());
+        state.set_unit_ping(UnitSelector::MacAddr(peer_mac), time, &buf[..len]);
     }
 }

@@ -58,7 +58,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                             next_action: ActionKind::Wait,
                             image: station.image,
                             last_ping_timestamp: 0,
-                            last_ping_msg: Vec::new(),
+                            last_ping_comment: Vec::new(),
                         };
                         units.push(unit);
                     }

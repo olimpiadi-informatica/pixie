@@ -186,7 +186,7 @@ fn Group(
                 format!(
                     "ping: {} seconds ago, {}",
                     ping_ago(),
-                    String::from_utf8_lossy(&unit.last_ping_msg)
+                    String::from_utf8_lossy(&unit.last_ping_comment)
                 )
             }
         };
