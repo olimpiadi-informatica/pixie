@@ -8,26 +8,17 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    fs,
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 
 async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> Result<Vec<u8>> {
     Ok(match req {
-        TcpRequest::GetChunkSize(hash) => {
-            let path = state.storage_dir.join("chunks").join(hex::encode(hash));
-            let csize = match fs::metadata(path).await {
-                Ok(meta) => Some(meta.len()),
-                Err(e) if e.kind() == ErrorKind::NotFound => None,
-                Err(e) => Err(e)?,
-            };
+        TcpRequest::GetChunkCSize(hash) => {
+            let csize = state.get_chunk_csize(hash);
             postcard::to_allocvec(&csize)?
         }
-        TcpRequest::GetImage(name) => {
-            let path = state.storage_dir.join("images").join(name);
-            fs::read(path).await?
-        }
+        TcpRequest::GetImage(name) => state.get_image_serialized(&name)?.unwrap(),
         TcpRequest::Register(station) => {
             if !state.config.images.contains(&station.image) {
                 return Ok(format!("Unknown image: {}", station.image).into_bytes());

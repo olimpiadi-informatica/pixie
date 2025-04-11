@@ -130,7 +130,7 @@ pub enum UdpRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TcpRequest {
-    GetChunkSize(ChunkHash),
+    GetChunkCSize(ChunkHash),
     GetImage(String),
     Register(Station),
     UploadChunk(Vec<u8>),

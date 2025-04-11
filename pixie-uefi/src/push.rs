@@ -124,7 +124,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
     let task2 = async {
         let mut tx2 = tx2;
         while let Some((start, hash, data)) = rx1.recv().await {
-            let req = TcpRequest::GetChunkSize(hash);
+            let req = TcpRequest::GetChunkCSize(hash);
             let buf = postcard::to_allocvec(&req)?;
             stream_get_csize.send_u64_le(buf.len() as u64).await?;
             stream_get_csize.send(&buf).await?;

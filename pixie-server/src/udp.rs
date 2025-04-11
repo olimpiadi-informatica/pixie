@@ -2,13 +2,12 @@ use crate::{
     find_mac, find_network,
     state::{State, UnitSelector},
 };
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use pixie_shared::{
     HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT, PACKET_LEN,
 };
 use std::{
     collections::BTreeSet,
-    fs,
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
     ops::Bound,
     sync::Arc,
@@ -54,15 +53,10 @@ async fn broadcast_chunks(
             index = *hash;
             queue.remove(&index);
 
-            let filename = state.storage_dir.join("chunks").join(hex::encode(index));
-            let data = match fs::read(&filename) {
-                Ok(data) => data,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    log::warn!("chunk {} not found", hex::encode(index));
-                    continue;
-                }
-                Err(e) => Err(e)?,
-            };
+            let data = state
+                .get_chunk(index)
+                .with_context(|| format!("get chunk {}", hex::encode(index)))?
+                .unwrap();
 
             let num_packets = data.len().div_ceil(BODY_LEN);
             write_buf[..32].clone_from_slice(&index);

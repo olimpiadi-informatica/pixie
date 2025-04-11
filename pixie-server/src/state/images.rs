@@ -1,40 +1,31 @@
-use crate::state::{atomic_write, State};
+use crate::state::{atomic_write, State, CHUNKS_DIR, IMAGES_DIR};
 use anyhow::{ensure, Context, Result};
-use pixie_shared::{ChunkStats, Image, ImagesStats};
+use pixie_shared::{ChunkHash, ChunkStats, Image, ImagesStats};
 use std::collections::BTreeMap;
 use tokio::sync::watch;
 
 impl State {
-    pub fn gc_chunks(&self) -> Result<()> {
-        let mut res = Ok(());
-        self.images_stats.send_modify(|images_stats| {
-            let mut chunks_stats = self
-                .chunks_stats
-                .lock()
-                .expect("chunks_stats lock is poisoned");
-            chunks_stats.retain(|k, v| {
-                if res.is_ok() && v.ref_cnt == 0 {
-                    let path = self.storage_dir.join("chunks").join(hex::encode(k));
-                    res = std::fs::remove_file(path);
-                    if res.is_ok() {
-                        images_stats.total_csize -= v.csize;
-                        images_stats.reclaimable -= v.csize;
-                        false
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            });
-        });
-        Ok(res?)
+    pub fn get_chunk_csize(&self, hash: ChunkHash) -> Option<u64> {
+        self.chunks_stats
+            .lock()
+            .expect("chunks_stats lock is poisoned")
+            .get(&hash)
+            .map(|chunk| chunk.csize)
+    }
+
+    pub fn get_chunk(&self, hash: ChunkHash) -> Result<Option<Vec<u8>>> {
+        let path = self.storage_dir.join(CHUNKS_DIR).join(hex::encode(hash));
+        match std::fs::read(&path) {
+            Ok(data) => Ok(Some(data)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
         let mut res = Ok(());
         let hash = *blake3::hash(data).as_bytes();
-        let path = self.storage_dir.join("chunks").join(hex::encode(hash));
+        let path = self.storage_dir.join(CHUNKS_DIR).join(hex::encode(hash));
         self.images_stats.send_if_modified(|images_stats| {
             res = (|| {
                 let mut chunks_stats = self
@@ -58,6 +49,46 @@ impl State {
         res
     }
 
+    pub fn gc_chunks(&self) -> Result<()> {
+        let mut res = Ok(());
+        self.images_stats.send_modify(|images_stats| {
+            let mut chunks_stats = self
+                .chunks_stats
+                .lock()
+                .expect("chunks_stats lock is poisoned");
+            chunks_stats.retain(|k, v| {
+                if res.is_ok() && v.ref_cnt == 0 {
+                    let path = self.storage_dir.join(CHUNKS_DIR).join(hex::encode(k));
+                    res = std::fs::remove_file(path);
+                    if res.is_ok() {
+                        images_stats.total_csize -= v.csize;
+                        images_stats.reclaimable -= v.csize;
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                }
+            });
+        });
+        Ok(res?)
+    }
+
+    pub fn get_image_serialized(&self, image: &str) -> Result<Option<Vec<u8>>> {
+        ensure!(
+            self.config.images.iter().any(|i| i == image),
+            "Unknown image: {image}"
+        );
+
+        let path = self.storage_dir.join(IMAGES_DIR).join(image);
+        match std::fs::read(path) {
+            Ok(data) => Ok(Some(data)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     fn write_image(
         &self,
         name: String,
@@ -65,7 +96,7 @@ impl State {
         images_stats: &mut ImagesStats,
         chunks_stats: &mut BTreeMap<[u8; 32], ChunkStats>,
     ) -> Result<()> {
-        let path = self.storage_dir.join("images").join(&name);
+        let path = self.storage_dir.join(IMAGES_DIR).join(&name);
 
         let old_chunks = if images_stats.images.contains_key(&name) {
             let old_image = std::fs::read(&path)?;
@@ -139,7 +170,7 @@ impl State {
         ensure!(self.config.images.contains(&name), "Unknown image: {name}",);
 
         let mut res = Ok(());
-        let path = self.storage_dir.join("images").join(full_name);
+        let path = self.storage_dir.join(IMAGES_DIR).join(full_name);
         self.images_stats.send_modify(|images_stats| {
             res = (|| {
                 let mut chunks_stats = self
@@ -173,7 +204,7 @@ impl State {
                 if old.is_none() {
                     return Ok(());
                 }
-                let path = self.storage_dir.join("images").join(full_name);
+                let path = self.storage_dir.join(IMAGES_DIR).join(full_name);
                 let data = std::fs::read(&path)?;
                 let image: Image =
                     postcard::from_bytes(&data).expect("failed to deserialize image");
