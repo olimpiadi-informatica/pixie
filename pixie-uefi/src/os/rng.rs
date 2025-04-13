@@ -1,5 +1,4 @@
 use core::arch::x86_64::{_rdseed64_step, _rdtsc};
-
 use rand::{distributions::Uniform, prelude::Distribution, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 

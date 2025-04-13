@@ -1,19 +1,28 @@
-use core::{
-    cell::{Ref, RefMut},
-    ffi::c_void,
-    fmt::{self, Display, Write},
-    future::{poll_fn, Future, PollFn},
-    net::Ipv4Addr,
-    ptr::NonNull,
-    task::{Context, Poll},
+use self::{
+    boot_options::BootOptions,
+    disk::Disk,
+    error::{Error, Result},
+    executor::{Executor, Task},
+    net::NetworkInterface,
+    rng::Rng,
+    sync::SyncRefCell,
+    timer::Timer,
 };
-
 use alloc::{
     boxed::Box,
     collections::VecDeque,
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
+};
+use core::{
+    cell::{Ref, RefMut},
+    ffi::c_void,
+    fmt::{self, Display, Write},
+    future::{poll_fn, Future, PollFn},
+    net::SocketAddrV4,
+    ptr::NonNull,
+    task::{Context, Poll},
 };
 use uefi::{
     boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
@@ -28,17 +37,6 @@ use uefi::{
     },
     runtime::{VariableAttributes, VariableVendor},
     CStr16, Event, Handle, Status,
-};
-
-use self::{
-    boot_options::BootOptions,
-    disk::Disk,
-    error::{Error, Result},
-    executor::{Executor, Task},
-    net::NetworkInterface,
-    rng::Rng,
-    sync::SyncRefCell,
-    timer::Timer,
 };
 
 mod boot_options;
@@ -433,8 +431,8 @@ impl UefiOS {
         Disk::new(*self)
     }
 
-    pub async fn connect(&self, ip: Ipv4Addr, port: u16) -> Result<TcpStream> {
-        TcpStream::new(*self, ip, port).await
+    pub async fn connect(&self, addr: SocketAddrV4) -> Result<TcpStream> {
+        TcpStream::new(*self, addr).await
     }
 
     pub async fn udp_bind(&self, port: Option<u16>) -> Result<UdpHandle> {

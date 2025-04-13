@@ -4,18 +4,24 @@
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
-use alloc::boxed::Box;
-use core::net::Ipv4Addr;
-use futures::future::{self, Either};
-use pixie_shared::{Action, Address, TcpRequest, UdpRequest, ACTION_PORT};
-use uefi::prelude::*;
+#[macro_use]
+extern crate alloc;
 
-use os::{
-    error::{Error, Result},
-    MessageKind, TcpStream, UefiOS, PACKET_SIZE,
+use crate::{
+    flash::flash,
+    os::{
+        error::{Error, Result},
+        MessageKind, TcpStream, UefiOS, PACKET_SIZE,
+    },
+    reboot_to_os::reboot_to_os,
+    register::register,
+    store::store,
 };
-
-use crate::{flash::flash, reboot_to_os::reboot_to_os, register::register, store::store};
+use alloc::boxed::Box;
+use core::net::{Ipv4Addr, SocketAddrV4};
+use futures::future::{self, Either};
+use pixie_shared::{Action, TcpRequest, UdpRequest, ACTION_PORT, PING_PORT};
+use uefi::prelude::*;
 
 mod flash;
 mod os;
@@ -24,10 +30,7 @@ mod reboot_to_os;
 mod register;
 mod store;
 
-#[macro_use]
-extern crate alloc;
-
-async fn server_discover(os: UefiOS) -> Result<Address> {
+async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
     let socket = os.udp_bind(None).await?;
 
     let task1 = async {
@@ -38,7 +41,9 @@ async fn server_discover(os: UefiOS) -> Result<Address> {
 
         let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
         loop {
-            socket.send(Ipv4Addr::BROADCAST, ACTION_PORT, &msg).await?;
+            socket
+                .send(SocketAddrV4::new(Ipv4Addr::BROADCAST, ACTION_PORT), &msg)
+                .await?;
             os.sleep_us(1_000_000).await;
         }
     };
@@ -91,7 +96,10 @@ async fn run(os: UefiOS) -> Result<!> {
     os.spawn("ping", async move {
         let udp_socket = os.udp_bind(None).await.unwrap();
         loop {
-            udp_socket.send(server.ip, 4043, b"pixie").await.unwrap();
+            udp_socket
+                .send(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
+                .await
+                .unwrap();
             os.sleep_us(10_000_000).await;
         }
     });
@@ -104,7 +112,7 @@ async fn run(os: UefiOS) -> Result<!> {
             os.append_message("Sending request for command".into(), MessageKind::Debug);
         }
 
-        let tcp = os.connect(server.ip, server.port).await?;
+        let tcp = os.connect(server).await?;
         let command = get_action(&tcp).await;
         tcp.close_send().await;
         tcp.force_close().await;
@@ -140,7 +148,7 @@ async fn run(os: UefiOS) -> Result<!> {
                     Action::Flash { image } => flash(os, server, image).await?,
                 }
 
-                let tcp = os.connect(server.ip, server.port).await?;
+                let tcp = os.connect(server).await?;
                 complete_action(&tcp).await?;
                 tcp.close_send().await;
                 tcp.force_close().await;

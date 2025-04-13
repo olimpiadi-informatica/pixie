@@ -1,6 +1,5 @@
-use core::fmt::{Display, Formatter};
-
 use alloc::{borrow::ToOwned, string::String};
+use core::fmt::{Display, Formatter};
 use smoltcp::socket::{
     tcp::{self, ConnectError, RecvError},
     udp::{self, BindError},

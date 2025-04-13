@@ -1,3 +1,7 @@
+use super::{
+    error::{Error, Result},
+    UefiOS,
+};
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -10,11 +14,6 @@ use uefi::{
     boot::{OpenProtocolParams, ScopedProtocol},
     proto::media::{block::BlockIO, disk::DiskIo},
     Handle,
-};
-
-use super::{
-    error::{Error, Result},
-    UefiOS,
 };
 
 fn open_disk(

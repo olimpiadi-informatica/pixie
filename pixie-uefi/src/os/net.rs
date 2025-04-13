@@ -1,8 +1,15 @@
-use core::{future::poll_fn, net::IpAddr, task::Poll};
-
+use super::{
+    error::{Error, Result},
+    timer::Timer,
+    MessageKind, UefiOS,
+};
 use alloc::boxed::Box;
+use core::{
+    future::poll_fn,
+    net::{IpAddr, Ipv4Addr, SocketAddrV4},
+    task::Poll,
+};
 use futures::future::select;
-
 use smoltcp::{
     iface::{Config, Interface, PollResult, SocketHandle, SocketSet},
     phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
@@ -13,22 +20,13 @@ use smoltcp::{
     },
     storage::RingBuffer,
     time::{Duration, Instant},
-    wire::{DhcpOption, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address},
+    wire::{DhcpOption, HardwareAddress, IpCidr, IpEndpoint},
 };
-
 use uefi::{
     boot::ScopedProtocol,
     proto::network::snp::{ReceiveFlags, SimpleNetwork},
     Status,
 };
-
-use pixie_shared::Address;
-
-use super::{
-    error::{Error, Result},
-    MessageKind,
-};
-use super::{timer::Timer, UefiOS};
 
 pub const PACKET_SIZE: usize = 1514;
 
@@ -214,7 +212,7 @@ impl NetworkInterface {
         self.ip().is_some()
     }
 
-    pub fn ip(&self) -> Option<Ipv4Address> {
+    pub fn ip(&self) -> Option<Ipv4Addr> {
         self.interface.ipv4_addr()
     }
 
@@ -264,7 +262,7 @@ pub struct TcpStream {
 // create that many, but still it would be nice to fix eventually.
 // Also, trying to use a closed connection may result in panics.
 impl TcpStream {
-    pub async fn new(os: UefiOS, ip: Ipv4Address, port: u16) -> Result<TcpStream> {
+    pub async fn new(os: UefiOS, addr: SocketAddrV4) -> Result<TcpStream> {
         os.wait_for_ip().await;
         const TCP_BUF_SIZE: usize = 1 << 22;
         let mut tcp_socket = TcpSocket::new(
@@ -278,8 +276,8 @@ impl TcpStream {
         tcp_socket.connect(
             os.net().interface.context(),
             IpEndpoint {
-                addr: IpAddress::Ipv4(ip),
-                port,
+                addr: (*addr.ip()).into(),
+                port: addr.port(),
             },
             sport,
         )?;
@@ -467,10 +465,10 @@ impl UdpHandle {
         Ok(ret)
     }
 
-    pub async fn send(&self, ip: Ipv4Address, port: u16, data: &[u8]) -> Result<()> {
+    pub async fn send(&self, addr: SocketAddrV4, data: &[u8]) -> Result<()> {
         let endpoint = IpEndpoint {
-            addr: ip.into(),
-            port,
+            addr: (*addr.ip()).into(),
+            port: addr.port(),
         };
 
         Ok(poll_fn(move |cx| {
@@ -488,7 +486,7 @@ impl UdpHandle {
         .await?)
     }
 
-    pub async fn recv<'a>(&self, buf: &'a mut [u8; PACKET_SIZE]) -> (&'a mut [u8], Address) {
+    pub async fn recv<'a>(&self, buf: &'a mut [u8; PACKET_SIZE]) -> (&'a mut [u8], SocketAddrV4) {
         let buf2 = &mut *buf;
         let (len, addr) = poll_fn(move |cx| {
             let mut net = self.os.net();
@@ -503,7 +501,7 @@ impl UdpHandle {
                     unreachable!();
                 };
                 let port = (recvd.1).endpoint.port;
-                Poll::Ready((recvd.0, Address { ip, port }))
+                Poll::Ready((recvd.0, SocketAddrV4::new(ip, port)))
             }
         })
         .await;

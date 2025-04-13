@@ -1,16 +1,12 @@
-extern crate alloc;
-
-use alloc::{boxed::Box, rc::Rc, vec::Vec};
-use core::cell::RefCell;
-
-use futures::future::{select, Either};
-use uefi::proto::console::text::{Color, Key, ScanCode};
-
 use crate::os::{
     error::{Error, Result},
     MessageKind, UefiOS, PACKET_SIZE,
 };
-use pixie_shared::{Address, HintPacket, Station, TcpRequest, HINT_PORT};
+use alloc::{boxed::Box, rc::Rc, vec::Vec};
+use core::{cell::RefCell, net::SocketAddrV4};
+use futures::future::{select, Either};
+use pixie_shared::{HintPacket, Station, TcpRequest, HINT_PORT};
+use uefi::proto::console::text::{Color, Key, ScanCode};
 
 #[derive(Debug, Default)]
 struct Data {
@@ -18,7 +14,7 @@ struct Data {
     selected: usize,
 }
 
-pub async fn register(os: UefiOS, server_addr: Address) -> Result<()> {
+pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
     let data2 = data.clone();
 
@@ -162,7 +158,7 @@ pub async fn register(os: UefiOS, server_addr: Address) -> Result<()> {
 
     let msg = TcpRequest::Register(data.borrow().station.clone());
     let buf = postcard::to_allocvec(&msg)?;
-    let stream = os.connect(server_addr.ip, server_addr.port).await?;
+    let stream = os.connect(server_addr).await?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
     let len = stream.recv_u64_le().await?;

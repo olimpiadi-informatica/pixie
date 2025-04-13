@@ -1,5 +1,4 @@
 use core::arch::x86_64::_rdtsc;
-
 use smoltcp::time::Instant;
 
 pub struct Timer {
