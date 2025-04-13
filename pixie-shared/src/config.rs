@@ -1,16 +1,12 @@
-use alloc::{format, string::String, vec::Vec};
+use crate::Bijection;
+use alloc::{string::String, vec::Vec};
 use core::fmt::Display;
-use core::str::FromStr;
-
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
-
 use std::{
     net::{Ipv4Addr, SocketAddrV4},
     path::PathBuf,
 };
-
-use crate::Bijection;
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -50,24 +46,9 @@ pub struct HttpConfig {
 pub enum ActionKind {
     Reboot,
     Register,
-    Push,
-    Pull,
+    Store,
+    Flash,
     Wait,
-}
-
-impl FromStr for ActionKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "reboot" => Ok(ActionKind::Reboot),
-            "register" => Ok(ActionKind::Register),
-            "push" => Ok(ActionKind::Push),
-            "pull" => Ok(ActionKind::Pull),
-            "wait" => Ok(ActionKind::Wait),
-            _ => Err(format!("unknown action kind: {}", s)),
-        }
-    }
 }
 
 impl Display for ActionKind {
@@ -75,8 +56,8 @@ impl Display for ActionKind {
         match self {
             ActionKind::Reboot => write!(fmt, "reboot"),
             ActionKind::Register => write!(fmt, "register"),
-            ActionKind::Push => write!(fmt, "push"),
-            ActionKind::Pull => write!(fmt, "pull"),
+            ActionKind::Store => write!(fmt, "store"),
+            ActionKind::Flash => write!(fmt, "flash"),
             ActionKind::Wait => write!(fmt, "wait"),
         }
     }

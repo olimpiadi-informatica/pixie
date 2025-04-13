@@ -52,6 +52,12 @@ fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
         for mut host in hosts {
             if let IpAddr::V4(ip) = host.ip {
                 hostmap.insert(ip, std::mem::take(&mut host.names[0]));
+            } else {
+                log::warn!(
+                    "ignoring non-IPv4 address {} for host {}",
+                    host.ip,
+                    host.names[0]
+                );
             }
         }
     }

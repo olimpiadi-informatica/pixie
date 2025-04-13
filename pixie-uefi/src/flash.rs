@@ -138,7 +138,7 @@ async fn handle_packet(
     Ok(Some((pos, data)))
 }
 
-pub async fn pull(os: UefiOS, server_addr: Address, image: String) -> Result<()> {
+pub async fn flash(os: UefiOS, server_addr: Address, image: String) -> Result<()> {
     let stream = os.connect(server_addr.ip, server_addr.port).await?;
     let image = fetch_image(&stream, image).await?;
     stream.close_send().await;

@@ -5,7 +5,7 @@ use crate::{
         disk::Disk,
         error::{Error, Result},
     },
-    push::ChunkInfo,
+    store::ChunkInfo,
 };
 
 fn le16(buf: &[u8], lo: usize) -> u16 {
