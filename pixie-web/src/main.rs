@@ -46,7 +46,7 @@ impl fmt::Display for Bytes {
 #[component]
 fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
     let image_row = move |(full_name, image): (String, (u64, u64))| {
-        let url_pull = format!("admin/action/{full_name}/pull");
+        let url_flash = format!("admin/action/{full_name}/flash");
         let url_boot = format!("admin/action/{full_name}/reboot");
         let url_cancel = format!("admin/action/{full_name}/wait");
         let url_rollback = format!("admin/rollback/{full_name}");
@@ -70,7 +70,7 @@ fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
                                 view! {
                                     <Button
                                         color=ButtonColor::Error
-                                        on_click=move |_| send_req(url_pull.clone())
+                                        on_click=move |_| send_req(url_flash.clone())
                                     >
                                         "Flash all machines"
                                     </Button>
@@ -167,8 +167,8 @@ fn Group(
         let ping_ago = move || time.get() - unit.get().last_ping_timestamp as i64;
 
         let mac = move || unit.get().mac.to_string();
-        let url_pull = move || format!("admin/action/{}/pull", mac());
-        let url_push = move || format!("admin/action/{}/push", mac());
+        let url_flash = move || format!("admin/action/{}/flash", mac());
+        let url_store = move || format!("admin/action/{}/store", mac());
         let url_boot = move || format!("admin/action/{}/reboot", mac());
         let url_cancel = move || format!("admin/action/{}/wait", mac());
         let url_register = move || format!("admin/action/{}/register", mac());
@@ -218,10 +218,10 @@ fn Group(
                 <td>{move || unit.get().next_action.to_string()}</td>
                 <td>
                     <ButtonGroup>
-                        <Button color=ButtonColor::Error on_click=move |_| send_req(url_pull())>
+                        <Button color=ButtonColor::Error on_click=move |_| send_req(url_flash())>
                             "flash"
                         </Button>
-                        <Button color=ButtonColor::Warning on_click=move |_| send_req(url_push())>
+                        <Button color=ButtonColor::Warning on_click=move |_| send_req(url_store())>
                             "store"
                         </Button>
                         <Button color=ButtonColor::Success on_click=move |_| send_req(url_boot())>
@@ -249,7 +249,7 @@ fn Group(
         .into_view()
     };
 
-    let url_pull = move || format!("admin/action/{}/pull", group_name.get());
+    let url_flash = move || format!("admin/action/{}/flash", group_name.get());
     let url_boot = move || format!("admin/action/{}/reboot", group_name.get());
     let url_cancel = move || format!("admin/action/{}/wait", group_name.get());
 
@@ -267,7 +267,7 @@ fn Group(
         <h1>{group_name}</h1>
         <Space vertical=true>
             <ButtonGroup>
-                <Button color=ButtonColor::Error on_click=move |_| send_req(url_pull())>
+                <Button color=ButtonColor::Error on_click=move |_| send_req(url_flash())>
                     "Flash all machines"
                 </Button>
                 <Button color=ButtonColor::Success on_click=move |_| send_req(url_boot())>

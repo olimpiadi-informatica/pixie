@@ -39,7 +39,7 @@ enum State {
     },
 }
 
-pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<()> {
+pub async fn store(os: UefiOS, server_address: Address, image: String) -> Result<()> {
     let stats = Rc::new(RefCell::new(State::ReadingPartitions));
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| match &*stats2.borrow() {

@@ -2,16 +2,20 @@
 
 extern crate alloc;
 
+pub mod bijection;
+#[cfg(feature = "std")]
+pub mod config;
+
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;
 use core::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
-
 #[cfg(feature = "std")]
 use std::{collections::HashMap, net::SocketAddrV4};
 
-pub mod bijection;
 pub use bijection::Bijection;
+#[cfg(feature = "std")]
+pub use config::*;
 
 pub const MAX_CHUNK_SIZE: usize = 1 << 22;
 
@@ -108,7 +112,7 @@ pub struct Address {
 #[cfg(feature = "std")]
 impl From<Address> for SocketAddrV4 {
     fn from(addr: Address) -> Self {
-        SocketAddrV4::new(addr.ip.into(), addr.port)
+        SocketAddrV4::new(addr.ip, addr.port)
     }
 }
 
@@ -116,8 +120,8 @@ impl From<Address> for SocketAddrV4 {
 pub enum Action {
     Reboot,
     Register,
-    Push { image: String },
-    Pull { image: String },
+    Store { image: String },
+    Flash { image: String },
     Wait,
 }
 
@@ -147,9 +151,3 @@ pub enum StatusUpdate {
     Units(Vec<Unit>),
     ImageStats(ImagesStats),
 }
-
-#[cfg(feature = "std")]
-pub mod config;
-
-#[cfg(feature = "std")]
-pub use config::*;

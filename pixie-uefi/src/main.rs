@@ -15,14 +15,14 @@ use os::{
     MessageKind, TcpStream, UefiOS, PACKET_SIZE,
 };
 
-use crate::{pull::pull, push::push, reboot_to_os::reboot_to_os, register::register};
+use crate::{flash::flash, reboot_to_os::reboot_to_os, register::register, store::store};
 
+mod flash;
 mod os;
 mod parse_disk;
-mod pull;
-mod push;
 mod reboot_to_os;
 mod register;
+mod store;
 
 #[macro_use]
 extern crate alloc;
@@ -136,8 +136,8 @@ async fn run(os: UefiOS) -> Result<!> {
                     Action::Wait => unreachable!(),
                     Action::Reboot => reboot_to_os(os).await,
                     Action::Register => register(os, server).await?,
-                    Action::Push { image } => push(os, server, image).await?,
-                    Action::Pull { image } => pull(os, server, image).await?,
+                    Action::Store { image } => store(os, server, image).await?,
+                    Action::Flash { image } => flash(os, server, image).await?,
                 }
 
                 let tcp = os.connect(server.ip, server.port).await?;

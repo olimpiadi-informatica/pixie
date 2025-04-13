@@ -118,7 +118,7 @@ impl State {
                     action
                 } else {
                     match unit.next_action {
-                        ActionKind::Push | ActionKind::Pull | ActionKind::Register => {
+                        ActionKind::Store | ActionKind::Flash | ActionKind::Register => {
                             unit.curr_action = Some(unit.next_action);
                             unit.next_action = ActionKind::Wait;
                             modified = true;
@@ -133,10 +133,10 @@ impl State {
                 action = match action_kind {
                     ActionKind::Reboot => Action::Reboot,
                     ActionKind::Register => Action::Register,
-                    ActionKind::Push => Action::Push {
+                    ActionKind::Store => Action::Store {
                         image: unit.image.clone(),
                     },
-                    ActionKind::Pull => Action::Pull {
+                    ActionKind::Flash => Action::Flash {
                         image: unit.image.clone(),
                     },
                     ActionKind::Wait => Action::Wait,
