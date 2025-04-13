@@ -4,14 +4,17 @@ mod images;
 mod units;
 
 use anyhow::{anyhow, ensure, Context, Result};
-use mktemp::Temp;
 use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, Station, Unit};
 use std::{
     collections::HashMap,
     fs::File,
+    io::{ErrorKind, Write},
     net::{IpAddr, Ipv4Addr},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
 };
 use tokio::sync::watch;
 
@@ -23,10 +26,21 @@ const CHUNKS_DIR: &str = "chunks";
 const IMAGES_DIR: &str = "images";
 
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-    // TODO(virv): find a better way to make a temporary file
-    let tmp_file = Temp::new_file_in(path.parent().expect("path has no parent"))?.release();
-    std::fs::write(&tmp_file, data)?;
-    std::fs::rename(&tmp_file, path)?;
+    static CNT: AtomicU64 = AtomicU64::new(0);
+
+    let (tmp_path, mut file) = loop {
+        let tmp_path =
+            path.with_file_name(format!("{:x}.tmp", CNT.fetch_add(1, Ordering::Relaxed)));
+        match File::options().write(true).create_new(true).open(&tmp_path) {
+            Ok(file) => break (tmp_path, file),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => Err(e)?,
+        }
+    };
+    file.write_all(data)
+        .with_context(|| format!("write to file: {}", tmp_path.display()))?;
+    std::mem::drop(file);
+    std::fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
