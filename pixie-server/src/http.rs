@@ -9,7 +9,7 @@ use axum::{
     Router,
 };
 use futures::StreamExt;
-use pixie_shared::{ActionKind, HttpConfig, StatusUpdate};
+use pixie_shared::{Action, HttpConfig, StatusUpdate};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
@@ -18,7 +18,7 @@ use tower_http::{
 };
 
 async fn action(
-    Path((unit_filter, action)): Path<(String, ActionKind)>,
+    Path((unit_filter, action)): Path<(String, Action)>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
     let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
@@ -116,7 +116,7 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
 
     let messages = futures::stream::iter(initial_messages).chain(futures::stream::select(
         futures::stream::select(
-            image_rx.map(StatusUpdate::ImageStats),
+            image_rx.map(StatusUpdate::ImagesStats),
             units_rx.map(StatusUpdate::Units),
         ),
         hostmap_rx.map(StatusUpdate::HostMap),

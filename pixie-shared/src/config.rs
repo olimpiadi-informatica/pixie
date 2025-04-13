@@ -1,6 +1,5 @@
-use crate::Bijection;
+use crate::{Action, Bijection};
 use alloc::{string::String, vec::Vec};
-use core::fmt::Display;
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,28 +40,6 @@ pub struct HttpConfig {
     pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ActionKind {
-    Reboot,
-    Register,
-    Store,
-    Flash,
-    Wait,
-}
-
-impl Display for ActionKind {
-    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
-        match self {
-            ActionKind::Reboot => write!(fmt, "reboot"),
-            ActionKind::Register => write!(fmt, "register"),
-            ActionKind::Store => write!(fmt, "store"),
-            ActionKind::Flash => write!(fmt, "flash"),
-            ActionKind::Wait => write!(fmt, "wait"),
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Config {
     pub hosts: HostsConfig,
@@ -77,9 +54,9 @@ pub struct Unit {
     pub group: u8,
     pub row: u8,
     pub col: u8,
-    pub curr_action: Option<ActionKind>,
+    pub curr_action: Option<Action>,
     pub curr_progress: Option<(usize, usize)>,
-    pub next_action: ActionKind,
+    pub next_action: Action,
     pub image: String,
     #[serde(default)]
     pub last_ping_timestamp: u64,

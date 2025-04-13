@@ -1,7 +1,7 @@
 use crate::state::State;
 use anyhow::{bail, ensure, Result};
 use macaddr::MacAddr6;
-use pixie_shared::{Action, ActionKind, Station, Unit};
+use pixie_shared::{Action, Station, Unit};
 use std::net::Ipv4Addr;
 use tokio::sync::watch;
 
@@ -42,6 +42,14 @@ impl UnitSelector {
 }
 
 impl State {
+    pub fn get_unit(&self, mac: MacAddr6) -> Option<Unit> {
+        self.units
+            .borrow()
+            .iter()
+            .find(|unit| unit.mac == mac)
+            .cloned()
+    }
+
     pub fn get_units(&self, selector: UnitSelector) -> Vec<Unit> {
         self.units
             .borrow()
@@ -85,7 +93,7 @@ impl State {
                         col: station.col,
                         curr_action: None,
                         curr_progress: None,
-                        next_action: ActionKind::Wait,
+                        next_action: Action::Wait,
                         image: station.image,
                         last_ping_timestamp: 0,
                         last_ping_comment: Vec::new(),
@@ -113,33 +121,21 @@ impl State {
             let modified;
 
             if let Some(unit) = unit {
-                let action_kind = if let Some(action) = unit.curr_action {
+                action = if let Some(action) = unit.curr_action {
                     modified = false;
                     action
                 } else {
                     match unit.next_action {
-                        ActionKind::Store | ActionKind::Flash | ActionKind::Register => {
+                        Action::Store | Action::Flash | Action::Register => {
                             unit.curr_action = Some(unit.next_action);
-                            unit.next_action = ActionKind::Wait;
+                            unit.next_action = Action::Wait;
                             modified = true;
                         }
-                        ActionKind::Reboot | ActionKind::Wait => {
+                        Action::Reboot | Action::Wait => {
                             modified = false;
                         }
                     }
                     unit.next_action
-                };
-
-                action = match action_kind {
-                    ActionKind::Reboot => Action::Reboot,
-                    ActionKind::Register => Action::Register,
-                    ActionKind::Store => Action::Store {
-                        image: unit.image.clone(),
-                    },
-                    ActionKind::Flash => Action::Flash {
-                        image: unit.image.clone(),
-                    },
-                    ActionKind::Wait => Action::Wait,
                 };
             } else {
                 action = Action::Register;
@@ -172,7 +168,7 @@ impl State {
         })
     }
 
-    pub fn set_unit_next_action(&self, selector: UnitSelector, action: ActionKind) -> usize {
+    pub fn set_unit_next_action(&self, selector: UnitSelector, action: Action) -> usize {
         self.set_unit_inner(selector, |unit| {
             unit.next_action = action;
         })

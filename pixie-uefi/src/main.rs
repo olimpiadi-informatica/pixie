@@ -144,8 +144,8 @@ async fn run(os: UefiOS) -> Result<!> {
                     Action::Wait => unreachable!(),
                     Action::Reboot => reboot_to_os(os).await,
                     Action::Register => register(os, server).await?,
-                    Action::Store { image } => store(os, server, image).await?,
-                    Action::Flash { image } => flash(os, server, image).await?,
+                    Action::Store => store(os, server).await?,
+                    Action::Flash => flash(os, server).await?,
                 }
 
                 let tcp = os.connect(server).await?;
