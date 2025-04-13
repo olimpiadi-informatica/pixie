@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use crate::{
     os::{
         disk::Disk,
@@ -7,6 +5,7 @@ use crate::{
     },
     store::ChunkInfo,
 };
+use alloc::vec::Vec;
 
 fn le16(buf: &[u8], lo: usize) -> u16 {
     (0..2).map(|i| (buf[lo + i] as u16) << (8 * i)).sum()

@@ -8,10 +8,9 @@ pub mod config;
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;
-use core::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
-use std::{collections::HashMap, net::SocketAddrV4};
+use std::{collections::HashMap, net::Ipv4Addr};
 
 pub use bijection::Bijection;
 #[cfg(feature = "std")]
@@ -102,19 +101,6 @@ pub struct HintPacket {
 pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct Address {
-    pub ip: Ipv4Addr,
-    pub port: u16,
-}
-
-#[cfg(feature = "std")]
-impl From<Address> for SocketAddrV4 {
-    fn from(addr: Address) -> Self {
-        SocketAddrV4::new(addr.ip, addr.port)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {

@@ -1,3 +1,4 @@
+use super::UefiOS;
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -7,8 +8,6 @@ use uefi::{
     runtime::{VariableAttributes, VariableVendor},
     CString16,
 };
-
-use super::UefiOS;
 
 pub struct BootOptions {
     pub(super) os: UefiOS,

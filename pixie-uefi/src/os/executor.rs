@@ -1,12 +1,10 @@
-use core::{cell::RefCell, pin::Pin, task::Context};
-
+use super::{sync::SyncRefCell, UefiOS};
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
+use core::{cell::RefCell, pin::Pin, task::Context};
 use futures::{
     task::{waker_ref, ArcWake},
     Future,
 };
-
-use super::{sync::SyncRefCell, UefiOS};
 
 pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
 

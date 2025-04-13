@@ -1,9 +1,3 @@
-use alloc::{rc::Rc, string::String, vec::Vec};
-use core::cell::RefCell;
-
-use lz4_flex::compress;
-use uefi::proto::console::text::Color;
-
 use crate::{
     os::{
         error::{Error, Result},
@@ -11,7 +5,11 @@ use crate::{
     },
     parse_disk,
 };
-use pixie_shared::{Address, Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use alloc::{rc::Rc, string::String, vec::Vec};
+use core::{cell::RefCell, net::SocketAddrV4};
+use lz4_flex::compress;
+use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use uefi::proto::console::text::Color;
 
 #[derive(Debug)]
 pub struct ChunkInfo {
@@ -39,7 +37,7 @@ enum State {
     },
 }
 
-pub async fn store(os: UefiOS, server_address: Address, image: String) -> Result<()> {
+pub async fn store(os: UefiOS, server_address: SocketAddrV4, image: String) -> Result<()> {
     let stats = Rc::new(RefCell::new(State::ReadingPartitions));
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| match &*stats2.borrow() {
@@ -96,8 +94,8 @@ pub async fn store(os: UefiOS, server_address: Address, image: String) -> Result
     }
 
     let udp = os.udp_bind(None).await?;
-    let stream_get_csize = os.connect(server_address.ip, server_address.port).await?;
-    let stream_upload_chunk = os.connect(server_address.ip, server_address.port).await?;
+    let stream_get_csize = os.connect(server_address).await?;
+    let stream_upload_chunk = os.connect(server_address).await?;
 
     let total = final_chunks.len();
 
@@ -191,8 +189,7 @@ pub async fn store(os: UefiOS, server_address: Address, image: String) -> Result
                 tcsize: total_csize,
             });
             udp.send(
-                server_address.ip,
-                server_address.port,
+                server_address,
                 &postcard::to_allocvec(&UdpRequest::ActionProgress(chunks.len(), total))?,
             )
             .await?;

@@ -1,3 +1,7 @@
+use crate::os::{
+    error::{Error, Result},
+    mpsc, TcpStream, UefiOS, PACKET_SIZE,
+};
 use alloc::{
     boxed::Box,
     collections::BTreeMap,
@@ -5,18 +9,11 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use core::{cell::RefCell, mem};
-
+use core::{cell::RefCell, mem, net::SocketAddrV4};
 use futures::future::{select, Either};
 use lz4_flex::decompress;
+use pixie_shared::{Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
 use uefi::proto::console::text::Color;
-
-use pixie_shared::{Address, Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
-
-use crate::os::{
-    error::{Error, Result},
-    mpsc, TcpStream, UefiOS, PACKET_SIZE,
-};
 
 struct PartialChunk {
     data: Vec<u8>,
@@ -138,8 +135,8 @@ async fn handle_packet(
     Ok(Some((pos, data)))
 }
 
-pub async fn flash(os: UefiOS, server_addr: Address, image: String) -> Result<()> {
-    let stream = os.connect(server_addr.ip, server_addr.port).await?;
+pub async fn flash(os: UefiOS, server_addr: SocketAddrV4, image: String) -> Result<()> {
+    let stream = os.connect(server_addr).await?;
     let image = fetch_image(&stream, image).await?;
     stream.close_send().await;
     // TODO(virv): this could be better
@@ -253,7 +250,7 @@ pub async fn flash(os: UefiOS, server_addr: Address, image: String) -> Result<()
                         chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
                     stats.borrow_mut().requested += chunks.len();
                     let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
-                    socket.send(server_addr.ip, server_addr.port, &msg).await?;
+                    socket.send(server_addr, &msg).await?;
                 }
             }
         }
@@ -270,11 +267,7 @@ pub async fn flash(os: UefiOS, server_addr: Address, image: String) -> Result<()
 
             let msg = UdpRequest::ActionProgress(stats.borrow().recv, stats.borrow().fetch);
             socket
-                .send(
-                    server_addr.ip,
-                    server_addr.port,
-                    &postcard::to_allocvec(&msg)?,
-                )
+                .send(server_addr, &postcard::to_allocvec(&msg)?)
                 .await?;
         }
         Ok(())
