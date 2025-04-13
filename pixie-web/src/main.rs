@@ -323,7 +323,7 @@ fn App() -> impl IntoView {
         }
         StatusUpdate::Config(c) => set_config.set(Some(c)),
         StatusUpdate::HostMap(h) => set_hostname.set(Some(h)),
-        StatusUpdate::ImageStats(i) => set_image_stats.set(Some(i)),
+        StatusUpdate::ImagesStats(i) => set_image_stats.set(Some(i)),
     };
 
     spawn_local(async move {

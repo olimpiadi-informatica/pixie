@@ -5,7 +5,7 @@ use crate::{
     },
     parse_disk,
 };
-use alloc::{rc::Rc, string::String, vec::Vec};
+use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
 use lz4_flex::compress;
 use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
@@ -17,8 +17,8 @@ pub struct ChunkInfo {
     pub size: usize,
 }
 
-async fn save_image(stream: &TcpStream, name: String, image: Image) -> Result<()> {
-    let req = TcpRequest::UploadImage(name, image);
+async fn save_image(stream: &TcpStream, image: Image) -> Result<()> {
+    let req = TcpRequest::UploadImage(image);
     let buf = postcard::to_allocvec(&req)?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
@@ -37,7 +37,7 @@ enum State {
     },
 }
 
-pub async fn store(os: UefiOS, server_address: SocketAddrV4, image: String) -> Result<()> {
+pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let stats = Rc::new(RefCell::new(State::ReadingPartitions));
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| match &*stats2.borrow() {
@@ -201,7 +201,6 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4, image: String) -> R
 
     save_image(
         &stream_upload_chunk,
-        image.clone(),
         Image {
             boot_option_id: boid,
             boot_entry: bo_command,
@@ -218,10 +217,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4, image: String) -> R
     stream_upload_chunk.force_close().await;
 
     os.append_message(
-        format!(
-            "image saved at {:?}/{}. Total size {total_size}, total csize {total_csize}",
-            server_address, image,
-        ),
+        format!("image saved. Total size {total_size}, total csize {total_csize}",),
         MessageKind::Info,
     );
 

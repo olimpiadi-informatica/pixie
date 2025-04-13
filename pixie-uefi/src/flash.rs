@@ -2,13 +2,7 @@ use crate::os::{
     error::{Error, Result},
     mpsc, TcpStream, UefiOS, PACKET_SIZE,
 };
-use alloc::{
-    boxed::Box,
-    collections::BTreeMap,
-    rc::Rc,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, string::ToString, vec::Vec};
 use core::{cell::RefCell, mem, net::SocketAddrV4};
 use futures::future::{select, Either};
 use lz4_flex::decompress;
@@ -42,8 +36,8 @@ impl PartialChunk {
     }
 }
 
-async fn fetch_image(stream: &TcpStream, image: String) -> Result<Image> {
-    let req = TcpRequest::GetImage(image);
+async fn fetch_image(stream: &TcpStream) -> Result<Image> {
+    let req = TcpRequest::GetImage;
     let mut buf = postcard::to_allocvec(&req)?;
     stream.send_u64_le(buf.len() as u64).await?;
     stream.send(&buf).await?;
@@ -135,9 +129,9 @@ async fn handle_packet(
     Ok(Some((pos, data)))
 }
 
-pub async fn flash(os: UefiOS, server_addr: SocketAddrV4, image: String) -> Result<()> {
+pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     let stream = os.connect(server_addr).await?;
-    let image = fetch_image(&stream, image).await?;
+    let image = fetch_image(&stream).await?;
     stream.close_send().await;
     // TODO(virv): this could be better
     stream.force_close().await;

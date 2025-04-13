@@ -8,6 +8,7 @@ pub mod config;
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;
+use core::fmt::Display;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
 use std::{collections::HashMap, net::Ipv4Addr};
@@ -102,13 +103,26 @@ pub const PACKET_LEN: usize = 1436;
 pub const HEADER_LEN: usize = 34;
 pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum Action {
     Reboot,
     Register,
-    Store { image: String },
-    Flash { image: String },
+    Store,
+    Flash,
     Wait,
+}
+
+impl Display for Action {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
+        match self {
+            Action::Reboot => write!(fmt, "reboot"),
+            Action::Register => write!(fmt, "register"),
+            Action::Store => write!(fmt, "store"),
+            Action::Flash => write!(fmt, "flash"),
+            Action::Wait => write!(fmt, "wait"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,10 +135,10 @@ pub enum UdpRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TcpRequest {
     HasChunk(ChunkHash),
-    GetImage(String),
+    GetImage,
     Register(Station),
     UploadChunk(Vec<u8>),
-    UploadImage(String, Image),
+    UploadImage(Image),
     GetAction,
     ActionComplete,
 }
@@ -135,5 +149,5 @@ pub enum StatusUpdate {
     Config(config::Config),
     HostMap(HashMap<Ipv4Addr, String>),
     Units(Vec<Unit>),
-    ImageStats(ImagesStats),
+    ImagesStats(ImagesStats),
 }

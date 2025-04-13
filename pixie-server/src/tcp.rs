@@ -2,7 +2,7 @@ use crate::{
     find_mac,
     state::{State, UnitSelector},
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use macaddr::MacAddr6;
 use pixie_shared::{TcpRequest, ACTION_PORT};
 use std::{
@@ -21,7 +21,10 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             let has_chunk = state.has_chunk(hash);
             postcard::to_allocvec(&has_chunk)?
         }
-        TcpRequest::GetImage(name) => state.get_image_serialized(&name)?.unwrap(),
+        TcpRequest::GetImage => {
+            let unit = state.get_unit(peer_mac).context("Unit not found")?;
+            state.get_image_serialized(&unit.image)?.unwrap()
+        }
         TcpRequest::Register(station) => {
             state.set_last(station.clone());
             state.register_unit(peer_mac, station)?;
@@ -31,8 +34,9 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             state.add_chunk(&data)?;
             Vec::new()
         }
-        TcpRequest::UploadImage(name, image) => {
-            state.add_image(name, &image)?;
+        TcpRequest::UploadImage(image) => {
+            let unit = state.get_unit(peer_mac).context("Unit not found")?;
+            state.add_image(unit.image, &image)?;
             Vec::new()
         }
         TcpRequest::GetAction => {
