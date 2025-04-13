@@ -5,15 +5,14 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = "1.0.97"
-blake3 = "1"
+blake3 = "1.5.5"
 clap = { version = "4.5.35", features = ["derive"] }
-env_logger = "0.11.6"
+env_logger = { version = "0.11.6", default-features = false, features = ["auto-color", "humantime"] }
 interfaces = "0.0.9"
 ipnet = { version = "2.9.0", features = ["serde"] }
 libc = "0.2.171"
 log = "0.4.27"
 macaddr = { version = "1.0.1", features = ["serde"] }
-mktemp = "0.5.1"
 postcard = { version = "1.0.8", default-features = false, features = ["alloc"] }
 serde = "1.0.219"
 serde_derive = "1.0.193"
@@ -22,7 +21,7 @@ tokio = { version = "1.43.1", features = ["macros", "fs", "rt-multi-thread", "sy
 serde_json = "1.0.140"
 hostfile = "1.0.0"
 hex = "0.4.3"
-axum = { version = "0.7.2", features = ["ws"] }
+axum = "0.7.2"
 tower-http = { version = "0.6.1", features = ["fs", "compression-gzip", "auth", "trace"] }
 bytes = "1.5.0"
 http-body-util = "0.1.3"
@@ -33,3 +32,6 @@ chrono = "0.4.40"
 [dependencies.pixie-shared]
 path = "../pixie-shared"
 features = ["std"]
+
+[profile.release]
+lto = true

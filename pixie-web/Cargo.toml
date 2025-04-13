@@ -16,3 +16,6 @@ pixie-shared = { version = "0.1.0", path = "../pixie-shared", features = ["macad
 reqwest = { version = "0.12.12", default-features = false, features = ["stream"] }
 serde_json = "1.0.140"
 thaw = { version = "0.3.4", features = ["csr"] }
+
+[profile.release]
+lto = true

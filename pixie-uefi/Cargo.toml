@@ -29,3 +29,4 @@ path = "../pixie-shared"
 panic = "abort"
 opt-level = "s"
 codegen-units = 1
+lto = true
