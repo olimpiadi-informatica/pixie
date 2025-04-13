@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["atomic_write","get_image_csize"],"struct":["State"]};
+window.SIDEBAR_ITEMS = {"constant":["CHUNKS_DIR","CONFIG_YAML","IMAGES_DIR","REGISTERED_JSON"],"fn":["atomic_write","build_hostmap"],"mod":["images","units"],"struct":["State"]};

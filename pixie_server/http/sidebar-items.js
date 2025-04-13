@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["UnitSelector"],"fn":["action","delete_image","forget","gc","image","main","rollback","status"]};
+window.SIDEBAR_ITEMS = {"fn":["action","delete_image","forget","gc","image","main","rollback","status"]};
