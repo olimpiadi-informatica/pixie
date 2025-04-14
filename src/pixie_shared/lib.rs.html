@@ -29,7 +29,7 @@
 <a href=#29 id=29 data-nosnippet>29</a></span><span class="kw">pub type </span>Offset = usize;
 <a href=#30 id=30 data-nosnippet>30</a>
 <a href=#31 id=31 data-nosnippet>31</a><span class="doccomment">/// Describes one chunk from a disk.
-<a href=#32 id=32 data-nosnippet>32</a></span><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#32 id=32 data-nosnippet>32</a></span><span class="attr">#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 <a href=#33 id=33 data-nosnippet>33</a></span><span class="kw">pub struct </span>Chunk {
 <a href=#34 id=34 data-nosnippet>34</a>    <span class="kw">pub </span>hash: ChunkHash,
 <a href=#35 id=35 data-nosnippet>35</a>    <span class="kw">pub </span>start: Offset,
@@ -130,7 +130,7 @@
 <a href=#130 id=130 data-nosnippet>130</a>
 <a href=#131 id=131 data-nosnippet>131</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
 <a href=#132 id=132 data-nosnippet>132</a></span><span class="kw">pub enum </span>TcpRequest {
-<a href=#133 id=133 data-nosnippet>133</a>    GetChunkCSize(ChunkHash),
+<a href=#133 id=133 data-nosnippet>133</a>    HasChunk(ChunkHash),
 <a href=#134 id=134 data-nosnippet>134</a>    GetImage(String),
 <a href=#135 id=135 data-nosnippet>135</a>    Register(Station),
 <a href=#136 id=136 data-nosnippet>136</a>    UploadChunk(Vec&lt;u8&gt;),

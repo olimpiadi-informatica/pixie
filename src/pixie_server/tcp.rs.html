@@ -17,9 +17,9 @@
 <a href=#17 id=17 data-nosnippet>17</a>
 <a href=#18 id=18 data-nosnippet>18</a><span class="kw">async fn </span>handle_request(state: <span class="kw-2">&amp;</span>State, req: TcpRequest, peer_mac: MacAddr6) -&gt; <span class="prelude-ty">Result</span>&lt;Vec&lt;u8&gt;&gt; {
 <a href=#19 id=19 data-nosnippet>19</a>    <span class="prelude-val">Ok</span>(<span class="kw">match </span>req {
-<a href=#20 id=20 data-nosnippet>20</a>        TcpRequest::GetChunkCSize(hash) =&gt; {
-<a href=#21 id=21 data-nosnippet>21</a>            <span class="kw">let </span>csize = state.get_chunk_csize(hash);
-<a href=#22 id=22 data-nosnippet>22</a>            postcard::to_allocvec(<span class="kw-2">&amp;</span>csize)<span class="question-mark">?
+<a href=#20 id=20 data-nosnippet>20</a>        TcpRequest::HasChunk(hash) =&gt; {
+<a href=#21 id=21 data-nosnippet>21</a>            <span class="kw">let </span>has_chunk = state.has_chunk(hash);
+<a href=#22 id=22 data-nosnippet>22</a>            postcard::to_allocvec(<span class="kw-2">&amp;</span>has_chunk)<span class="question-mark">?
 <a href=#23 id=23 data-nosnippet>23</a>        </span>}
 <a href=#24 id=24 data-nosnippet>24</a>        TcpRequest::GetImage(name) =&gt; state.get_image_serialized(<span class="kw-2">&amp;</span>name)<span class="question-mark">?</span>.unwrap(),
 <a href=#25 id=25 data-nosnippet>25</a>        TcpRequest::Register(station) =&gt; {
