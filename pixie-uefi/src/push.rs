@@ -108,74 +108,64 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
     let (tx2, mut rx2) = mpsc::channel(32);
     let (tx3, mut rx3) = mpsc::channel(32);
     let (tx4, mut rx4) = mpsc::channel(32);
-    let (tx5, mut rx5) = mpsc::channel(32);
 
     let task1 = async {
         let mut tx1 = tx1;
-        for chnk in final_chunks {
-            let mut data = vec![0; chnk.size];
-            disk.read(chnk.start as u64, &mut data).await?;
-            let hash = blake3::hash(&data).into();
-            tx1.send((chnk.start, hash, data)).await;
+        for chunk_info in final_chunks {
+            let mut data = vec![0; chunk_info.size];
+            disk.read(chunk_info.start as u64, &mut data).await?;
+            let cdata = compress(&data);
+            let hash = blake3::hash(&cdata).into();
+            let chunk = Chunk {
+                hash,
+                start: chunk_info.start,
+                size: chunk_info.size,
+                csize: cdata.len(),
+            };
+            tx1.send((chunk, cdata)).await;
         }
         Ok::<_, Error>(())
     };
 
     let task2 = async {
         let mut tx2 = tx2;
-        while let Some((start, hash, data)) = rx1.recv().await {
-            let req = TcpRequest::GetChunkCSize(hash);
+        while let Some((chunk, cdata)) = rx1.recv().await {
+            let req = TcpRequest::HasChunk(chunk.hash);
             let buf = postcard::to_allocvec(&req)?;
             stream_get_csize.send_u64_le(buf.len() as u64).await?;
             stream_get_csize.send(&buf).await?;
-            tx2.send((start, hash, data)).await;
+            tx2.send((chunk, cdata)).await;
         }
         Ok(())
     };
 
     let task3 = async {
         let mut tx3 = tx3;
-        while let Some((start, hash, data)) = rx2.recv().await {
+        while let Some((chunk, cdata)) = rx2.recv().await {
             let len = stream_get_csize.recv_u64_le().await?;
             let mut buf = vec![0; len as usize];
             stream_get_csize.recv(&mut buf).await?;
-            let csize: Option<usize> = postcard::from_bytes(&buf)?;
-            tx3.send((start, hash, data, csize)).await;
+            let has_chunk: bool = postcard::from_bytes(&buf)?;
+            tx3.send((chunk, cdata, has_chunk)).await;
         }
         Ok(())
     };
 
     let task4 = async {
         let mut tx4 = tx4;
-        while let Some((start, hash, data, csize)) = rx3.recv().await {
-            let (csize, cdata) = match csize {
-                Some(csize) => (csize, None),
-                None => {
-                    let cdata = compress(&data);
-                    (cdata.len(), Some(cdata))
-                }
-            };
-            tx4.send((start, hash, data, csize, cdata)).await;
-        }
-        Ok(())
-    };
-
-    let task5 = async {
-        let mut tx5 = tx5;
-        while let Some((start, hash, data, csize, cdata)) = rx4.recv().await {
-            let check_ack = cdata.is_some();
-            if let Some(cdata) = cdata {
+        while let Some((chunk, cdata, has_chunk)) = rx3.recv().await {
+            if !has_chunk {
                 let req = TcpRequest::UploadChunk(cdata);
                 let buf = postcard::to_allocvec(&req)?;
                 stream_upload_chunk.send_u64_le(buf.len() as u64).await?;
                 stream_upload_chunk.send(&buf).await?;
             }
-            tx5.send((start, hash, data, csize, check_ack)).await;
+            tx4.send((chunk, has_chunk)).await;
         }
         Ok(())
     };
 
-    let task6 = async {
+    let task5 = async {
         stats.replace(State::PushingChunks {
             cur: 0,
             total,
@@ -184,20 +174,15 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         });
 
         let mut chunks = Vec::new();
-        while let Some((start, hash, data, csize, check_ack)) = rx5.recv().await {
-            if check_ack {
+        while let Some((chunk, has_chunk)) = rx4.recv().await {
+            if !has_chunk {
                 let len = stream_upload_chunk.recv_u64_le().await?;
                 assert_eq!(len, 0);
             }
-            chunks.push(Chunk {
-                hash,
-                start,
-                size: data.len(),
-                csize,
-            });
+            chunks.push(chunk);
 
-            total_size += data.len();
-            total_csize += csize;
+            total_size += chunk.size;
+            total_csize += chunk.csize;
 
             stats.replace(State::PushingChunks {
                 cur: chunks.len(),
@@ -215,8 +200,7 @@ pub async fn push(os: UefiOS, server_address: Address, image: String) -> Result<
         Ok(chunks)
     };
 
-    let ((), (), (), (), (), chunk_hashes) =
-        futures::try_join!(task1, task2, task3, task4, task5, task6)?;
+    let ((), (), (), (), chunk_hashes) = futures::try_join!(task1, task2, task3, task4, task5)?;
 
     save_image(
         &stream_upload_chunk,

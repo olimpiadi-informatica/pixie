@@ -17,9 +17,9 @@ use tokio::{
 
 async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> Result<Vec<u8>> {
     Ok(match req {
-        TcpRequest::GetChunkCSize(hash) => {
-            let csize = state.get_chunk_csize(hash);
-            postcard::to_allocvec(&csize)?
+        TcpRequest::HasChunk(hash) => {
+            let has_chunk = state.has_chunk(hash);
+            postcard::to_allocvec(&has_chunk)?
         }
         TcpRequest::GetImage(name) => state.get_image_serialized(&name)?.unwrap(),
         TcpRequest::Register(station) => {

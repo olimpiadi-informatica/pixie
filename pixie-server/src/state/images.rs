@@ -4,12 +4,11 @@ use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Image, ImagesStats};
 use tokio::sync::watch;
 
 impl State {
-    pub fn get_chunk_csize(&self, hash: ChunkHash) -> Option<u64> {
+    pub fn has_chunk(&self, hash: ChunkHash) -> bool {
         self.chunks_stats
             .lock()
             .expect("chunks_stats lock is poisoned")
-            .get(&hash)
-            .map(|chunk| chunk.csize)
+            .contains_key(&hash)
     }
 
     pub fn get_chunk_cdata(&self, hash: ChunkHash) -> Result<Option<Vec<u8>>> {

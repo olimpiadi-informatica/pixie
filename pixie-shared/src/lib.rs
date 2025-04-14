@@ -29,7 +29,7 @@ pub type ChunkHash = [u8; OUT_LEN];
 pub type Offset = usize;
 
 /// Describes one chunk from a disk.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Chunk {
     pub hash: ChunkHash,
     pub start: Offset,
@@ -130,7 +130,7 @@ pub enum UdpRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TcpRequest {
-    GetChunkCSize(ChunkHash),
+    HasChunk(ChunkHash),
     GetImage(String),
     Register(Station),
     UploadChunk(Vec<u8>),
