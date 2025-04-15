@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["complete_action","get_action","main","run","server_discover"],"mod":["os","parse_disk","pull","push","reboot_to_os","register"]};
+window.SIDEBAR_ITEMS = {"fn":["complete_action","get_action","main","run","server_discover"],"mod":["flash","os","parse_disk","reboot_to_os","register","store"]};

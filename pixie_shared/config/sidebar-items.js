@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ActionKind","DhcpMode"],"struct":["Config","HostsConfig","HttpConfig","Unit"]};
+window.SIDEBAR_ITEMS = {"enum":["DhcpMode"],"struct":["Config","HostsConfig","HttpConfig","Unit"]};
