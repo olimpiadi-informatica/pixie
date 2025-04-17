@@ -2,22 +2,25 @@ name: Rust
 
 on: [push, pull_request]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   clippy:
     name: Format & Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install Deps
-        run: |
-          rustup toolchain install stable nightly
-          rustup default stable
-          rustup component add rustfmt clippy
-          rustup component add rustfmt clippy rust-src --toolchain nightly
+      - name: Install rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable, nightly
+          components: rustfmt, clippy, rust-src
+          target: wasm32-unknown-unknown
+          cache-workspaces: |
+            pixie-server
+            pixie-shared
+            pixie-uefi
+            pixie-web
 
       - name: cargo clippy
         run: |
@@ -27,3 +30,33 @@ jobs:
             cargo clippy -- -D warnings
             popd
           done
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get install -y dnsmasq qemu-system-x86 ovmf
+          sudo mkdir -p /etc/qemu
+          echo allow br-pixie | sudo tee /etc/qemu/bridge.conf
+
+      - name: Install rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable, nightly
+          components: rustfmt, clippy, rust-src
+          target: wasm32-unknown-unknown
+          cache-workspaces: |
+            pixie-server
+            pixie-shared
+            pixie-uefi
+            pixie-web
+
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.0
+
+      - name: Run test
+        run: ./test.sh

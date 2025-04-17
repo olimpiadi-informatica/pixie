@@ -36,6 +36,25 @@ async fn action(
     }
 }
 
+async fn curr_action(
+    Path((unit_filter, action)): Path<(String, Action)>,
+    extract::State(state): extract::State<Arc<State>>,
+) -> impl IntoResponse {
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Invalid unit selector\n".to_owned(),
+        );
+    };
+
+    let updated = state.set_unit_current_action(unit_selector, action);
+    if updated > 0 {
+        (StatusCode::OK, format!("{updated} computer(s) affected\n"))
+    } else {
+        (StatusCode::BAD_REQUEST, "Unknown PC\n".to_owned())
+    }
+}
+
 async fn image(
     Path((unit_filter, image)): Path<(String, String)>,
     extract::State(state): extract::State<Arc<State>>,
@@ -143,6 +162,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .route("/admin/status", get(status))
         .route("/admin/gc", get(gc))
         .route("/admin/action/:unit/:action", get(action))
+        .route("/admin/curr_action/:unit/:action", get(curr_action))
         .route("/admin/image/:unit/:image", get(image))
         .route("/admin/forget/:unit", get(forget))
         .route("/admin/rollback/:image", get(rollback))

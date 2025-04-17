@@ -259,7 +259,9 @@ async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkI
 
 async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     let disk_size = disk.size() as usize;
-    let partitions = disk.partitions().expect("disk is not GPT");
+    let Ok(partitions) = disk.partitions() else {
+        return Ok(None);
+    };
 
     let mut pos = 0usize;
     let mut chunks = vec![];
