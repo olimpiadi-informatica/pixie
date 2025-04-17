@@ -118,7 +118,7 @@ async fn run(os: UefiOS) -> Result<!> {
         tcp.force_close().await;
 
         if let Err(e) = command {
-            os.append_message(format!("Error receiving action: {e}"), MessageKind::Warning);
+            os.append_message(format!("Error receiving action: {e}"), MessageKind::Warn);
         } else {
             let command = command.unwrap();
             if matches!(command, Action::Wait) {
@@ -128,7 +128,7 @@ async fn run(os: UefiOS) -> Result<!> {
                             "Started waiting for another command at {:.1}s...",
                             os.timer().micros() as f32 * 0.000_001
                         ),
-                        MessageKind::Warning,
+                        MessageKind::Warn,
                     );
                 }
                 last_was_wait = true;
