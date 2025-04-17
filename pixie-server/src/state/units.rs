@@ -131,7 +131,7 @@ impl State {
                             unit.next_action = Action::Wait;
                             modified = true;
                         }
-                        Action::Reboot | Action::Wait => {
+                        Action::Reboot | Action::Wait | Action::Shutdown => {
                             modified = false;
                         }
                     }

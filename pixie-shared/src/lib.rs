@@ -107,6 +107,7 @@ pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     Reboot,
+    Shutdown,
     Register,
     Store,
     Flash,
@@ -117,6 +118,7 @@ impl Display for Action {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
             Action::Reboot => write!(fmt, "reboot"),
+            Action::Shutdown => write!(fmt, "shutdown"),
             Action::Register => write!(fmt, "register"),
             Action::Store => write!(fmt, "store"),
             Action::Flash => write!(fmt, "flash"),

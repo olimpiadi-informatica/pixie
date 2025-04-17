@@ -172,6 +172,7 @@ fn Group(
         let url_boot = move || format!("admin/action/{}/reboot", mac());
         let url_cancel = move || format!("admin/action/{}/wait", mac());
         let url_register = move || format!("admin/action/{}/register", mac());
+        let url_shutdown = move || format!("admin/action/{}/shutdown", mac());
         let url_forget = move || format!("admin/forget/{}", mac());
 
         let fmt_ca = move || {
@@ -192,11 +193,12 @@ fn Group(
         };
 
         let led_class = move || match ping_ago() {
-            ..=-1 => "led-blue",
-            0..=119 => "led-green",
-            120..=299 => "led-yellow",
+            ..0 => "led-blue",
+            0..120 => "led-green",
+            120..300 => "led-yellow",
             300.. => "led-red",
         };
+
         view! {
             <tr>
                 <td>
@@ -235,6 +237,12 @@ fn Group(
                             on_click=move |_| send_req(url_register())
                         >
                             "re-register"
+                        </Button>
+                        <Button
+                            variant=ButtonVariant::Outlined
+                            on_click=move |_| send_req(url_shutdown())
+                        >
+                            "shutdown"
                         </Button>
                     </ButtonGroup>
                 </td>

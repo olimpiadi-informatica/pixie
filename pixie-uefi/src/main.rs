@@ -17,11 +17,11 @@ use crate::{
     register::register,
     store::store,
 };
-use alloc::boxed::Box;
+use alloc::{borrow::ToOwned, boxed::Box};
 use core::net::{Ipv4Addr, SocketAddrV4};
 use futures::future::{self, Either};
 use pixie_shared::{Action, TcpRequest, UdpRequest, ACTION_PORT, PING_PORT};
-use uefi::prelude::*;
+use uefi::{entry, Status};
 
 mod flash;
 mod os;
@@ -64,6 +64,12 @@ async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
     };
 
     Ok(server)
+}
+
+async fn shutdown(os: UefiOS) -> ! {
+    os.append_message("Shutting down...".to_owned(), MessageKind::Info);
+    os.sleep_us(1_000_000).await;
+    os.shutdown()
 }
 
 async fn get_action(stream: &TcpStream) -> Result<Action> {
@@ -143,6 +149,7 @@ async fn run(os: UefiOS) -> Result<!> {
                 match command {
                     Action::Wait => unreachable!(),
                     Action::Reboot => reboot_to_os(os).await,
+                    Action::Shutdown => shutdown(os).await,
                     Action::Register => register(os, server).await?,
                     Action::Store => store(os, server).await?,
                     Action::Flash => flash(os, server).await?,

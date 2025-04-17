@@ -561,6 +561,10 @@ impl UefiOS {
     pub fn reset(&self) -> ! {
         uefi::runtime::reset(uefi::runtime::ResetType::WARM, Status::SUCCESS, None)
     }
+
+    pub fn shutdown(&self) -> ! {
+        uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None)
+    }
 }
 
 #[derive(Clone, Copy)]
