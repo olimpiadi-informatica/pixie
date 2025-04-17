@@ -174,6 +174,13 @@ impl State {
         })
     }
 
+    pub fn set_unit_current_action(&self, selector: UnitSelector, action: Action) -> usize {
+        self.set_unit_inner(selector, |unit| {
+            unit.curr_action = Some(action);
+            unit.curr_progress = None;
+        })
+    }
+
     pub fn set_unit_image(&self, selector: UnitSelector, image: String) -> Result<usize> {
         ensure!(
             self.config.images.contains(&image),
