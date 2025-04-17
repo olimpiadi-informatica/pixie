@@ -107,47 +107,49 @@
 <a href=#107 id=107 data-nosnippet>107</a>#[serde(rename_all = <span class="string">"lowercase"</span>)]
 <a href=#108 id=108 data-nosnippet>108</a></span><span class="kw">pub enum </span>Action {
 <a href=#109 id=109 data-nosnippet>109</a>    Reboot,
-<a href=#110 id=110 data-nosnippet>110</a>    Register,
-<a href=#111 id=111 data-nosnippet>111</a>    Store,
-<a href=#112 id=112 data-nosnippet>112</a>    Flash,
-<a href=#113 id=113 data-nosnippet>113</a>    Wait,
-<a href=#114 id=114 data-nosnippet>114</a>}
-<a href=#115 id=115 data-nosnippet>115</a>
-<a href=#116 id=116 data-nosnippet>116</a><span class="kw">impl </span>Display <span class="kw">for </span>Action {
-<a href=#117 id=117 data-nosnippet>117</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, fmt: <span class="kw-2">&amp;mut </span>core::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;(), core::fmt::Error&gt; {
-<a href=#118 id=118 data-nosnippet>118</a>        <span class="kw">match </span><span class="self">self </span>{
-<a href=#119 id=119 data-nosnippet>119</a>            Action::Reboot =&gt; <span class="macro">write!</span>(fmt, <span class="string">"reboot"</span>),
-<a href=#120 id=120 data-nosnippet>120</a>            Action::Register =&gt; <span class="macro">write!</span>(fmt, <span class="string">"register"</span>),
-<a href=#121 id=121 data-nosnippet>121</a>            Action::Store =&gt; <span class="macro">write!</span>(fmt, <span class="string">"store"</span>),
-<a href=#122 id=122 data-nosnippet>122</a>            Action::Flash =&gt; <span class="macro">write!</span>(fmt, <span class="string">"flash"</span>),
-<a href=#123 id=123 data-nosnippet>123</a>            Action::Wait =&gt; <span class="macro">write!</span>(fmt, <span class="string">"wait"</span>),
-<a href=#124 id=124 data-nosnippet>124</a>        }
-<a href=#125 id=125 data-nosnippet>125</a>    }
-<a href=#126 id=126 data-nosnippet>126</a>}
-<a href=#127 id=127 data-nosnippet>127</a>
-<a href=#128 id=128 data-nosnippet>128</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#129 id=129 data-nosnippet>129</a></span><span class="kw">pub enum </span>UdpRequest {
-<a href=#130 id=130 data-nosnippet>130</a>    Discover,
-<a href=#131 id=131 data-nosnippet>131</a>    ActionProgress(usize, usize),
-<a href=#132 id=132 data-nosnippet>132</a>    RequestChunks(Vec&lt;ChunkHash&gt;),
-<a href=#133 id=133 data-nosnippet>133</a>}
-<a href=#134 id=134 data-nosnippet>134</a>
-<a href=#135 id=135 data-nosnippet>135</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#136 id=136 data-nosnippet>136</a></span><span class="kw">pub enum </span>TcpRequest {
-<a href=#137 id=137 data-nosnippet>137</a>    HasChunk(ChunkHash),
-<a href=#138 id=138 data-nosnippet>138</a>    GetImage,
-<a href=#139 id=139 data-nosnippet>139</a>    Register(Station),
-<a href=#140 id=140 data-nosnippet>140</a>    UploadChunk(Vec&lt;u8&gt;),
-<a href=#141 id=141 data-nosnippet>141</a>    UploadImage(Image),
-<a href=#142 id=142 data-nosnippet>142</a>    GetAction,
-<a href=#143 id=143 data-nosnippet>143</a>    ActionComplete,
-<a href=#144 id=144 data-nosnippet>144</a>}
-<a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
-<a href=#147 id=147 data-nosnippet>147</a>#[cfg(feature = <span class="string">"std"</span>)]
-<a href=#148 id=148 data-nosnippet>148</a></span><span class="kw">pub enum </span>StatusUpdate {
-<a href=#149 id=149 data-nosnippet>149</a>    Config(config::Config),
-<a href=#150 id=150 data-nosnippet>150</a>    HostMap(HashMap&lt;Ipv4Addr, String&gt;),
-<a href=#151 id=151 data-nosnippet>151</a>    Units(Vec&lt;Unit&gt;),
-<a href=#152 id=152 data-nosnippet>152</a>    ImagesStats(ImagesStats),
-<a href=#153 id=153 data-nosnippet>153</a>}</code></pre></div></section></main></body></html>
+<a href=#110 id=110 data-nosnippet>110</a>    Shutdown,
+<a href=#111 id=111 data-nosnippet>111</a>    Register,
+<a href=#112 id=112 data-nosnippet>112</a>    Store,
+<a href=#113 id=113 data-nosnippet>113</a>    Flash,
+<a href=#114 id=114 data-nosnippet>114</a>    Wait,
+<a href=#115 id=115 data-nosnippet>115</a>}
+<a href=#116 id=116 data-nosnippet>116</a>
+<a href=#117 id=117 data-nosnippet>117</a><span class="kw">impl </span>Display <span class="kw">for </span>Action {
+<a href=#118 id=118 data-nosnippet>118</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, fmt: <span class="kw-2">&amp;mut </span>core::fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;(), core::fmt::Error&gt; {
+<a href=#119 id=119 data-nosnippet>119</a>        <span class="kw">match </span><span class="self">self </span>{
+<a href=#120 id=120 data-nosnippet>120</a>            Action::Reboot =&gt; <span class="macro">write!</span>(fmt, <span class="string">"reboot"</span>),
+<a href=#121 id=121 data-nosnippet>121</a>            Action::Shutdown =&gt; <span class="macro">write!</span>(fmt, <span class="string">"shutdown"</span>),
+<a href=#122 id=122 data-nosnippet>122</a>            Action::Register =&gt; <span class="macro">write!</span>(fmt, <span class="string">"register"</span>),
+<a href=#123 id=123 data-nosnippet>123</a>            Action::Store =&gt; <span class="macro">write!</span>(fmt, <span class="string">"store"</span>),
+<a href=#124 id=124 data-nosnippet>124</a>            Action::Flash =&gt; <span class="macro">write!</span>(fmt, <span class="string">"flash"</span>),
+<a href=#125 id=125 data-nosnippet>125</a>            Action::Wait =&gt; <span class="macro">write!</span>(fmt, <span class="string">"wait"</span>),
+<a href=#126 id=126 data-nosnippet>126</a>        }
+<a href=#127 id=127 data-nosnippet>127</a>    }
+<a href=#128 id=128 data-nosnippet>128</a>}
+<a href=#129 id=129 data-nosnippet>129</a>
+<a href=#130 id=130 data-nosnippet>130</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#131 id=131 data-nosnippet>131</a></span><span class="kw">pub enum </span>UdpRequest {
+<a href=#132 id=132 data-nosnippet>132</a>    Discover,
+<a href=#133 id=133 data-nosnippet>133</a>    ActionProgress(usize, usize),
+<a href=#134 id=134 data-nosnippet>134</a>    RequestChunks(Vec&lt;ChunkHash&gt;),
+<a href=#135 id=135 data-nosnippet>135</a>}
+<a href=#136 id=136 data-nosnippet>136</a>
+<a href=#137 id=137 data-nosnippet>137</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#138 id=138 data-nosnippet>138</a></span><span class="kw">pub enum </span>TcpRequest {
+<a href=#139 id=139 data-nosnippet>139</a>    HasChunk(ChunkHash),
+<a href=#140 id=140 data-nosnippet>140</a>    GetImage,
+<a href=#141 id=141 data-nosnippet>141</a>    Register(Station),
+<a href=#142 id=142 data-nosnippet>142</a>    UploadChunk(Vec&lt;u8&gt;),
+<a href=#143 id=143 data-nosnippet>143</a>    UploadImage(Image),
+<a href=#144 id=144 data-nosnippet>144</a>    GetAction,
+<a href=#145 id=145 data-nosnippet>145</a>    ActionComplete,
+<a href=#146 id=146 data-nosnippet>146</a>}
+<a href=#147 id=147 data-nosnippet>147</a>
+<a href=#148 id=148 data-nosnippet>148</a><span class="attr">#[derive(Debug, Clone, Serialize, Deserialize)]
+<a href=#149 id=149 data-nosnippet>149</a>#[cfg(feature = <span class="string">"std"</span>)]
+<a href=#150 id=150 data-nosnippet>150</a></span><span class="kw">pub enum </span>StatusUpdate {
+<a href=#151 id=151 data-nosnippet>151</a>    Config(config::Config),
+<a href=#152 id=152 data-nosnippet>152</a>    HostMap(HashMap&lt;Ipv4Addr, String&gt;),
+<a href=#153 id=153 data-nosnippet>153</a>    Units(Vec&lt;Unit&gt;),
+<a href=#154 id=154 data-nosnippet>154</a>    ImagesStats(ImagesStats),
+<a href=#155 id=155 data-nosnippet>155</a>}</code></pre></div></section></main></body></html>
