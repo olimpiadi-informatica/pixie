@@ -12,9 +12,9 @@ pub async fn reboot_to_os(os: UefiOS) -> ! {
                 "Did not find a valid boot order entry! current: {}",
                 bo.current()
             ),
-            MessageKind::Warning,
+            MessageKind::Warn,
         );
-        os.append_message(format!("{:?}", bo.order()), MessageKind::Warning);
+        os.append_message(format!("{:?}", bo.order()), MessageKind::Warn);
         os.sleep_us(100_000_000).await;
     }
     os.reset();

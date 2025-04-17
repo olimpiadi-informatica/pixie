@@ -27,7 +27,10 @@ use core::{
 use uefi::{
     boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
     proto::{
-        console::text::{Color, Input, Key, Output},
+        console::{
+            serial::Serial,
+            text::{Color, Input, Key, Output},
+        },
         device_path::{
             build::DevicePathBuilder,
             text::{AllowShortcuts, DevicePathToText, DisplayOnly},
@@ -71,8 +74,9 @@ struct UefiOSImpl {
     timer: Timer,
     rng: Rng,
     tasks: Vec<Arc<Task>>,
-    input: Option<ScopedProtocol<Input>>,
-    output: Option<ScopedProtocol<Output>>,
+    input: ScopedProtocol<Input>,
+    vga: ScopedProtocol<Output>,
+    serial: ScopedProtocol<Serial>,
     net: Option<NetworkInterface>,
     messages: VecDeque<(String, MessageKind)>,
     ui_buf: Vec<(String, Color, Color)>,
@@ -82,8 +86,7 @@ struct UefiOSImpl {
 
 impl UefiOSImpl {
     fn cols(&mut self) -> usize {
-        let output = self.output.as_mut().unwrap();
-        let mode = output.current_mode().unwrap().unwrap();
+        let mode = self.vga.current_mode().unwrap().unwrap();
         mode.columns()
     }
 
@@ -120,19 +123,18 @@ impl UefiOSImpl {
     }
 
     pub fn flush_ui_buf(&mut self) {
-        let output = self.output.as_mut().unwrap();
-        output.set_cursor_position(0, 0).unwrap();
-        let mode = output.current_mode().unwrap().unwrap();
+        self.vga.set_cursor_position(0, 0).unwrap();
+        let mode = self.vga.current_mode().unwrap().unwrap();
         let (cols, rows) = (mode.columns(), mode.rows());
         for (msg, fg, bg) in self.ui_buf.drain(..) {
-            output.set_color(fg, bg).unwrap();
-            write!(output, "{}", msg).unwrap();
+            self.vga.set_color(fg, bg).unwrap();
+            write!(self.vga, "{}", msg).unwrap();
         }
-        output.set_color(Color::White, Color::Black).unwrap();
+        self.vga.set_color(Color::White, Color::Black).unwrap();
         if self.ui_pos + 1 < cols * rows {
             // Clear any remaining chars.
             let n = cols * rows - self.ui_pos - 1;
-            write!(output, "{}", String::from_utf8(vec![0x20; n]).unwrap()).unwrap();
+            write!(self.vga, "{}", String::from_utf8(vec![0x20; n]).unwrap()).unwrap();
         }
         self.ui_pos = 0;
     }
@@ -181,12 +183,24 @@ impl UefiOS {
         let timer = Timer::new();
         let rng = Rng::new();
 
+        let input_handles = uefi::boot::find_handles::<Input>().unwrap();
+        let input = uefi::boot::open_protocol_exclusive::<Input>(input_handles[0]).unwrap();
+
+        let serial_handles = uefi::boot::find_handles::<Serial>().unwrap();
+        let serial = uefi::boot::open_protocol_exclusive::<Serial>(serial_handles[0]).unwrap();
+
+        let vga_handles = uefi::boot::find_handles::<Output>().unwrap();
+        let mut vga = uefi::boot::open_protocol_exclusive::<Output>(vga_handles[0]).unwrap();
+
+        vga.clear().unwrap();
+
         *OS.borrow_mut() = Some(UefiOSImpl {
             timer,
             rng,
             tasks: Vec::new(),
-            input: None,
-            output: None,
+            input,
+            vga,
+            serial,
             net: None,
             messages: VecDeque::new(),
             ui_buf: vec![],
@@ -197,20 +211,7 @@ impl UefiOS {
         let os = UefiOS { cant_build: () };
 
         let net = NetworkInterface::new(os);
-
-        let input = os
-            .open_handle(os.all_handles::<Input>().unwrap()[0])
-            .unwrap();
-
-        let mut output: ScopedProtocol<Output> = os
-            .open_handle(os.all_handles::<Output>().unwrap()[0])
-            .unwrap();
-
-        output.clear().unwrap();
-
         os.borrow_mut().net = Some(net);
-        os.borrow_mut().input = Some(input);
-        os.borrow_mut().output = Some(output);
 
         os.spawn("init", async move {
             loop {
@@ -412,19 +413,12 @@ impl UefiOS {
         panic!("handle not found");
     }
 
-    fn all_handles<P: Protocol>(&self) -> Result<Vec<Handle>> {
-        Ok(uefi::boot::find_handles::<P>()?)
-    }
-
-    fn open_handle<P: Protocol>(&self, handle: Handle) -> Result<ScopedProtocol<P>> {
-        Ok(uefi::boot::open_protocol_exclusive::<P>(handle)?)
-    }
-
     fn open_protocol_on_device<P: Protocol>(
         &self,
         device: &DevicePath,
     ) -> Result<ScopedProtocol<P>> {
-        self.open_handle::<P>(self.handle_on_device::<P>(device))
+        let handle = self.handle_on_device::<P>(device);
+        Ok(uefi::boot::open_protocol_exclusive::<P>(handle)?)
     }
 
     pub fn open_first_disk(&self) -> Disk {
@@ -441,7 +435,7 @@ impl UefiOS {
 
     pub async fn read_key(&self) -> Result<Key> {
         Ok(poll_fn(move |cx| {
-            let key = self.borrow_mut().input.as_mut().unwrap().read_key();
+            let key = self.borrow_mut().input.read_key();
             if let Err(e) = key {
                 return Poll::Ready(Err(e));
             }
@@ -466,7 +460,7 @@ impl UefiOS {
             let ip = self.net().ip();
             let mut os = self.borrow_mut();
 
-            let mode = os.output.as_mut().unwrap().current_mode().unwrap().unwrap();
+            let mode = os.vga.current_mode().unwrap().unwrap();
             let cols = mode.columns();
 
             os.write_with_color(
@@ -510,12 +504,7 @@ impl UefiOS {
             let messages: Vec<_> = os.messages.iter().cloned().collect();
 
             for (line, kind) in messages {
-                let fg_color = match kind {
-                    MessageKind::Debug => Color::LightGray,
-                    MessageKind::Info => Color::White,
-                    MessageKind::Warning => Color::Yellow,
-                    MessageKind::Error => Color::Red,
-                };
+                let fg_color = kind.color();
                 os.write_with_color(&line, fg_color, Color::Black);
                 os.write_with_color("\n", Color::Black, Color::Black);
             }
@@ -533,7 +522,8 @@ impl UefiOS {
     }
 
     pub fn force_ui_redraw(&self) {
-        if self.borrow().output.is_none() {
+        // TODO(virv): during network initialization we already start logging
+        if self.borrow().net.is_none() {
             return;
         }
         self.draw_ui()
@@ -546,6 +536,9 @@ impl UefiOS {
     pub fn append_message(&self, msg: String, kind: MessageKind) {
         {
             let mut os = self.borrow_mut();
+
+            write!(os.serial, "{:5} {}\r\n", kind.as_str(), msg).unwrap();
+
             os.messages.push_back((msg, kind));
             const MAX_MESSAGES: usize = 5;
             if os.messages.len() > MAX_MESSAGES {
@@ -574,6 +567,26 @@ impl UefiOS {
 pub enum MessageKind {
     Debug,
     Info,
-    Warning,
+    Warn,
     Error,
+}
+
+impl MessageKind {
+    fn color(self) -> Color {
+        match self {
+            MessageKind::Debug => Color::LightGray,
+            MessageKind::Info => Color::White,
+            MessageKind::Warn => Color::Yellow,
+            MessageKind::Error => Color::Red,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            MessageKind::Debug => "DEBUG",
+            MessageKind::Info => "INFO",
+            MessageKind::Warn => "WARN",
+            MessageKind::Error => "ERROR",
+        }
+    }
 }

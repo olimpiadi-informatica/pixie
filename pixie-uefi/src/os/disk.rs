@@ -16,10 +16,7 @@ use uefi::{
     Handle,
 };
 
-fn open_disk(
-    os: UefiOS,
-    handle: Handle,
-) -> Result<(ScopedProtocol<DiskIo>, ScopedProtocol<BlockIO>)> {
+fn open_disk(handle: Handle) -> Result<(ScopedProtocol<DiskIo>, ScopedProtocol<BlockIO>)> {
     let image_handle = uefi::boot::image_handle();
     let bio = unsafe {
         uefi::boot::open_protocol::<BlockIO>(
@@ -29,9 +26,10 @@ fn open_disk(
                 handle,
             },
             uefi::boot::OpenProtocolAttributes::GetProtocol,
-        )
+        )?
     };
-    Ok((os.open_handle(handle)?, bio?))
+    let proto = uefi::boot::open_protocol_exclusive::<DiskIo>(handle)?;
+    Ok((proto, bio))
 }
 
 #[derive(Debug)]
@@ -52,12 +50,11 @@ pub struct Disk {
 // available; support having more than one disk.
 impl Disk {
     pub fn new(os: UefiOS) -> Disk {
-        let handle = os
-            .all_handles::<DiskIo>()
+        let handle = uefi::boot::find_handles::<DiskIo>()
             .unwrap()
             .into_iter()
             .find(|handle| {
-                let op = open_disk(os, *handle);
+                let op = open_disk(*handle);
                 if let Ok((_, block)) = op {
                     if block.media().is_media_present() {
                         return true;
@@ -67,7 +64,7 @@ impl Disk {
             })
             .expect("Disk not found");
 
-        let (disk, block) = open_disk(os, handle).unwrap();
+        let (disk, block) = open_disk(handle).unwrap();
         Disk { disk, block, os }
     }
 
