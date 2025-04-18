@@ -174,42 +174,49 @@
 <a href=#174 id=174 data-nosnippet>174</a>        })
 <a href=#175 id=175 data-nosnippet>175</a>    }
 <a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">pub fn </span>set_unit_image(<span class="kw-2">&amp;</span><span class="self">self</span>, selector: UnitSelector, image: String) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
-<a href=#178 id=178 data-nosnippet>178</a>        <span class="macro">ensure!</span>(
-<a href=#179 id=179 data-nosnippet>179</a>            <span class="self">self</span>.config.images.contains(<span class="kw-2">&amp;</span>image),
-<a href=#180 id=180 data-nosnippet>180</a>            <span class="string">"Unknown image: {image}"
-<a href=#181 id=181 data-nosnippet>181</a>        </span>);
-<a href=#182 id=182 data-nosnippet>182</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.set_unit_inner(selector, |unit| {
-<a href=#183 id=183 data-nosnippet>183</a>            unit.image = image.clone();
-<a href=#184 id=184 data-nosnippet>184</a>        }))
-<a href=#185 id=185 data-nosnippet>185</a>    }
-<a href=#186 id=186 data-nosnippet>186</a>
-<a href=#187 id=187 data-nosnippet>187</a>    <span class="kw">pub fn </span>set_unit_progress(
-<a href=#188 id=188 data-nosnippet>188</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
-<a href=#189 id=189 data-nosnippet>189</a>        selector: UnitSelector,
-<a href=#190 id=190 data-nosnippet>190</a>        progress: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
-<a href=#191 id=191 data-nosnippet>191</a>    ) -&gt; usize {
-<a href=#192 id=192 data-nosnippet>192</a>        <span class="self">self</span>.set_unit_inner(selector, |unit| {
-<a href=#193 id=193 data-nosnippet>193</a>            unit.curr_progress = progress;
-<a href=#194 id=194 data-nosnippet>194</a>        })
-<a href=#195 id=195 data-nosnippet>195</a>    }
-<a href=#196 id=196 data-nosnippet>196</a>
-<a href=#197 id=197 data-nosnippet>197</a>    <span class="kw">pub fn </span>forget_unit(<span class="kw-2">&amp;</span><span class="self">self</span>, selector: UnitSelector) -&gt; usize {
-<a href=#198 id=198 data-nosnippet>198</a>        <span class="kw">let </span><span class="kw-2">mut </span>updated = <span class="number">0</span>;
-<a href=#199 id=199 data-nosnippet>199</a>        <span class="self">self</span>.units.send_if_modified(|units| {
-<a href=#200 id=200 data-nosnippet>200</a>            <span class="kw">let </span>len_before = units.len();
-<a href=#201 id=201 data-nosnippet>201</a>            units.retain(|unit| !selector.select(unit));
-<a href=#202 id=202 data-nosnippet>202</a>            updated = len_before - units.len();
-<a href=#203 id=203 data-nosnippet>203</a>            updated &gt; <span class="number">0
-<a href=#204 id=204 data-nosnippet>204</a>        </span>});
-<a href=#205 id=205 data-nosnippet>205</a>        updated
-<a href=#206 id=206 data-nosnippet>206</a>    }
-<a href=#207 id=207 data-nosnippet>207</a>
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="kw">pub fn </span>get_last(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Station {
-<a href=#209 id=209 data-nosnippet>209</a>        <span class="self">self</span>.last.lock().expect(<span class="string">"last mutex is poisoned"</span>).clone()
-<a href=#210 id=210 data-nosnippet>210</a>    }
-<a href=#211 id=211 data-nosnippet>211</a>
-<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">pub fn </span>set_last(<span class="kw-2">&amp;</span><span class="self">self</span>, station: Station) {
-<a href=#213 id=213 data-nosnippet>213</a>        <span class="kw-2">*</span><span class="self">self</span>.last.lock().expect(<span class="string">"last mutex is poisoned"</span>) = station;
-<a href=#214 id=214 data-nosnippet>214</a>    }
-<a href=#215 id=215 data-nosnippet>215</a>}</code></pre></div></section></main></body></html>
+<a href=#177 id=177 data-nosnippet>177</a>    <span class="kw">pub fn </span>set_unit_current_action(<span class="kw-2">&amp;</span><span class="self">self</span>, selector: UnitSelector, action: Action) -&gt; usize {
+<a href=#178 id=178 data-nosnippet>178</a>        <span class="self">self</span>.set_unit_inner(selector, |unit| {
+<a href=#179 id=179 data-nosnippet>179</a>            unit.curr_action = <span class="prelude-val">Some</span>(action);
+<a href=#180 id=180 data-nosnippet>180</a>            unit.curr_progress = <span class="prelude-val">None</span>;
+<a href=#181 id=181 data-nosnippet>181</a>        })
+<a href=#182 id=182 data-nosnippet>182</a>    }
+<a href=#183 id=183 data-nosnippet>183</a>
+<a href=#184 id=184 data-nosnippet>184</a>    <span class="kw">pub fn </span>set_unit_image(<span class="kw-2">&amp;</span><span class="self">self</span>, selector: UnitSelector, image: String) -&gt; <span class="prelude-ty">Result</span>&lt;usize&gt; {
+<a href=#185 id=185 data-nosnippet>185</a>        <span class="macro">ensure!</span>(
+<a href=#186 id=186 data-nosnippet>186</a>            <span class="self">self</span>.config.images.contains(<span class="kw-2">&amp;</span>image),
+<a href=#187 id=187 data-nosnippet>187</a>            <span class="string">"Unknown image: {image}"
+<a href=#188 id=188 data-nosnippet>188</a>        </span>);
+<a href=#189 id=189 data-nosnippet>189</a>        <span class="prelude-val">Ok</span>(<span class="self">self</span>.set_unit_inner(selector, |unit| {
+<a href=#190 id=190 data-nosnippet>190</a>            unit.image = image.clone();
+<a href=#191 id=191 data-nosnippet>191</a>        }))
+<a href=#192 id=192 data-nosnippet>192</a>    }
+<a href=#193 id=193 data-nosnippet>193</a>
+<a href=#194 id=194 data-nosnippet>194</a>    <span class="kw">pub fn </span>set_unit_progress(
+<a href=#195 id=195 data-nosnippet>195</a>        <span class="kw-2">&amp;</span><span class="self">self</span>,
+<a href=#196 id=196 data-nosnippet>196</a>        selector: UnitSelector,
+<a href=#197 id=197 data-nosnippet>197</a>        progress: <span class="prelude-ty">Option</span>&lt;(usize, usize)&gt;,
+<a href=#198 id=198 data-nosnippet>198</a>    ) -&gt; usize {
+<a href=#199 id=199 data-nosnippet>199</a>        <span class="self">self</span>.set_unit_inner(selector, |unit| {
+<a href=#200 id=200 data-nosnippet>200</a>            unit.curr_progress = progress;
+<a href=#201 id=201 data-nosnippet>201</a>        })
+<a href=#202 id=202 data-nosnippet>202</a>    }
+<a href=#203 id=203 data-nosnippet>203</a>
+<a href=#204 id=204 data-nosnippet>204</a>    <span class="kw">pub fn </span>forget_unit(<span class="kw-2">&amp;</span><span class="self">self</span>, selector: UnitSelector) -&gt; usize {
+<a href=#205 id=205 data-nosnippet>205</a>        <span class="kw">let </span><span class="kw-2">mut </span>updated = <span class="number">0</span>;
+<a href=#206 id=206 data-nosnippet>206</a>        <span class="self">self</span>.units.send_if_modified(|units| {
+<a href=#207 id=207 data-nosnippet>207</a>            <span class="kw">let </span>len_before = units.len();
+<a href=#208 id=208 data-nosnippet>208</a>            units.retain(|unit| !selector.select(unit));
+<a href=#209 id=209 data-nosnippet>209</a>            updated = len_before - units.len();
+<a href=#210 id=210 data-nosnippet>210</a>            updated &gt; <span class="number">0
+<a href=#211 id=211 data-nosnippet>211</a>        </span>});
+<a href=#212 id=212 data-nosnippet>212</a>        updated
+<a href=#213 id=213 data-nosnippet>213</a>    }
+<a href=#214 id=214 data-nosnippet>214</a>
+<a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">pub fn </span>get_last(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; Station {
+<a href=#216 id=216 data-nosnippet>216</a>        <span class="self">self</span>.last.lock().expect(<span class="string">"last mutex is poisoned"</span>).clone()
+<a href=#217 id=217 data-nosnippet>217</a>    }
+<a href=#218 id=218 data-nosnippet>218</a>
+<a href=#219 id=219 data-nosnippet>219</a>    <span class="kw">pub fn </span>set_last(<span class="kw-2">&amp;</span><span class="self">self</span>, station: Station) {
+<a href=#220 id=220 data-nosnippet>220</a>        <span class="kw-2">*</span><span class="self">self</span>.last.lock().expect(<span class="string">"last mutex is poisoned"</span>) = station;
+<a href=#221 id=221 data-nosnippet>221</a>    }
+<a href=#222 id=222 data-nosnippet>222</a>}</code></pre></div></section></main></body></html>
