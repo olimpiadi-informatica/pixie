@@ -157,7 +157,7 @@ impl UefiOS {
     pub fn start<F, Fut>(mut f: F) -> !
     where
         F: FnMut(UefiOS) -> Fut + 'static,
-        Fut: Future<Output = Result<!>>,
+        Fut: Future<Output = Result<()>>,
     {
         // Never call this function twice.
         assert!(OS.borrow().is_none());
@@ -215,8 +215,9 @@ impl UefiOS {
 
         os.spawn("init", async move {
             loop {
-                let err = f(os).await.unwrap_err();
-                log::error!("Error: {:?}", err);
+                if let Err(err) = f(os).await {
+                    log::error!("Error: {:?}", err);
+                }
             }
         });
 

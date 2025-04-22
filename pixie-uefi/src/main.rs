@@ -1,6 +1,5 @@
 #![no_main]
 #![no_std]
-#![feature(never_type)]
 #![deny(unused_must_use)]
 
 #[macro_use]
@@ -33,18 +32,14 @@ async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
     let socket = os.udp_bind(None).await?;
 
     let task1 = async {
-        // TODO(virv): there must be a better way...
-        if false {
-            return Err::<!, _>(Error::Generic("".into()));
-        }
-
         let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
-        loop {
+        #[allow(unreachable_code)]
+        Ok::<_, Error>(loop {
             socket
                 .send(SocketAddrV4::new(Ipv4Addr::BROADCAST, ACTION_PORT), &msg)
                 .await?;
             os.sleep_us(1_000_000).await;
-        }
+        })
     };
 
     let task2 = async {
@@ -93,7 +88,7 @@ async fn complete_action(stream: &TcpStream) -> Result<()> {
     Ok(())
 }
 
-async fn run(os: UefiOS) -> Result<!> {
+async fn run(os: UefiOS) -> Result<()> {
     let server = server_discover(os).await?;
 
     let mut last_was_wait = false;

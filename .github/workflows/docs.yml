@@ -6,47 +6,46 @@ on:
       - master
   workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   docs:
     name: Build documentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Deps
-        run: |
-          rustup toolchain install stable nightly
-          rustup component add rust-src --toolchain nightly
-          rustup default stable
-          cargo install doc-merge
+
+      - name: Install rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          target: wasm32-unknown-unknown, x86_64-unknown-uefi
+          cache-workspaces: |
+            pixie-server
+            pixie-shared
+            pixie-uefi
+            pixie-web
+
+      - name: Install doc-merge
+        run: cargo install doc-merge
+
       - name: cargo doc
         run: |
+          shopt -s globstar
           for d in pixie-*; do
             pushd $d
             cargo doc \
-              --color=always \
               --no-deps \
               --document-private-items \
               --all-features \
               --package $d \
               --package pixie-shared
+            doc-merge --src target/**/doc --dest ../doc --create-dest
             popd
           done
-      - name: Merge docs
-        run: |
-          for d in pixie-*/target/doc; do
-            doc-merge --src $d --dest doc --create-dest
-          done
-          # doc-merge does not work with nightly
-          # we merge pixie-uefi doc by hand by search is broken
-          cp -r pixie-uefi/target/x86_64-unknown-uefi/doc/static.files doc/
-          cp -r pixie-uefi/target/x86_64-unknown-uefi/doc/pixie_uefi doc/
-          echo 'window.ALL_CRATES = ["pixie_server","pixie_shared","pixie_web","pixie_uefi"];' > doc/crates.js
+
       - name: Make index.html
         run: |
           echo '<meta http-equiv="Refresh" content="0; url=./pixie_server/index.html">' > doc/index.html
+
       - name: Publish
         uses: JamesIves/github-pages-deploy-action@v4.5.0
         with:
