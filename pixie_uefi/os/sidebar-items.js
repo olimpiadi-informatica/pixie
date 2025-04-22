@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["MessageKind"],"fn":["exit_boot_services"],"mod":["boot_options","disk","error","executor","mpsc","net","rng","sync","timer"],"static":["OS"],"struct":["BytesFmt","UefiOS","UefiOSImpl"]};
+window.SIDEBAR_ITEMS = {"fn":["exit_boot_services"],"mod":["boot_options","disk","error","executor","mpsc","net","rng","sync","timer"],"static":["OS"],"struct":["BytesFmt","UefiOS","UefiOSImpl"]};
