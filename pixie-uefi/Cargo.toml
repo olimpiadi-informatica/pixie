@@ -10,10 +10,12 @@ test = false
 bench = false
 
 [dependencies]
+anstyle = { version = "1.0.10", default-features = false }
 blake3 = { version = "1.5.0", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
 core_detect = "1.0.0"
 futures = { version = "0.3.29", default-features = false, features = ["alloc", "async-await"] }
 gpt_disk_io = "0.16.0"
+log = "0.4.27"
 lz4_flex = { version = "0.11.3", default-features = false }
 managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 postcard = { version = "1.0.8", default-features = false, features = ["alloc"] }

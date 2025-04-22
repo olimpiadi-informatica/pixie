@@ -1,7 +1,7 @@
 use crate::{
     os::{
         error::{Error, Result},
-        mpsc, MessageKind, TcpStream, UefiOS,
+        mpsc, TcpStream, UefiOS,
     },
     parse_disk,
 };
@@ -216,10 +216,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     // TODO(virv): this could be better
     stream_upload_chunk.force_close().await;
 
-    os.append_message(
-        format!("image saved. Total size {total_size}, total csize {total_csize}",),
-        MessageKind::Info,
-    );
+    log::info!("image saved. Total size {total_size}, total csize {total_csize}");
 
     Ok(())
 }

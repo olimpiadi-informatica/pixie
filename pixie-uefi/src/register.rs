@@ -1,6 +1,6 @@
 use crate::os::{
     error::{Error, Result},
-    MessageKind, UefiOS, PACKET_SIZE,
+    UefiOS, PACKET_SIZE,
 };
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
@@ -167,10 +167,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     // TODO(virv): this could be better
     stream.force_close().await;
 
-    os.append_message(
-        format!("Registration successful! {:?}", data.borrow().station),
-        MessageKind::Info,
-    );
+    log::info!("Registration successful! {:?}", data.borrow().station);
 
     Ok(())
 }

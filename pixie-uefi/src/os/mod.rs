@@ -78,7 +78,7 @@ struct UefiOSImpl {
     vga: ScopedProtocol<Output>,
     serial: ScopedProtocol<Serial>,
     net: Option<NetworkInterface>,
-    messages: VecDeque<(String, MessageKind)>,
+    messages: VecDeque<(f64, log::Level, String, String)>,
     ui_buf: Vec<(String, Color, Color)>,
     ui_pos: usize,
     ui_drawer: Option<Box<dyn Fn(UefiOS) + 'static>>,
@@ -149,9 +149,6 @@ pub struct UefiOS {
     cant_build: (),
 }
 
-impl !Send for UefiOS {}
-impl !Sync for UefiOS {}
-
 unsafe extern "efiapi" fn exit_boot_services(_e: Event, _ctx: Option<NonNull<c_void>>) {
     panic!("You must never exit boot services");
 }
@@ -210,13 +207,16 @@ impl UefiOS {
 
         let os = UefiOS { cant_build: () };
 
+        log::set_logger(&UefiOS { cant_build: () }).unwrap();
+        log::set_max_level(log::LevelFilter::Trace);
+
         let net = NetworkInterface::new(os);
         os.borrow_mut().net = Some(net);
 
         os.spawn("init", async move {
             loop {
                 let err = f(os).await.unwrap_err();
-                os.append_message(format!("Error: {:?}", err), MessageKind::Error);
+                log::error!("Error: {:?}", err);
             }
         });
 
@@ -226,10 +226,7 @@ impl UefiOS {
 
                 if let Err(err) = err {
                     if err.status() != Status::UNSUPPORTED {
-                        os.append_message(
-                            format!("Error disabling watchdog: {:?}", err),
-                            MessageKind::Error,
-                        );
+                        log::error!("Error disabling watchdog: {:?}", err);
                     }
 
                     break;
@@ -503,10 +500,17 @@ impl UefiOS {
             // TODO(veluca): find a better solution.
             let messages: Vec<_> = os.messages.iter().cloned().collect();
 
-            for (line, kind) in messages {
-                let fg_color = kind.color();
-                os.write_with_color(&line, fg_color, Color::Black);
-                os.write_with_color("\n", Color::Black, Color::Black);
+            for (time, level, target, msg) in messages {
+                let fg_color = match level {
+                    log::Level::Trace => Color::Cyan,
+                    log::Level::Debug => Color::Blue,
+                    log::Level::Info => Color::Green,
+                    log::Level::Warn => Color::Yellow,
+                    log::Level::Error => Color::Red,
+                };
+                os.write_with_color(&format!("[{time:.1}s "), Color::White, Color::Black);
+                os.write_with_color(&format!("{level:5}"), fg_color, Color::Black);
+                os.write_with_color(&format!(" {target}] {msg}\n"), Color::White, Color::Black);
             }
             os.write_with_color("\n", Color::Black, Color::Black);
         }
@@ -533,13 +537,24 @@ impl UefiOS {
         self.borrow_mut().ui_drawer = Some(Box::new(f));
     }
 
-    pub fn append_message(&self, msg: String, kind: MessageKind) {
+    fn append_message(&self, time: f64, level: log::Level, target: &str, msg: String) {
         {
             let mut os = self.borrow_mut();
 
-            write!(os.serial, "{:5} {}\r\n", kind.as_str(), msg).unwrap();
+            let style = match level {
+                log::Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
+                log::Level::Debug => anstyle::AnsiColor::Blue.on_default(),
+                log::Level::Info => anstyle::AnsiColor::Green.on_default(),
+                log::Level::Warn => anstyle::AnsiColor::Yellow.on_default(),
+                log::Level::Error => anstyle::AnsiColor::Red.on_default().bold(),
+            };
+            write!(
+                os.serial,
+                "[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\r\n"
+            )
+            .unwrap();
 
-            os.messages.push_back((msg, kind));
+            os.messages.push_back((time, level, target.into(), msg));
             const MAX_MESSAGES: usize = 5;
             if os.messages.len() > MAX_MESSAGES {
                 os.messages.pop_front();
@@ -567,30 +582,22 @@ impl UefiOS {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum MessageKind {
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl MessageKind {
-    fn color(self) -> Color {
-        match self {
-            MessageKind::Debug => Color::LightGray,
-            MessageKind::Info => Color::White,
-            MessageKind::Warn => Color::Yellow,
-            MessageKind::Error => Color::Red,
-        }
+impl log::Log for UefiOS {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
     }
 
-    fn as_str(self) -> &'static str {
-        match self {
-            MessageKind::Debug => "DEBUG",
-            MessageKind::Info => "INFO",
-            MessageKind::Warn => "WARN",
-            MessageKind::Error => "ERROR",
-        }
+    fn log(&self, record: &log::Record) {
+        let now = self.timer().micros() as f64 * 0.000_001;
+        self.append_message(
+            now,
+            record.level(),
+            record.target(),
+            format!("{}", record.args()),
+        );
+    }
+
+    fn flush(&self) {
+        // no-op
     }
 }

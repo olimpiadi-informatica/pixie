@@ -1,7 +1,7 @@
 use super::{
     error::{Error, Result},
     timer::Timer,
-    MessageKind, UefiOS,
+    UefiOS,
 };
 use alloc::boxed::Box;
 use core::{
@@ -161,13 +161,10 @@ impl NetworkInterface {
         let bo = os.boot_options();
         let curopt = bo.get(bo.current());
         let (descr, device) = bo.boot_entry_info(&curopt[..]);
-        os.append_message(
-            format!(
-                "Configuring network on interface used for booting ({} -- {})",
-                descr,
-                os.device_path_to_string(device),
-            ),
-            MessageKind::Info,
+        log::info!(
+            "Configuring network on interface used for booting ({} -- {})",
+            descr,
+            os.device_path_to_string(device)
         );
         let mut device = SnpDevice::new(Box::leak(Box::new(
             os.open_protocol_on_device::<SimpleNetwork>(device).unwrap(),

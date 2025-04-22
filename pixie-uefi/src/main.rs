@@ -1,6 +1,5 @@
 #![no_main]
 #![no_std]
-#![feature(negative_impls)]
 #![feature(never_type)]
 #![deny(unused_must_use)]
 
@@ -11,13 +10,13 @@ use crate::{
     flash::flash,
     os::{
         error::{Error, Result},
-        MessageKind, TcpStream, UefiOS, PACKET_SIZE,
+        TcpStream, UefiOS, PACKET_SIZE,
     },
     reboot_to_os::reboot_to_os,
     register::register,
     store::store,
 };
-use alloc::{borrow::ToOwned, boxed::Box};
+use alloc::boxed::Box;
 use core::net::{Ipv4Addr, SocketAddrV4};
 use futures::future::{self, Either};
 use pixie_shared::{Action, TcpRequest, UdpRequest, ACTION_PORT, PING_PORT};
@@ -67,7 +66,7 @@ async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
 }
 
 async fn shutdown(os: UefiOS) -> ! {
-    os.append_message("Shutting down...".to_owned(), MessageKind::Info);
+    log::info!("Shutting down...");
     os.sleep_us(1_000_000).await;
     os.shutdown()
 }
@@ -115,7 +114,7 @@ async fn run(os: UefiOS) -> Result<!> {
         os.set_ui_drawer(|_| {});
 
         if !last_was_wait {
-            os.append_message("Sending request for command".into(), MessageKind::Debug);
+            log::debug!("Sending request for command");
         }
 
         let tcp = os.connect(server).await?;
@@ -124,18 +123,12 @@ async fn run(os: UefiOS) -> Result<!> {
         tcp.force_close().await;
 
         if let Err(e) = command {
-            os.append_message(format!("Error receiving action: {e}"), MessageKind::Warn);
+            log::warn!("Error receiving action: {e}");
         } else {
             let command = command.unwrap();
             if matches!(command, Action::Wait) {
                 if !last_was_wait {
-                    os.append_message(
-                        format!(
-                            "Started waiting for another command at {:.1}s...",
-                            os.timer().micros() as f32 * 0.000_001
-                        ),
-                        MessageKind::Warn,
-                    );
+                    log::warn!("Started waiting for another command...");
                 }
                 last_was_wait = true;
                 const WAIT_10MSECS: u64 = 50;
@@ -145,7 +138,7 @@ async fn run(os: UefiOS) -> Result<!> {
                 }
             } else {
                 last_was_wait = false;
-                os.append_message(format!("Command: {:?}", command), MessageKind::Info);
+                log::info!("Command: {:?}", command);
                 match command {
                     Action::Wait => unreachable!(),
                     Action::Reboot => reboot_to_os(os).await,
