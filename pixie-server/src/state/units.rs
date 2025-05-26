@@ -1,19 +1,26 @@
 use crate::state::State;
 use anyhow::{bail, ensure, Result};
 use macaddr::MacAddr6;
-use pixie_shared::{Action, Station, Unit};
+use pixie_shared::{Action, RegistrationInfo, Unit};
 use std::net::Ipv4Addr;
 use tokio::sync::watch;
 
+/// A filter over units.
 pub enum UnitSelector {
+    /// Selects the unit with the given mac address.
     MacAddr(MacAddr6),
+    /// Selects the unit with the given ip address.
     IpAddr(Ipv4Addr),
+    /// Selects all units.
     All,
+    /// Selects all units from the given group.
     Group(u8),
+    /// Selects all units with the given image.
     Image(String),
 }
 
 impl UnitSelector {
+    /// Parse a [`UnitSelector`] from a [`String`].
     pub fn parse(state: &State, selector: String) -> Option<UnitSelector> {
         if let Ok(mac) = selector.parse::<MacAddr6>() {
             Some(UnitSelector::MacAddr(mac))
@@ -30,6 +37,7 @@ impl UnitSelector {
         }
     }
 
+    /// Returns [`true`] if the given [`Unit`] is accepted.
     pub fn select(&self, unit: &Unit) -> bool {
         match self {
             UnitSelector::MacAddr(mac) => unit.mac == *mac,
@@ -42,6 +50,7 @@ impl UnitSelector {
 }
 
 impl State {
+    /// Finds the [`Unit`] with the given `mac`.
     pub fn get_unit(&self, mac: MacAddr6) -> Option<Unit> {
         self.units
             .borrow()
@@ -50,6 +59,7 @@ impl State {
             .cloned()
     }
 
+    /// Finds all [`Unit`]s accepted by the `selector`.
     pub fn get_units(&self, selector: UnitSelector) -> Vec<Unit> {
         self.units
             .borrow()
@@ -63,7 +73,7 @@ impl State {
         self.units.subscribe()
     }
 
-    pub fn register_unit(&self, mac: MacAddr6, station: Station) -> Result<()> {
+    pub fn register_unit(&self, mac: MacAddr6, station: RegistrationInfo) -> Result<()> {
         if !self.config.images.contains(&station.image) {
             bail!("Unknown image: {}", station.image);
         }
@@ -106,6 +116,7 @@ impl State {
         res
     }
 
+    /// Sets the action as completed for the selected [`Unit`].
     pub fn unit_complete_action(&self, selector: UnitSelector) -> usize {
         self.set_unit_inner(selector, |unit| {
             unit.curr_action = None;
@@ -212,11 +223,17 @@ impl State {
         updated
     }
 
-    pub fn get_last(&self) -> Station {
-        self.last.lock().expect("last mutex is poisoned").clone()
+    pub fn get_registration_hint(&self) -> Option<RegistrationInfo> {
+        self.registration_hint
+            .lock()
+            .expect("last mutex is poisoned")
+            .clone()
     }
 
-    pub fn set_last(&self, station: Station) {
-        *self.last.lock().expect("last mutex is poisoned") = station;
+    pub fn set_registration_hint(&self, hint: RegistrationInfo) {
+        *self
+            .registration_hint
+            .lock()
+            .expect("last mutex is poisoned") = Some(hint);
     }
 }

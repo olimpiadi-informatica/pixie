@@ -47,7 +47,7 @@ run_qemu() {
 }
 
 truncate -s 8G disk.img
-mkfs.ext4 disk.img
+mkfs.ext4 -F disk.img
 DEV=$(sudo losetup --show --find disk.img)
 sudo mount $DEV /mnt
 echo "hello world" | sudo tee /mnt/hello.txt

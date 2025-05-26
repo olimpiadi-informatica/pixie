@@ -1,3 +1,5 @@
+//! Starts and configures dnsmasq.
+
 use crate::{find_network, state::State};
 use anyhow::{Context, Result};
 use macaddr::MacAddr6;
@@ -35,7 +37,7 @@ impl Drop for DnsmasqHandle {
 async fn write_config(state: &State) -> Result<()> {
     let (name, _) = find_network(state.config.hosts.listen_on)?;
 
-    let mut dnsmasq_conf = File::create(state.storage_dir.join("dnsmasq.conf"))?;
+    let mut dnsmasq_conf = File::create(state.run_dir.join("dnsmasq.conf"))?;
 
     let dhcp_dynamic_conf = match state.config.hosts.dhcp {
         DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
@@ -43,6 +45,7 @@ async fn write_config(state: &State) -> Result<()> {
     };
 
     let storage_str = state.storage_dir.to_str().unwrap();
+    let run_str = state.run_dir.to_str().unwrap();
 
     write!(
         dnsmasq_conf,
@@ -52,7 +55,7 @@ async fn write_config(state: &State) -> Result<()> {
 ## net0
 {dhcp_dynamic_conf}
 dhcp-range=tag:!netboot,10.0.0.0,static,255.0.0.0
-dhcp-hostsfile={storage_str}/hosts
+dhcp-hostsfile={run_str}/hosts
 dhcp-boot=pixie-uefi.efi
 interface={name}
 except-interface=lo
@@ -81,7 +84,7 @@ dhcp-vendorclass=set:netboot,pixie
 }
 
 async fn write_hosts(state: &State, hosts: &[(MacAddr6, Ipv4Addr, Option<String>)]) -> Result<()> {
-    let file = File::create(state.storage_dir.join("hosts"))?;
+    let file = File::create(state.run_dir.join("hosts"))?;
     let mut file = BufWriter::new(file);
 
     for (mac, ip, hostname) in hosts {
@@ -123,8 +126,8 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let dnsmasq = DnsmasqHandle {
         child: Command::new("dnsmasq")
             .arg(format!(
-                "--conf-file={storage_str}/dnsmasq.conf",
-                storage_str = state.storage_dir.to_str().unwrap()
+                "--conf-file={run_str}/dnsmasq.conf",
+                run_str = state.run_dir.to_str().unwrap()
             ))
             .arg("--log-dhcp")
             .arg("--no-daemon")

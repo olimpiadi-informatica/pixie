@@ -1,11 +1,13 @@
+//! Handles [`UdpRequest`]
+
 use crate::{
     find_mac, find_network,
     state::{State, UnitSelector},
 };
 use anyhow::{bail, ensure, Context, Result};
 use pixie_shared::{
-    ChunkHash, HintPacket, Station, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT, HINT_PORT,
-    PACKET_LEN,
+    ChunkHash, HintPacket, RegistrationInfo, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT,
+    HINT_PORT, PACKET_LEN,
 };
 use std::{
     collections::BTreeSet,
@@ -31,83 +33,99 @@ async fn broadcast_chunks(
     let mut index = [0; 32];
 
     loop {
-        match rx.recv().await {
-            Some(hash) => queue.insert(hash),
-            None => break,
+        while let Ok(hash) = rx.try_recv() {
+            queue.insert(hash);
+        }
+
+        let hash = queue
+            .range((Bound::Excluded(index), Bound::Unbounded))
+            .next()
+            .or_else(|| queue.iter().next())
+            .copied();
+
+        index = match hash {
+            Some(hash) => {
+                queue.remove(&hash);
+                hash
+            }
+            None => match rx.recv().await {
+                Some(hash) => hash,
+                None => break,
+            },
         };
 
-        wait_for = wait_for.max(Instant::now());
-        loop {
-            while let Ok(hash) = rx.try_recv() {
-                queue.insert(hash);
-            }
+        let Some(data) = state
+            .get_chunk_cdata(index)
+            .with_context(|| format!("get chunk {}", hex::encode(index)))?
+        else {
+            log::warn!("Chunk {} not found", hex::encode(index));
+            continue;
+        };
 
-            let hash = queue
-                .range((Bound::Excluded(index), Bound::Unbounded))
-                .next()
-                .or_else(|| queue.iter().next());
+        let num_packets = data.len().div_ceil(BODY_LEN);
+        write_buf[..32].clone_from_slice(&index);
 
-            let Some(hash) = hash else {
-                break;
-            };
+        let mut xor = [[0; BODY_LEN]; 32];
 
-            index = *hash;
-            queue.remove(&index);
+        let hosts_cfg = &state.config.hosts;
+        let chunks_addr = SocketAddrV4::new(ip, CHUNKS_PORT);
 
-            let Some(data) = state
-                .get_chunk_cdata(index)
-                .with_context(|| format!("get chunk {}", hex::encode(index)))?
-            else {
-                log::warn!("Chunk {} not found", hex::encode(index));
-                continue;
-            };
+        for index in 0..num_packets {
+            write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
+            let start = index * BODY_LEN;
+            let len = BODY_LEN.min(data.len() - start);
+            let body = &data[start..start + len];
+            let group = index & 31;
+            body.iter()
+                .zip(xor[group].iter_mut())
+                .for_each(|(a, b)| *b ^= a);
+            write_buf[34..34 + len].clone_from_slice(body);
 
-            let num_packets = data.len().div_ceil(BODY_LEN);
-            write_buf[..32].clone_from_slice(&index);
+            wait_for = wait_for.max(Instant::now());
+            time::sleep_until(wait_for).await;
 
-            let mut xor = [[0; BODY_LEN]; 32];
+            let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
+            ensure!(sent_len == 34 + len, "Could not send packet");
+            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
+        }
 
-            let hosts_cfg = &state.config.hosts;
-            let chunks_addr = SocketAddrV4::new(ip, CHUNKS_PORT);
+        for (index, body) in xor.iter().enumerate().take(num_packets) {
+            write_buf[32..34].clone_from_slice(&(index as u16).wrapping_sub(32).to_le_bytes());
+            let len = BODY_LEN;
+            write_buf[34..34 + len].clone_from_slice(body);
 
-            for index in 0..num_packets {
-                write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
-                let start = index * BODY_LEN;
-                let len = BODY_LEN.min(data.len() - start);
-                let body = &data[start..start + len];
-                let group = index & 31;
-                body.iter()
-                    .zip(xor[group].iter_mut())
-                    .for_each(|(a, b)| *b ^= a);
-                write_buf[34..34 + len].clone_from_slice(body);
-
-                time::sleep_until(wait_for).await;
-
-                let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
-                ensure!(sent_len == 34 + len, "Could not send packet");
-                wait_for +=
-                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
-            }
-
-            for (index, body) in xor.iter().enumerate().take(num_packets) {
-                write_buf[32..34].clone_from_slice(&(index as u16).wrapping_sub(32).to_le_bytes());
-                let len = BODY_LEN;
-                write_buf[34..34 + len].clone_from_slice(body);
-
-                time::sleep_until(wait_for).await;
-                let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
-                ensure!(sent_len == 34 + len, "Could not send packet");
-                wait_for +=
-                    8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
-            }
+            wait_for = wait_for.max(Instant::now());
+            time::sleep_until(wait_for).await;
+            let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
+            ensure!(sent_len == 34 + len, "Could not send packet");
+            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
         }
     }
 
     Ok(())
 }
 
-fn compute_hint(state: &State) -> Result<Station> {
-    let mut last = state.get_last();
+fn compute_hint(state: &State) -> Result<RegistrationInfo> {
+    let Some(mut last) = state.get_registration_hint() else {
+        return Ok(RegistrationInfo {
+            group: state
+                .config
+                .groups
+                .iter()
+                .next()
+                .context("there should be at least one group")?
+                .0
+                .clone(),
+            row: 1,
+            col: 1,
+            image: state
+                .config
+                .images
+                .first()
+                .context("there should be at least one image")?
+                .clone(),
+        });
+    };
 
     let units = state.get_units(UnitSelector::Group(
         *state.config.groups.get_by_first(&last.group).unwrap(),
@@ -134,7 +152,7 @@ fn compute_hint(state: &State) -> Result<Station> {
         _ => (last.row + last.col / mcol, last.col % mcol + 1),
     };
 
-    Ok(Station {
+    Ok(RegistrationInfo {
         group: last.group.clone(),
         row,
         col,

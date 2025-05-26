@@ -1,10 +1,22 @@
+//! The database for pixie-server.
+//!
+//! Structure of the storage directory:
+//! - `config.yaml`: configuration file for pixie-server
+//! - `registered.json`: json file containing all information about registered units.
+//! - `admin/`: directory containing the static files for the admin web interface.
+//! - `chunks/`: directory containing the image's chunks.
+//! - `images/`: directory containing the image's info.
+//! - `tftpboot/`: directory containing the necessary files for network boot.
+
 #![warn(clippy::unwrap_used)]
 
 mod images;
 mod units;
 
 use anyhow::{anyhow, ensure, Context, Result};
-use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, Station, Unit};
+use pixie_shared::{
+    ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, RegistrationInfo, Unit,
+};
 use std::{
     collections::HashMap,
     fs::File,
@@ -25,6 +37,10 @@ const REGISTERED_JSON: &str = "registered.json";
 const CHUNKS_DIR: &str = "chunks";
 const IMAGES_DIR: &str = "images";
 
+/// Atomically write `data` at the specified `path`.
+///
+/// On crash `path` is guaranteed to be in a consistent state, but a temporary file might be left
+/// behind.
 fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     static CNT: AtomicU64 = AtomicU64::new(0);
 
@@ -44,6 +60,7 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Builds a map from ip address to hostname parsing the hostfile at `path`.
 fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
     let mut hostmap = HashMap::new();
     if let Some(path) = path {
@@ -51,7 +68,10 @@ fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
             hostfile::parse_file(path).map_err(|e| anyhow!("Error parsing host file: {e}"))?;
         for mut host in hosts {
             if let IpAddr::V4(ip) = host.ip {
-                hostmap.insert(ip, std::mem::take(&mut host.names[0]));
+                let old = hostmap.insert(ip, std::mem::take(&mut host.names[0]));
+                if old.is_some() {
+                    log::warn!("Duplicated hostname for {ip}");
+                }
             } else {
                 log::warn!(
                     "ignoring non-IPv4 address {} for host {}",
@@ -64,19 +84,25 @@ fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
     Ok(hostmap)
 }
 
+/// See [the module-level documentation][self].
 pub struct State {
+    /// The storage_dir received by command line arguments.
     pub storage_dir: PathBuf,
+    /// A directory stored in ram for dynamically generated files, will be deleted on Drop.
+    pub run_dir: PathBuf,
+    /// The config parsed from the config file.
     pub config: Config,
+    /// The hostmap built from the hostmap file.
     hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
 
     units: watch::Sender<Vec<Unit>>,
-    // TODO: use an Option
-    last: Mutex<Station>,
+    registration_hint: Mutex<Option<RegistrationInfo>>,
     images_stats: watch::Sender<ImagesStats>,
     chunks_stats: Mutex<ChunksStats>,
 }
 
 impl State {
+    /// Loads the [`State`] from the given path.
     pub fn load(storage_dir: PathBuf) -> Result<Self> {
         let config: Config = {
             let path = storage_dir.join(CONFIG_YAML);
@@ -120,22 +146,6 @@ impl State {
                 atomic_write(&units_path, &json).expect("write units file");
             }
         });
-
-        let last = Station {
-            group: config
-                .groups
-                .iter()
-                .next()
-                .context("there should be at least one group")?
-                .0
-                .clone(),
-            image: config
-                .images
-                .first()
-                .context("there should be at least one image")?
-                .clone(),
-            ..Default::default()
-        };
 
         let chunks_dir = storage_dir.join(CHUNKS_DIR);
         let mut chunks_stats: ChunksStats = std::fs::read_dir(&chunks_dir)
@@ -193,12 +203,16 @@ impl State {
             images,
         };
 
+        let run_dir = PathBuf::from(format!("/run/pixie-{}", std::process::id()));
+        std::fs::create_dir(&run_dir)?;
+
         Ok(Self {
             storage_dir,
+            run_dir,
             config,
             hostmap: watch::Sender::new(hostmap),
             units,
-            last: Mutex::new(last),
+            registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
         })
@@ -212,5 +226,13 @@ impl State {
 
     pub fn subscribe_hostmap(&self) -> watch::Receiver<HashMap<Ipv4Addr, String>> {
         self.hostmap.subscribe()
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        // If we fail to remove the directory it's not an issue as it will be deleted on shutdown
+        // and doesn't take much space.
+        let _ = std::fs::remove_dir_all(&self.run_dir);
     }
 }

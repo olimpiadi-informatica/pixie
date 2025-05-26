@@ -1,3 +1,5 @@
+//! HTTP server for the admin web interface.
+
 use crate::state::{State, UnitSelector};
 use anyhow::Result;
 use axum::{
@@ -17,11 +19,16 @@ use tower_http::{
     services::ServeDir, trace::TraceLayer, validate_request::ValidateRequestHeaderLayer,
 };
 
+/// `GET /admin/action/{unit_selector}/{action}`
+///
+/// Sets the next [`Action`] for all [`Unit`]s accepted by the [`UnitSelector`].
+///
+/// [`Unit`]: pixie_shared::config::Unit
 async fn action(
-    Path((unit_filter, action)): Path<(String, Action)>,
+    Path((unit_selector, action)): Path<(String, Action)>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_selector) else {
         return (
             StatusCode::BAD_REQUEST,
             "Invalid unit selector\n".to_owned(),
@@ -36,11 +43,16 @@ async fn action(
     }
 }
 
+/// `GET /admin/curr_action/{unit_selector}/{action}`
+///
+/// Sets the current [`Action`] for all [`Unit`]s accepted by the [`UnitSelector`].
+///
+/// [`Unit`]: pixie_shared::config::Unit
 async fn curr_action(
-    Path((unit_filter, action)): Path<(String, Action)>,
+    Path((unit_selector, action)): Path<(String, Action)>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_selector) else {
         return (
             StatusCode::BAD_REQUEST,
             "Invalid unit selector\n".to_owned(),
@@ -55,8 +67,14 @@ async fn curr_action(
     }
 }
 
+/// `GET /admin/image/{unit_selector}/{image}`
+///
+/// Sets the [`Image`] for all [`Unit`]s accepted by the [`UnitSelector`].
+///
+/// [`Unit`]: pixie_shared::config::Unit
+/// [`Image`]: pixie_shared::Image
 async fn image(
-    Path((unit_filter, image)): Path<(String, String)>,
+    Path((unit_selector, image)): Path<(String, String)>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
     if !state.config.images.contains(&image) {
@@ -66,7 +84,7 @@ async fn image(
         );
     }
 
-    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_selector) else {
         return (
             StatusCode::BAD_REQUEST,
             "Invalid unit selector\n".to_owned(),
@@ -80,11 +98,16 @@ async fn image(
     }
 }
 
+/// `GET /admin/forget/{unit_selector}`
+///
+/// Forgets all [`Unit`]s selected by the [`UnitSelector`].
+///
+/// [`Unit`]: pixie_shared::config::Unit
 async fn forget(
-    Path(unit_filter): Path<String>,
+    Path(unit_selector): Path<String>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    let Some(unit_selector) = UnitSelector::parse(&state, unit_filter) else {
+    let Some(unit_selector) = UnitSelector::parse(&state, unit_selector) else {
         return (
             StatusCode::BAD_REQUEST,
             "Invalid unit selector\n".to_owned(),
@@ -119,6 +142,9 @@ async fn delete_image(
     }
 }
 
+/// `GET /admin/gc`
+///
+/// Removes all chunks not used by any image.
 async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
     match state.gc_chunks() {
         Ok(()) => (StatusCode::NO_CONTENT, String::new()),
@@ -126,6 +152,9 @@ async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoRespo
     }
 }
 
+/// `GET /admin/status`
+///
+/// Stream of json-formatted events on changes to the database.
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
     let initial_messages = [StatusUpdate::Config(state.config.clone())];
 
@@ -161,10 +190,13 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let mut router = Router::new()
         .route("/admin/status", get(status))
         .route("/admin/gc", get(gc))
-        .route("/admin/action/:unit/:action", get(action))
-        .route("/admin/curr_action/:unit/:action", get(curr_action))
-        .route("/admin/image/:unit/:image", get(image))
-        .route("/admin/forget/:unit", get(forget))
+        .route("/admin/action/:unit_selector/:action", get(action))
+        .route(
+            "/admin/curr_action/:unit_selector/:action",
+            get(curr_action),
+        )
+        .route("/admin/image/:unit_selector/:image", get(image))
+        .route("/admin/forget/:unit_selector", get(forget))
         .route("/admin/rollback/:image", get(rollback))
         .route("/admin/delete/:image", get(delete_image))
         .nest_service(

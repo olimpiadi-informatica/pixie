@@ -5,12 +5,12 @@ use crate::os::{
 use alloc::{boxed::Box, rc::Rc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
 use futures::future::{select, Either};
-use pixie_shared::{HintPacket, Station, TcpRequest, HINT_PORT};
+use pixie_shared::{HintPacket, RegistrationInfo, TcpRequest, HINT_PORT};
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
 #[derive(Debug, Default)]
 struct Data {
-    station: Station,
+    station: RegistrationInfo,
     selected: usize,
 }
 

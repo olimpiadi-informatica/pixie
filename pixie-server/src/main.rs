@@ -21,6 +21,10 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+/// Finds the mac address for the given ip.
+///
+/// This function searches the address in the arp cache, if it is not available it tries to
+/// populate it by pinging the peer.
 fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     struct Zombie {
         inner: Child,
@@ -93,10 +97,11 @@ fn find_network(ip: Ipv4Addr) -> Result<(String, Ipv4Net)> {
     bail!("Could not find the network for {}", ip);
 }
 
+/// Command line arguments for pixie-server.
 #[derive(Parser, Debug)]
 struct PixieOptions {
     /// Directory in which files will be stored.
-    /// Must already contain files: tftpboot/pixie-uefi.efi, config.yaml
+    /// Must already contain files: `tftpboot/pixie-uefi.efi` and `config.yaml`.
     #[clap(short, long, default_value = "./storage")]
     storage_dir: PathBuf,
 }

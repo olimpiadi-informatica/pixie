@@ -30,7 +30,7 @@ pub struct HostsConfig {
     pub dhcp: DhcpMode,
     /// Hosts file to use for DHCP hostnames.
     pub hostsfile: Option<PathBuf>,
-
+    /// Speed in bytes/second used to broadcast chunks.
     pub broadcast_speed: u32,
 }
 

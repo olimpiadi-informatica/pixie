@@ -1,3 +1,5 @@
+//! Handles [`TcpRequest`]
+
 use crate::{
     find_mac,
     state::{State, UnitSelector},
@@ -26,7 +28,7 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             state.get_image_serialized(&unit.image)?.unwrap()
         }
         TcpRequest::Register(station) => {
-            state.set_last(station.clone());
+            state.set_registration_hint(station.clone());
             state.register_unit(peer_mac, station)?;
             Vec::new()
         }

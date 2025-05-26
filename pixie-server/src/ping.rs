@@ -1,3 +1,5 @@
+//! Handles pings from clients.
+
 use crate::{
     find_mac,
     state::{State, UnitSelector},

@@ -4,6 +4,7 @@ use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Image, ImagesStats};
 use tokio::sync::watch;
 
 impl State {
+    /// Checks whether the database contains the given chunk.
     pub fn has_chunk(&self, hash: ChunkHash) -> bool {
         self.chunks_stats
             .lock()
@@ -11,6 +12,7 @@ impl State {
             .contains_key(&hash)
     }
 
+    /// Get the chunk compressed data.
     pub fn get_chunk_cdata(&self, hash: ChunkHash) -> Result<Option<Vec<u8>>> {
         let path = self.storage_dir.join(CHUNKS_DIR).join(hex::encode(hash));
         let chunks_stats = self
@@ -24,6 +26,7 @@ impl State {
         Ok(cdata)
     }
 
+    /// Store the given chunk to the database.
     pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
         ensure!(
             data.len() <= pixie_shared::MAX_CHUNK_SIZE,
@@ -57,6 +60,7 @@ impl State {
         res
     }
 
+    /// Finds and deletes all chunks which are not part of any image.
     pub fn gc_chunks(&self) -> Result<()> {
         let mut res = Ok(());
         self.images_stats.send_modify(|images_stats| {
