@@ -305,7 +305,30 @@ fn Group(
 }
 
 #[component]
+fn Disconnect(connected: ReadSignal<bool>) -> impl IntoView {
+    view! {
+        <Show when=move || !connected.get()>
+            <div style="
+                position: fixed;
+                bottom: 1em;
+                right: 1em;
+                background-color: rgba(255, 0, 0, 0.1);
+                color: #900;
+                padding: 0.5em 1em;
+                border-radius: 0.5em;
+                z-index: 1000;
+                pointer-events: none;
+            ">
+                "⚠️ Disconnected from server"
+            </div>
+        </Show>
+    }
+}
+
+#[component]
 fn App() -> impl IntoView {
+    let (connected, set_connected) = create_signal(true);
+
     let (config, set_config) = create_signal(None::<Config>);
     let (hostmap, set_hostname) = create_signal(None::<HashMap<Ipv4Addr, String>>);
     let (units, set_units) = create_signal(None::<Vec<Unit>>);
@@ -335,6 +358,16 @@ fn App() -> impl IntoView {
     };
 
     spawn_local(async move {
+        struct Disconnect(WriteSignal<bool>);
+
+        impl Drop for Disconnect {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+
+        let _disconnect = Disconnect(set_connected);
+
         let stream = reqwest::get(status_url)
             .await
             .expect("could not connect to server");
@@ -396,6 +429,7 @@ fn App() -> impl IntoView {
             key=|x| *x
             children=render_group
         />
+        <Disconnect connected />
     }
 }
 
