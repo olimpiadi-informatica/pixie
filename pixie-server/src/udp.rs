@@ -33,25 +33,34 @@ async fn broadcast_chunks(
     let mut index = [0; 32];
 
     loop {
-        while let Ok(hash) = rx.try_recv() {
-            queue.insert(hash);
-        }
-
-        let hash = queue
-            .range((Bound::Excluded(index), Bound::Unbounded))
-            .next()
-            .or_else(|| queue.iter().next())
-            .copied();
-
-        index = match hash {
-            Some(hash) => {
-                queue.remove(&hash);
-                hash
+        let get_index = async {
+            while let Ok(hash) = rx.try_recv() {
+                queue.insert(hash);
             }
-            None => match rx.recv().await {
-                Some(hash) => hash,
-                None => break,
-            },
+
+            let hash = queue
+                .range((Bound::Excluded(index), Bound::Unbounded))
+                .next()
+                .or_else(|| queue.iter().next())
+                .copied();
+
+            match hash {
+                Some(hash) => {
+                    queue.remove(&hash);
+                    Some(hash)
+                }
+                None => rx.recv().await,
+            }
+        };
+
+        tokio::select! {
+            hash = get_index => {
+                let Some(hash) = hash else {
+                    break;
+                };
+                index = hash;
+            }
+            _ = state.cancel_token.cancelled() => break,
         };
 
         let Some(data) = state
@@ -162,6 +171,10 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
 
 async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Result<()> {
     loop {
+        tokio::select! {
+            _ = time::sleep(Duration::from_secs(1)) => {}
+            _ = state.cancel_token.cancelled() => break,
+        }
         let hint = HintPacket {
             station: compute_hint(state)?,
             images: state.config.images.clone(),
@@ -170,14 +183,17 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
         let data = postcard::to_allocvec(&hint)?;
         let hint_addr = SocketAddrV4::new(ip, HINT_PORT);
         socket.send_to(&data, hint_addr).await?;
-        time::sleep(Duration::from_secs(1)).await;
     }
+    Ok(())
 }
 
 async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
     let mut buf = [0; PACKET_LEN];
-    'recv_packet: loop {
-        let (len, addr) = socket.recv_from(&mut buf).await?;
+    loop {
+        let (len, addr) = tokio::select! {
+            x = socket.recv_from(&mut buf) => x?,
+            _ = state.cancel_token.cancelled() => break,
+        };
         let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
             Ok(UdpRequest::Discover) => {
@@ -187,14 +203,14 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 let IpAddr::V4(peer_ip) = addr.ip() else {
                     bail!("IPv6 is not supported")
                 };
-                let peer_mac = match find_mac(peer_ip) {
-                    Ok(peer_mac) => peer_mac,
+                match find_mac(peer_ip) {
+                    Ok(peer_mac) => {
+                        state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
+                    }
                     Err(err) => {
                         log::error!("Error handling udp packet: {}", err);
-                        continue 'recv_packet;
                     }
                 };
-                state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
             }
             Ok(UdpRequest::RequestChunks(chunks)) => {
                 for hash in chunks {
@@ -206,6 +222,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
             }
         }
     }
+    Ok(())
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {

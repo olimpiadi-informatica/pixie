@@ -29,6 +29,7 @@ use std::{
     },
 };
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 pub use units::UnitSelector;
 
@@ -99,6 +100,9 @@ pub struct State {
     registration_hint: Mutex<Option<RegistrationInfo>>,
     images_stats: watch::Sender<ImagesStats>,
     chunks_stats: Mutex<ChunksStats>,
+
+    /// Token to shutdown the entire server.
+    pub cancel_token: CancellationToken,
 }
 
 impl State {
@@ -206,6 +210,8 @@ impl State {
         let run_dir = PathBuf::from(format!("/run/pixie-{}", std::process::id()));
         std::fs::create_dir(&run_dir)?;
 
+        let cancel_token = CancellationToken::new();
+
         Ok(Self {
             storage_dir,
             run_dir,
@@ -215,6 +221,7 @@ impl State {
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
+            cancel_token,
         })
     }
 

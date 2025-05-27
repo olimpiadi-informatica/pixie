@@ -87,7 +87,10 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
     log::info!("Listening on {}", listener.local_addr()?);
     loop {
-        let (stream, addr) = listener.accept().await?;
+        let (stream, addr) = tokio::select! {
+            x = listener.accept() => x?,
+            _ = state.cancel_token.cancelled() => break,
+        };
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(state, stream, addr).await {
@@ -95,4 +98,5 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             }
         });
     }
+    Ok(())
 }

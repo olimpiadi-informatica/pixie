@@ -162,13 +162,15 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
     let image_rx = WatchStream::new(state.subscribe_images());
     let hostmap_rx = WatchStream::new(state.subscribe_hostmap());
 
-    let messages = futures::stream::iter(initial_messages).chain(futures::stream::select(
-        futures::stream::select(
-            image_rx.map(StatusUpdate::ImagesStats),
-            units_rx.map(StatusUpdate::Units),
-        ),
-        hostmap_rx.map(StatusUpdate::HostMap),
-    ));
+    let messages = futures::stream::iter(initial_messages)
+        .chain(futures::stream::select(
+            futures::stream::select(
+                image_rx.map(StatusUpdate::ImagesStats),
+                units_rx.map(StatusUpdate::Units),
+            ),
+            hostmap_rx.map(StatusUpdate::HostMap),
+        ))
+        .take_until(state.cancel_token.clone().cancelled_owned());
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
 
     Response::builder()
@@ -208,8 +210,11 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     }
     router = router.layer(TraceLayer::new_for_http());
 
+    let shutdown_token = state.cancel_token.clone().cancelled_owned();
     let listener = TcpListener::bind(listen_on).await?;
-    axum::serve(listener, router.with_state(state)).await?;
+    axum::serve(listener, router.with_state(state))
+        .with_graceful_shutdown(shutdown_token)
+        .await?;
 
     Ok(())
 }

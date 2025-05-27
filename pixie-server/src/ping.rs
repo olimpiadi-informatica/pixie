@@ -19,7 +19,10 @@ pub async fn main(state: Arc<State>) -> Result<()> {
 
     let mut buf = [0; PACKET_LEN];
     loop {
-        let (len, peer_addr) = socket.recv_from(&mut buf).await?;
+        let (len, peer_addr) = tokio::select! {
+            x = socket.recv_from(&mut buf) => x?,
+            _ = state.cancel_token.cancelled() => break,
+        };
         let IpAddr::V4(peer_ip) = peer_addr.ip() else {
             bail!("IPv6 is not supported")
         };
@@ -37,4 +40,5 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .as_secs();
         state.set_unit_ping(UnitSelector::MacAddr(peer_mac), time, &buf[..len]);
     }
+    Ok(())
 }

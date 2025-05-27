@@ -19,7 +19,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::Arc,
 };
-use tokio::task::JoinHandle;
+use tokio::{signal::unix::SignalKind, task::JoinHandle};
 
 /// Finds the mac address for the given ip.
 ///
@@ -130,11 +130,26 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(State::load(options.storage_dir)?);
 
+    tokio::spawn({
+        let cancel_token = state.cancel_token.clone();
+        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
+            .expect("failed to register SIGNINT handler");
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+            .expect("failed to register SIGNTERM handler");
+        async move {
+            let _token_guard = cancel_token.drop_guard();
+            tokio::select! {
+                _ = sigint.recv() => log::info!("Received SIGINT."),
+                _ = sigterm.recv() => log::info!("Received SIGTERM."),
+            };
+        }
+    });
+
     let state2 = state.clone();
     tokio::spawn(async move {
-        let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-            .expect("failed to register signal handler");
-        while let Some(()) = signal.recv().await {
+        let mut sighup = tokio::signal::unix::signal(SignalKind::hangup())
+            .expect("failed to register SIGHUP handler");
+        while let Some(()) = sighup.recv().await {
             state2.reload().unwrap();
         }
     });

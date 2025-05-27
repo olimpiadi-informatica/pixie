@@ -139,6 +139,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         tokio::select! {
             ret = units_rx.changed() => ret.unwrap(),
             ret = hostmap_rx.changed() => ret.unwrap(),
+            _ = state.cancel_token.cancelled() => break,
         }
 
         let hosts2 = get_hosts(
@@ -151,4 +152,5 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             dnsmasq.reload()?;
         }
     }
+    Ok(())
 }
