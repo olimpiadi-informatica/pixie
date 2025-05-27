@@ -208,8 +208,11 @@
 <a href=#208 id=208 data-nosnippet>208</a>    }
 <a href=#209 id=209 data-nosnippet>209</a>    router = router.layer(TraceLayer::new_for_http());
 <a href=#210 id=210 data-nosnippet>210</a>
-<a href=#211 id=211 data-nosnippet>211</a>    <span class="kw">let </span>listener = TcpListener::bind(listen_on).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#212 id=212 data-nosnippet>212</a>    axum::serve(listener, router.with_state(state)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#213 id=213 data-nosnippet>213</a>
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="prelude-val">Ok</span>(())
-<a href=#215 id=215 data-nosnippet>215</a>}</code></pre></div></section></main></body></html>
+<a href=#211 id=211 data-nosnippet>211</a>    <span class="kw">let </span>shutdown_token = state.cancel_token.clone().cancelled_owned();
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">let </span>listener = TcpListener::bind(listen_on).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#213 id=213 data-nosnippet>213</a>    axum::serve(listener, router.with_state(state))
+<a href=#214 id=214 data-nosnippet>214</a>        .with_graceful_shutdown(shutdown_token)
+<a href=#215 id=215 data-nosnippet>215</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#216 id=216 data-nosnippet>216</a>
+<a href=#217 id=217 data-nosnippet>217</a>    <span class="prelude-val">Ok</span>(())
+<a href=#218 id=218 data-nosnippet>218</a>}</code></pre></div></section></main></body></html>

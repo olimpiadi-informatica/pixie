@@ -139,16 +139,18 @@
 <a href=#139 id=139 data-nosnippet>139</a>        <span class="macro">tokio::select!</span> {
 <a href=#140 id=140 data-nosnippet>140</a>            ret = units_rx.changed() =&gt; ret.unwrap(),
 <a href=#141 id=141 data-nosnippet>141</a>            ret = hostmap_rx.changed() =&gt; ret.unwrap(),
-<a href=#142 id=142 data-nosnippet>142</a>        }
-<a href=#143 id=143 data-nosnippet>143</a>
-<a href=#144 id=144 data-nosnippet>144</a>        <span class="kw">let </span>hosts2 = get_hosts(
-<a href=#145 id=145 data-nosnippet>145</a>            <span class="kw-2">&amp;</span>hostmap_rx.borrow_and_update(),
-<a href=#146 id=146 data-nosnippet>146</a>            <span class="kw-2">&amp;</span>units_rx.borrow_and_update(),
-<a href=#147 id=147 data-nosnippet>147</a>        );
-<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">if </span>hosts != hosts2 {
-<a href=#149 id=149 data-nosnippet>149</a>            hosts = hosts2;
-<a href=#150 id=150 data-nosnippet>150</a>            write_hosts(<span class="kw-2">&amp;</span>state, <span class="kw-2">&amp;</span>hosts).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#151 id=151 data-nosnippet>151</a>            dnsmasq.reload()<span class="question-mark">?</span>;
-<a href=#152 id=152 data-nosnippet>152</a>        }
-<a href=#153 id=153 data-nosnippet>153</a>    }
-<a href=#154 id=154 data-nosnippet>154</a>}</code></pre></div></section></main></body></html>
+<a href=#142 id=142 data-nosnippet>142</a>            <span class="kw">_ </span>= state.cancel_token.cancelled() =&gt; <span class="kw">break</span>,
+<a href=#143 id=143 data-nosnippet>143</a>        }
+<a href=#144 id=144 data-nosnippet>144</a>
+<a href=#145 id=145 data-nosnippet>145</a>        <span class="kw">let </span>hosts2 = get_hosts(
+<a href=#146 id=146 data-nosnippet>146</a>            <span class="kw-2">&amp;</span>hostmap_rx.borrow_and_update(),
+<a href=#147 id=147 data-nosnippet>147</a>            <span class="kw-2">&amp;</span>units_rx.borrow_and_update(),
+<a href=#148 id=148 data-nosnippet>148</a>        );
+<a href=#149 id=149 data-nosnippet>149</a>        <span class="kw">if </span>hosts != hosts2 {
+<a href=#150 id=150 data-nosnippet>150</a>            hosts = hosts2;
+<a href=#151 id=151 data-nosnippet>151</a>            write_hosts(<span class="kw-2">&amp;</span>state, <span class="kw-2">&amp;</span>hosts).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#152 id=152 data-nosnippet>152</a>            dnsmasq.reload()<span class="question-mark">?</span>;
+<a href=#153 id=153 data-nosnippet>153</a>        }
+<a href=#154 id=154 data-nosnippet>154</a>    }
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="prelude-val">Ok</span>(())
+<a href=#156 id=156 data-nosnippet>156</a>}</code></pre></div></section></main></body></html>
