@@ -5,7 +5,7 @@ version = "0.1.0"
 
 [dependencies]
 anyhow = "1.0.98"
-blake3 = "1.5.5"
+blake3 = "1.8.2"
 clap = { version = "4.5.37", features = ["derive"] }
 env_logger = { version = "0.11.6", default-features = false, features = ["auto-color", "humantime"] }
 interfaces = "0.0.9"
