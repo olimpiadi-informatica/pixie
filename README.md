@@ -6,6 +6,7 @@ A system to boot multiple computers, supporting rsync-like updates
   ```sh
   yay -S rustup
   rustup toolchain install stable nightly
+  rustup target add x86_64-unknown-uefi
   yay -S upx trunk
   rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu
   ```
