@@ -28,12 +28,6 @@ impl State {
 
     /// Store the given chunk to the database.
     pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
-        ensure!(
-            data.len() <= pixie_shared::MAX_CHUNK_SIZE,
-            "Chunk size is too big: {}",
-            data.len()
-        );
-
         let mut res = Ok(());
         let hash = *blake3::hash(data).as_bytes();
         let path = self.storage_dir.join(CHUNKS_DIR).join(hex::encode(hash));
