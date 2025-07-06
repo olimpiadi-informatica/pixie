@@ -76,7 +76,7 @@ struct UefiOSImpl {
     tasks: Vec<Arc<Task>>,
     input: ScopedProtocol<Input>,
     vga: ScopedProtocol<Output>,
-    serial: ScopedProtocol<Serial>,
+    serial: Option<ScopedProtocol<Serial>>,
     net: Option<NetworkInterface>,
     messages: VecDeque<(f64, log::Level, String, String)>,
     ui_buf: Vec<(String, Color, Color)>,
@@ -183,8 +183,9 @@ impl UefiOS {
         let input_handles = uefi::boot::find_handles::<Input>().unwrap();
         let input = uefi::boot::open_protocol_exclusive::<Input>(input_handles[0]).unwrap();
 
-        let serial_handles = uefi::boot::find_handles::<Serial>().unwrap();
-        let serial = uefi::boot::open_protocol_exclusive::<Serial>(serial_handles[0]).unwrap();
+        let serial = uefi::boot::find_handles::<Serial>()
+            .ok()
+            .map(|handles| uefi::boot::open_protocol_exclusive::<Serial>(handles[0]).unwrap());
 
         let vga_handles = uefi::boot::find_handles::<Output>().unwrap();
         let mut vga = uefi::boot::open_protocol_exclusive::<Output>(vga_handles[0]).unwrap();
@@ -538,18 +539,20 @@ impl UefiOS {
         {
             let mut os = self.borrow_mut();
 
-            let style = match level {
-                log::Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
-                log::Level::Debug => anstyle::AnsiColor::Blue.on_default(),
-                log::Level::Info => anstyle::AnsiColor::Green.on_default(),
-                log::Level::Warn => anstyle::AnsiColor::Yellow.on_default(),
-                log::Level::Error => anstyle::AnsiColor::Red.on_default().bold(),
-            };
-            write!(
-                os.serial,
-                "[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\r\n"
-            )
-            .unwrap();
+            if let Some(serial) = &mut os.serial {
+                let style = match level {
+                    log::Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
+                    log::Level::Debug => anstyle::AnsiColor::Blue.on_default(),
+                    log::Level::Info => anstyle::AnsiColor::Green.on_default(),
+                    log::Level::Warn => anstyle::AnsiColor::Yellow.on_default(),
+                    log::Level::Error => anstyle::AnsiColor::Red.on_default().bold(),
+                };
+                write!(
+                    serial,
+                    "[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\r\n"
+                )
+                .unwrap();
+            }
 
             os.messages.push_back((time, level, target.into(), msg));
             const MAX_MESSAGES: usize = 5;
