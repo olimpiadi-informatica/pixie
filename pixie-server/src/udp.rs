@@ -49,7 +49,11 @@ async fn broadcast_chunks(
                     queue.remove(&hash);
                     Some(hash)
                 }
-                None => rx.recv().await,
+                None => {
+                    let hash = rx.recv().await;
+                    wait_for = wait_for.max(Instant::now());
+                    hash
+                }
             }
         };
 
@@ -90,7 +94,6 @@ async fn broadcast_chunks(
                 .for_each(|(a, b)| *b ^= a);
             write_buf[34..34 + len].clone_from_slice(body);
 
-            wait_for = wait_for.max(Instant::now());
             time::sleep_until(wait_for).await;
 
             let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
@@ -103,7 +106,6 @@ async fn broadcast_chunks(
             let len = BODY_LEN;
             write_buf[34..34 + len].clone_from_slice(body);
 
-            wait_for = wait_for.max(Instant::now());
             time::sleep_until(wait_for).await;
             let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
             ensure!(sent_len == 34 + len, "Could not send packet");
