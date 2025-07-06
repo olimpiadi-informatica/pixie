@@ -51,12 +51,12 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
             tcsize,
         } => {
             os.write_with_color(
-                &format!("Pushed {} out of {} chunks\n", cur, total),
+                &format!("Pushed {cur} out of {total} chunks\n"),
                 Color::White,
                 Color::Black,
             );
             os.write_with_color(
-                &format!("total size {}, compressed {}\n", tsize, tcsize),
+                &format!("total size {tsize}, compressed {tcsize}\n"),
                 Color::White,
                 Color::Black,
             );

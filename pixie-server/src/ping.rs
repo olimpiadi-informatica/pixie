@@ -29,7 +29,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         let peer_mac = match find_mac(peer_ip) {
             Ok(peer_mac) => peer_mac,
             Err(err) => {
-                log::error!("Error handling ping packet: {}", err);
+                log::error!("Error handling ping packet: {err}");
                 continue;
             }
         };

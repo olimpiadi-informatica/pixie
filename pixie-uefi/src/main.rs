@@ -133,7 +133,7 @@ async fn run(os: UefiOS) -> Result<()> {
                 }
             } else {
                 last_was_wait = false;
-                log::info!("Command: {:?}", command);
+                log::info!("Command: {command:?}");
                 match command {
                     Action::Wait => unreachable!(),
                     Action::Reboot => reboot_to_os(os).await,

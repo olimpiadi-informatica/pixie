@@ -128,7 +128,7 @@ impl UefiOSImpl {
         let (cols, rows) = (mode.columns(), mode.rows());
         for (msg, fg, bg) in self.ui_buf.drain(..) {
             self.vga.set_color(fg, bg).unwrap();
-            write!(self.vga, "{}", msg).unwrap();
+            write!(self.vga, "{msg}").unwrap();
         }
         self.vga.set_color(Color::White, Color::Black).unwrap();
         if self.ui_pos + 1 < cols * rows {
@@ -216,7 +216,7 @@ impl UefiOS {
         os.spawn("init", async move {
             loop {
                 if let Err(err) = f(os).await {
-                    log::error!("Error: {:?}", err);
+                    log::error!("Error: {err:?}");
                 }
             }
         });
@@ -227,7 +227,7 @@ impl UefiOS {
 
                 if let Err(err) = err {
                     if err.status() != Status::UNSUPPORTED {
-                        log::error!("Error disabling watchdog: {:?}", err);
+                        log::error!("Error disabling watchdog: {err:?}");
                     }
 
                     break;
@@ -361,7 +361,7 @@ impl UefiOS {
         let mut name_buf = vec![0u16; name.len() * 2 + 16];
         let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
         let (var, attrs) = uefi::runtime::get_variable_boxed(name, vendor)
-            .map_err(|e| Error::Generic(format!("Error getting variable: {:?}", e)))?;
+            .map_err(|e| Error::Generic(format!("Error getting variable: {e:?}")))?;
         Ok((var.to_vec(), attrs))
     }
 
@@ -376,7 +376,7 @@ impl UefiOS {
         let mut name_buf = vec![0u16; name.len() * 2 + 16];
         let name = CStr16::from_str_with_buf(name, &mut name_buf).unwrap();
         uefi::runtime::set_variable(name, vendor, attrs, data)
-            .map_err(|e| Error::Generic(format!("Error setting variable: {:?}", e)))?;
+            .map_err(|e| Error::Generic(format!("Error setting variable: {e:?}")))?;
         Ok(())
     }
 
@@ -461,15 +461,11 @@ impl UefiOS {
             let mode = os.vga.current_mode().unwrap().unwrap();
             let cols = mode.columns();
 
-            os.write_with_color(
-                &format!("uptime: {:10.1}s", time),
-                Color::White,
-                Color::Black,
-            );
+            os.write_with_color(&format!("uptime: {time:10.1}s"), Color::White, Color::Black);
             os.maybe_advance_to_col(cols / 3);
 
             if let Some(ip) = ip {
-                os.write_with_color(&format!("IP: {}", ip), Color::White, Color::Black);
+                os.write_with_color(&format!("IP: {ip}"), Color::White, Color::Black);
             } else {
                 os.write_with_color("DHCP...", Color::Yellow, Color::Black);
             }

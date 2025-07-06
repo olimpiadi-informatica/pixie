@@ -165,7 +165,7 @@ impl State {
                 }
                 let now = chrono::Utc::now();
                 let version = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                let name_with_version = format!("{}@{}", name, version);
+                let name_with_version = format!("{name}@{version}");
                 self.write_image(name, image, images_stats, &mut chunks_stats)?;
                 self.write_image(name_with_version, image, images_stats, &mut chunks_stats)?;
                 Ok(())

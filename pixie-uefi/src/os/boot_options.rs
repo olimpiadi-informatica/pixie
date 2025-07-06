@@ -76,7 +76,7 @@ impl BootOptions {
 
     pub fn get(&self, id: u16) -> Vec<u8> {
         self.os
-            .get_variable(&format!("Boot{:04X}", id), &VariableVendor::GLOBAL_VARIABLE)
+            .get_variable(&format!("Boot{id:04X}"), &VariableVendor::GLOBAL_VARIABLE)
             .unwrap()
             .0
     }
@@ -84,7 +84,7 @@ impl BootOptions {
     pub fn set(&self, id: u16, data: &[u8]) {
         self.os
             .set_variable(
-                &format!("Boot{:04X}", id),
+                &format!("Boot{id:04X}"),
                 &VariableVendor::GLOBAL_VARIABLE,
                 VariableAttributes::NON_VOLATILE
                     | VariableAttributes::BOOTSERVICE_ACCESS

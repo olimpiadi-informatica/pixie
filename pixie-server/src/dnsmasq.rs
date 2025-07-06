@@ -41,7 +41,7 @@ async fn write_config(state: &State) -> Result<()> {
 
     let dhcp_dynamic_conf = match state.config.hosts.dhcp {
         DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
-        DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{},proxy", ip),
+        DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{ip},proxy"),
     };
 
     let storage_str = state.storage_dir.to_str().unwrap();
@@ -89,9 +89,9 @@ async fn write_hosts(state: &State, hosts: &[(MacAddr6, Ipv4Addr, Option<String>
 
     for (mac, ip, hostname) in hosts {
         if let Some(hostname) = hostname {
-            writeln!(file, "{},{},{}", mac, ip, hostname)?;
+            writeln!(file, "{mac},{ip},{hostname}")?;
         } else {
-            writeln!(file, "{},{}", mac, ip)?;
+            writeln!(file, "{mac},{ip}")?;
         }
     }
     Ok(())

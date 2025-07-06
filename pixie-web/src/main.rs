@@ -23,7 +23,7 @@ fn send_req(url: String) {
     spawn_local(async move {
         reqwest::get(url.clone())
             .await
-            .unwrap_or_else(|_| panic!("Request to {} failed", url));
+            .unwrap_or_else(|_| panic!("Request to {url} failed"));
     });
 }
 
@@ -179,7 +179,7 @@ fn Group(
             let unit = unit.get();
             if let Some(a) = unit.curr_action {
                 if let Some((x, y)) = unit.curr_progress {
-                    format!("{} ({}/{})", a, x, y)
+                    format!("{a} ({x}/{y})")
                 } else {
                     a.to_string()
                 }
@@ -262,7 +262,7 @@ fn Group(
     let url_cancel = move || format!("admin/action/{}/wait", group_name.get());
 
     let image_button = move |image: String| {
-        let text = format!("Set image to {:?}", image);
+        let text = format!("Set image to {image:?}");
         let url = move || format!("admin/image/{}/{}", group_name.get(), image);
         view! {
             <Button color=ButtonColor::Error on_click=move |_| send_req(url())>

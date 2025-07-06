@@ -80,7 +80,7 @@ async fn image(
     if !state.config.images.contains(&image) {
         return (
             StatusCode::BAD_REQUEST,
-            format!("Unknown image: {:?}\n", image),
+            format!("Unknown image: {image:?}\n"),
         );
     }
 
@@ -128,7 +128,7 @@ async fn rollback(
 ) -> impl IntoResponse {
     match state.rollback_image(&image) {
         Ok(()) => (StatusCode::NO_CONTENT, String::new()),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}\n", e)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}\n")),
     }
 }
 

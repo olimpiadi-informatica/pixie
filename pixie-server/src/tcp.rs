@@ -63,7 +63,7 @@ async fn handle_connection(
     let peer_mac = match find_mac(peer_ip) {
         Ok(peer_mac) => peer_mac,
         Err(err) => {
-            log::error!("Error handling tcp connection: {}", err);
+            log::error!("Error handling tcp connection: {err}");
             return Ok(());
         }
     };
@@ -94,7 +94,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(state, stream, addr).await {
-                log::error!("Error handling tcp connection: {}", e);
+                log::error!("Error handling tcp connection: {e}");
             }
         });
     }

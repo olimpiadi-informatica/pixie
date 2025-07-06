@@ -165,7 +165,7 @@ async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
     let mut bitmap_entry = [0u8; 1024];
     disk.read(start + bitmap_entry_address as u64, &mut bitmap_entry)
         .await
-        .map_err(|e| Error::Generic(format!("failed to read bitmap entry: {}", e)))?;
+        .map_err(|e| Error::Generic(format!("failed to read bitmap entry: {e}")))?;
 
     let mut attribute_offset = le16(&bitmap_entry, 0x14) as usize;
     while le32(&bitmap_entry, attribute_offset) != 0x80 {
@@ -198,7 +198,7 @@ async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
         for i in 0..length {
             let x = start + (offset + i) as u64 * bytes_per_cluster as u64;
             disk.read(x, &mut buf).await.map_err(|e| {
-                Error::Generic(format!("failed to read bitmap content at {}: {}", x, e))
+                Error::Generic(format!("failed to read bitmap content at {x}: {e}"))
             })?;
 
             for &byte in &buf {

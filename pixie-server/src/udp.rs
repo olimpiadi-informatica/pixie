@@ -208,7 +208,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                         state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
                     }
                     Err(err) => {
-                        log::error!("Error handling udp packet: {}", err);
+                        log::error!("Error handling udp packet: {err}");
                     }
                 };
             }
@@ -218,7 +218,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 }
             }
             Err(e) => {
-                log::warn!("Invalid request from {}: {}", addr, e);
+                log::warn!("Invalid request from {addr}: {e}");
             }
         }
     }
