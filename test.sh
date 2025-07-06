@@ -8,4 +8,5 @@ cd "$SELFDIR"
 
 ./setup.sh
 
-setsid sudo ./run_test.sh ${SELFDIR}/storage
+trap '' SIGTERM
+sudo ./run_test.sh ${SELFDIR}/storage

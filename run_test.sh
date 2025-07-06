@@ -51,6 +51,9 @@ run_qemu() {
     fi
     qemu-system-x86_64 \
         -nographic \
+        -chardev stdio,id=char0,logfile=$1,signal=off \
+        -serial chardev:char0 \
+        -monitor none \
         -enable-kvm \
         -cpu host -smp cores=2 \
         -m 1G \
@@ -69,13 +72,29 @@ umount $TEMPDIR/mnt
 losetup -d $DEV
 
 curl 'http://localhost:8080/admin/curr_action/all/store'
-run_qemu
+run_qemu $TEMPDIR/store.log
+
+# Check that we restore the original disk image.
 
 rm -f $TEMPDIR/disk.img
 truncate -s 8G $TEMPDIR/disk.img
 
 curl 'http://localhost:8080/admin/curr_action/all/flash'
-run_qemu
+run_qemu $TEMPDIR/flash-1.log
+
+DEV=$(losetup --show --find $TEMPDIR/disk.img)
+mount -o ro $DEV $TEMPDIR/mnt
+if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
+    echo "pixie-server does not contain the expected content"
+    exit 1
+fi
+umount $TEMPDIR/mnt
+losetup -d $DEV
+
+# Check that we don't fetch any data if the disk contents have not changed.
+
+curl 'http://localhost:8080/admin/curr_action/all/flash'
+run_qemu $TEMPDIR/flash-2.log
 
 DEV=$(losetup --show --find $TEMPDIR/disk.img)
 mount $DEV $TEMPDIR/mnt
@@ -85,3 +104,9 @@ if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixi
 fi
 umount $TEMPDIR/mnt
 losetup -d $DEV
+
+if ! grep "Disk scanned; 0 chunks to fetch" $TEMPDIR/flash-2.log &>/dev/null
+then
+  echo "Data was re-fetched"
+  exit 1
+fi

@@ -63,4 +63,4 @@ jobs:
         uses: jetli/trunk-action@v0.5.0
 
       - name: Run test
-        run: ./test.sh
+        run: setsid ./test.sh
