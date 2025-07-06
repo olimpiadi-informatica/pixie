@@ -166,9 +166,16 @@ impl NetworkInterface {
             descr,
             os.device_path_to_string(device)
         );
-        let mut device = SnpDevice::new(Box::leak(Box::new(
-            os.open_protocol_on_device::<SimpleNetwork>(device).unwrap(),
-        )));
+
+        let snp_handle = if let Some(handle) = os.handle_on_device::<SimpleNetwork>(device) {
+            handle
+        } else {
+            log::info!("SNP handle not found on device, falling back to first SNP handle");
+            uefi::boot::find_handles::<SimpleNetwork>().unwrap()[0]
+        };
+
+        let snp = uefi::boot::open_protocol_exclusive::<SimpleNetwork>(snp_handle).unwrap();
+        let mut device = SnpDevice::new(Box::leak(Box::new(snp)));
 
         let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
             &device.snp.mode().current_address.0[..6],

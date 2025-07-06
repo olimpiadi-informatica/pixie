@@ -396,7 +396,7 @@ impl UefiOS {
     }
 
     /// Find the topmost device that implements this protocol.
-    fn handle_on_device<P: Protocol>(&self, device: &DevicePath) -> Handle {
+    fn handle_on_device<P: Protocol>(&self, device: &DevicePath) -> Option<Handle> {
         for i in 0..device.node_iter().count() {
             let mut buf = vec![];
             let mut dev = DevicePathBuilder::with_vec(&mut buf);
@@ -405,19 +405,10 @@ impl UefiOS {
             }
             let mut dev = dev.finalize().unwrap();
             if let Ok(h) = uefi::boot::locate_device_path::<P>(&mut dev) {
-                return h;
+                return Some(h);
             }
         }
-        // TODO(veluca): bubble up errors.
-        panic!("handle not found");
-    }
-
-    fn open_protocol_on_device<P: Protocol>(
-        &self,
-        device: &DevicePath,
-    ) -> Result<ScopedProtocol<P>> {
-        let handle = self.handle_on_device::<P>(device);
-        Ok(uefi::boot::open_protocol_exclusive::<P>(handle)?)
+        None
     }
 
     pub fn open_first_disk(&self) -> Disk {
