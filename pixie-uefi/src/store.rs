@@ -113,7 +113,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
             let mut data = vec![0; chunk_info.size];
             disk.read(chunk_info.start as u64, &mut data).await?;
             let cdata = compress(&data);
-            let hash = blake3::hash(&cdata).into();
+            let hash = blake3::hash(&data).into();
             let chunk = Chunk {
                 hash,
                 start: chunk_info.start,
