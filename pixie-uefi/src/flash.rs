@@ -5,6 +5,7 @@ use crate::os::{
 use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, string::ToString, vec::Vec};
 use core::{cell::RefCell, mem, net::SocketAddrV4};
 use futures::future::{select, Either};
+use log::info;
 use lz4_flex::decompress;
 use pixie_shared::{Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
 use uefi::proto::console::text::Color;
@@ -145,6 +146,8 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
             .push(chunk.start);
     }
 
+    info!("Obtained chunks; {} distinct chunks", chunks_info.len());
+
     let stats = Rc::new(RefCell::new(Stats {
         chunks: image.disk.len(),
         unique: chunks_info.len(),
@@ -212,6 +215,8 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         }
     }
 
+    info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
+
     let socket = os.udp_bind(Some(CHUNKS_PORT)).await?;
     let mut buf = [0; PACKET_SIZE];
 
@@ -268,6 +273,8 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     };
 
     let ((), ()) = futures::try_join!(task1, task2)?;
+
+    info!("Fetch complete, updating boot options");
 
     let bo = os.boot_options();
     let mut order = bo.order();
