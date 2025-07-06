@@ -1,6 +1,6 @@
 use crate::state::{atomic_write, State, CHUNKS_DIR, IMAGES_DIR};
 use anyhow::{ensure, Context, Result};
-use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Image, ImagesStats};
+use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Image, ImagesStats, MAX_CHUNK_SIZE};
 use tokio::sync::watch;
 
 impl State {
@@ -29,7 +29,13 @@ impl State {
     /// Store the given chunk to the database.
     pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
         let mut res = Ok(());
-        let hash = *blake3::hash(data).as_bytes();
+        let dec = lz4_flex::decompress(data, MAX_CHUNK_SIZE)?;
+        ensure!(
+            dec.len() <= MAX_CHUNK_SIZE,
+            "Decompressed chunk size is too big: {}",
+            dec.len()
+        );
+        let hash = *blake3::hash(&dec).as_bytes();
         let path = self.storage_dir.join(CHUNKS_DIR).join(hex::encode(hash));
         self.images_stats.send_if_modified(|images_stats| {
             res = (|| {

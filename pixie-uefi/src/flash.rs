@@ -198,8 +198,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         let mut buf = vec![0; size];
         for &offset in &pos {
             disk.read(offset as u64, &mut buf).await.unwrap();
-            let cdata = lz4_flex::compress(&buf);
-            if blake3::hash(&cdata).as_bytes() == &hash {
+            if blake3::hash(&buf).as_bytes() == &hash {
                 found = Some(offset);
                 break;
             }
