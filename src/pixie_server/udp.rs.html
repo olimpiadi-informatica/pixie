@@ -208,7 +208,7 @@
 <a href=#208 id=208 data-nosnippet>208</a>                        state.set_unit_progress(UnitSelector::MacAddr(peer_mac), <span class="prelude-val">Some</span>((frac, tot)));
 <a href=#209 id=209 data-nosnippet>209</a>                    }
 <a href=#210 id=210 data-nosnippet>210</a>                    <span class="prelude-val">Err</span>(err) =&gt; {
-<a href=#211 id=211 data-nosnippet>211</a>                        <span class="macro">log::error!</span>(<span class="string">"Error handling udp packet: {}"</span>, err);
+<a href=#211 id=211 data-nosnippet>211</a>                        <span class="macro">log::error!</span>(<span class="string">"Error handling udp packet: {err}"</span>);
 <a href=#212 id=212 data-nosnippet>212</a>                    }
 <a href=#213 id=213 data-nosnippet>213</a>                };
 <a href=#214 id=214 data-nosnippet>214</a>            }
@@ -218,7 +218,7 @@
 <a href=#218 id=218 data-nosnippet>218</a>                }
 <a href=#219 id=219 data-nosnippet>219</a>            }
 <a href=#220 id=220 data-nosnippet>220</a>            <span class="prelude-val">Err</span>(e) =&gt; {
-<a href=#221 id=221 data-nosnippet>221</a>                <span class="macro">log::warn!</span>(<span class="string">"Invalid request from {}: {}"</span>, addr, e);
+<a href=#221 id=221 data-nosnippet>221</a>                <span class="macro">log::warn!</span>(<span class="string">"Invalid request from {addr}: {e}"</span>);
 <a href=#222 id=222 data-nosnippet>222</a>            }
 <a href=#223 id=223 data-nosnippet>223</a>        }
 <a href=#224 id=224 data-nosnippet>224</a>    }

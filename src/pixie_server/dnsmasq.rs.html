@@ -41,7 +41,7 @@
 <a href=#41 id=41 data-nosnippet>41</a>
 <a href=#42 id=42 data-nosnippet>42</a>    <span class="kw">let </span>dhcp_dynamic_conf = <span class="kw">match </span>state.config.hosts.dhcp {
 <a href=#43 id=43 data-nosnippet>43</a>        DhcpMode::Static(low, high) =&gt; <span class="macro">format!</span>(<span class="string">"dhcp-range=tag:netboot,{low},{high}"</span>),
-<a href=#44 id=44 data-nosnippet>44</a>        DhcpMode::Proxy(ip) =&gt; <span class="macro">format!</span>(<span class="string">"dhcp-range=tag:netboot,{},proxy"</span>, ip),
+<a href=#44 id=44 data-nosnippet>44</a>        DhcpMode::Proxy(ip) =&gt; <span class="macro">format!</span>(<span class="string">"dhcp-range=tag:netboot,{ip},proxy"</span>),
 <a href=#45 id=45 data-nosnippet>45</a>    };
 <a href=#46 id=46 data-nosnippet>46</a>
 <a href=#47 id=47 data-nosnippet>47</a>    <span class="kw">let </span>storage_str = state.storage_dir.to_str().unwrap();
@@ -89,9 +89,9 @@
 <a href=#89 id=89 data-nosnippet>89</a>
 <a href=#90 id=90 data-nosnippet>90</a>    <span class="kw">for </span>(mac, ip, hostname) <span class="kw">in </span>hosts {
 <a href=#91 id=91 data-nosnippet>91</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(hostname) = hostname {
-<a href=#92 id=92 data-nosnippet>92</a>            <span class="macro">writeln!</span>(file, <span class="string">"{},{},{}"</span>, mac, ip, hostname)<span class="question-mark">?</span>;
+<a href=#92 id=92 data-nosnippet>92</a>            <span class="macro">writeln!</span>(file, <span class="string">"{mac},{ip},{hostname}"</span>)<span class="question-mark">?</span>;
 <a href=#93 id=93 data-nosnippet>93</a>        } <span class="kw">else </span>{
-<a href=#94 id=94 data-nosnippet>94</a>            <span class="macro">writeln!</span>(file, <span class="string">"{},{}"</span>, mac, ip)<span class="question-mark">?</span>;
+<a href=#94 id=94 data-nosnippet>94</a>            <span class="macro">writeln!</span>(file, <span class="string">"{mac},{ip}"</span>)<span class="question-mark">?</span>;
 <a href=#95 id=95 data-nosnippet>95</a>        }
 <a href=#96 id=96 data-nosnippet>96</a>    }
 <a href=#97 id=97 data-nosnippet>97</a>    <span class="prelude-val">Ok</span>(())

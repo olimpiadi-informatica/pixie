@@ -133,7 +133,7 @@
 <a href=#133 id=133 data-nosnippet>133</a>                }
 <a href=#134 id=134 data-nosnippet>134</a>            } <span class="kw">else </span>{
 <a href=#135 id=135 data-nosnippet>135</a>                last_was_wait = <span class="bool-val">false</span>;
-<a href=#136 id=136 data-nosnippet>136</a>                <span class="macro">log::info!</span>(<span class="string">"Command: {:?}"</span>, command);
+<a href=#136 id=136 data-nosnippet>136</a>                <span class="macro">log::info!</span>(<span class="string">"Command: {command:?}"</span>);
 <a href=#137 id=137 data-nosnippet>137</a>                <span class="kw">match </span>command {
 <a href=#138 id=138 data-nosnippet>138</a>                    Action::Wait =&gt; <span class="macro">unreachable!</span>(),
 <a href=#139 id=139 data-nosnippet>139</a>                    Action::Reboot =&gt; reboot_to_os(os).<span class="kw">await</span>,

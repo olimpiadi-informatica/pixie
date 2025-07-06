@@ -80,7 +80,7 @@
 <a href=#80 id=80 data-nosnippet>80</a>    <span class="kw">if </span>!state.config.images.contains(<span class="kw-2">&amp;</span>image) {
 <a href=#81 id=81 data-nosnippet>81</a>        <span class="kw">return </span>(
 <a href=#82 id=82 data-nosnippet>82</a>            StatusCode::BAD_REQUEST,
-<a href=#83 id=83 data-nosnippet>83</a>            <span class="macro">format!</span>(<span class="string">"Unknown image: {:?}\n"</span>, image),
+<a href=#83 id=83 data-nosnippet>83</a>            <span class="macro">format!</span>(<span class="string">"Unknown image: {image:?}\n"</span>),
 <a href=#84 id=84 data-nosnippet>84</a>        );
 <a href=#85 id=85 data-nosnippet>85</a>    }
 <a href=#86 id=86 data-nosnippet>86</a>
@@ -128,7 +128,7 @@
 <a href=#128 id=128 data-nosnippet>128</a>) -&gt; <span class="kw">impl </span>IntoResponse {
 <a href=#129 id=129 data-nosnippet>129</a>    <span class="kw">match </span>state.rollback_image(<span class="kw-2">&amp;</span>image) {
 <a href=#130 id=130 data-nosnippet>130</a>        <span class="prelude-val">Ok</span>(()) =&gt; (StatusCode::NO_CONTENT, String::new()),
-<a href=#131 id=131 data-nosnippet>131</a>        <span class="prelude-val">Err</span>(e) =&gt; (StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{}\n"</span>, e)),
+<a href=#131 id=131 data-nosnippet>131</a>        <span class="prelude-val">Err</span>(e) =&gt; (StatusCode::INTERNAL_SERVER_ERROR, <span class="macro">format!</span>(<span class="string">"{e}\n"</span>)),
 <a href=#132 id=132 data-nosnippet>132</a>    }
 <a href=#133 id=133 data-nosnippet>133</a>}
 <a href=#134 id=134 data-nosnippet>134</a>

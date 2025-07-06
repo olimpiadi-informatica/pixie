@@ -23,7 +23,7 @@
 <a href=#23 id=23 data-nosnippet>23</a>    spawn_local(<span class="kw">async move </span>{
 <a href=#24 id=24 data-nosnippet>24</a>        reqwest::get(url.clone())
 <a href=#25 id=25 data-nosnippet>25</a>            .<span class="kw">await
-<a href=#26 id=26 data-nosnippet>26</a>            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Request to {} failed"</span>, url));
+<a href=#26 id=26 data-nosnippet>26</a>            </span>.unwrap_or_else(|<span class="kw">_</span>| <span class="macro">panic!</span>(<span class="string">"Request to {url} failed"</span>));
 <a href=#27 id=27 data-nosnippet>27</a>    });
 <a href=#28 id=28 data-nosnippet>28</a>}
 <a href=#29 id=29 data-nosnippet>29</a>
@@ -179,7 +179,7 @@
 <a href=#179 id=179 data-nosnippet>179</a>            <span class="kw">let </span>unit = unit.get();
 <a href=#180 id=180 data-nosnippet>180</a>            <span class="kw">if let </span><span class="prelude-val">Some</span>(a) = unit.curr_action {
 <a href=#181 id=181 data-nosnippet>181</a>                <span class="kw">if let </span><span class="prelude-val">Some</span>((x, y)) = unit.curr_progress {
-<a href=#182 id=182 data-nosnippet>182</a>                    <span class="macro">format!</span>(<span class="string">"{} ({}/{})"</span>, a, x, y)
+<a href=#182 id=182 data-nosnippet>182</a>                    <span class="macro">format!</span>(<span class="string">"{a} ({x}/{y})"</span>)
 <a href=#183 id=183 data-nosnippet>183</a>                } <span class="kw">else </span>{
 <a href=#184 id=184 data-nosnippet>184</a>                    a.to_string()
 <a href=#185 id=185 data-nosnippet>185</a>                }
@@ -262,7 +262,7 @@
 <a href=#262 id=262 data-nosnippet>262</a>    <span class="kw">let </span>url_cancel = <span class="kw">move </span>|| <span class="macro">format!</span>(<span class="string">"admin/action/{}/wait"</span>, group_name.get());
 <a href=#263 id=263 data-nosnippet>263</a>
 <a href=#264 id=264 data-nosnippet>264</a>    <span class="kw">let </span>image_button = <span class="kw">move </span>|image: String| {
-<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>text = <span class="macro">format!</span>(<span class="string">"Set image to {:?}"</span>, image);
+<a href=#265 id=265 data-nosnippet>265</a>        <span class="kw">let </span>text = <span class="macro">format!</span>(<span class="string">"Set image to {image:?}"</span>);
 <a href=#266 id=266 data-nosnippet>266</a>        <span class="kw">let </span>url = <span class="kw">move </span>|| <span class="macro">format!</span>(<span class="string">"admin/image/{}/{}"</span>, group_name.get(), image);
 <a href=#267 id=267 data-nosnippet>267</a>        <span class="macro">view!</span> {
 <a href=#268 id=268 data-nosnippet>268</a>            &lt;Button color=ButtonColor::Error on_click=<span class="kw">move </span>|<span class="kw">_</span>| send_req(url())&gt;
