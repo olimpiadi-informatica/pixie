@@ -198,98 +198,97 @@
 <a href=#198 id=198 data-nosnippet>198</a>        <span class="kw">let </span><span class="kw-2">mut </span>buf = <span class="macro">vec!</span>[<span class="number">0</span>; size];
 <a href=#199 id=199 data-nosnippet>199</a>        <span class="kw">for </span><span class="kw-2">&amp;</span>offset <span class="kw">in </span><span class="kw-2">&amp;</span>pos {
 <a href=#200 id=200 data-nosnippet>200</a>            disk.read(offset <span class="kw">as </span>u64, <span class="kw-2">&amp;mut </span>buf).<span class="kw">await</span>.unwrap();
-<a href=#201 id=201 data-nosnippet>201</a>            <span class="kw">let </span>cdata = lz4_flex::compress(<span class="kw-2">&amp;</span>buf);
-<a href=#202 id=202 data-nosnippet>202</a>            <span class="kw">if </span>blake3::hash(<span class="kw-2">&amp;</span>cdata).as_bytes() == <span class="kw-2">&amp;</span>hash {
-<a href=#203 id=203 data-nosnippet>203</a>                found = <span class="prelude-val">Some</span>(offset);
-<a href=#204 id=204 data-nosnippet>204</a>                <span class="kw">break</span>;
-<a href=#205 id=205 data-nosnippet>205</a>            }
-<a href=#206 id=206 data-nosnippet>206</a>        }
-<a href=#207 id=207 data-nosnippet>207</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(found) = found {
-<a href=#208 id=208 data-nosnippet>208</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>offset <span class="kw">in </span><span class="kw-2">&amp;</span>pos {
-<a href=#209 id=209 data-nosnippet>209</a>                <span class="kw">if </span>offset != found {
-<a href=#210 id=210 data-nosnippet>210</a>                    disk.write(offset <span class="kw">as </span>u64, <span class="kw-2">&amp;</span>buf).<span class="kw">await</span>.unwrap();
-<a href=#211 id=211 data-nosnippet>211</a>                }
-<a href=#212 id=212 data-nosnippet>212</a>            }
-<a href=#213 id=213 data-nosnippet>213</a>        } <span class="kw">else </span>{
-<a href=#214 id=214 data-nosnippet>214</a>            chunks_info.insert(hash, (size, csize, pos));
-<a href=#215 id=215 data-nosnippet>215</a>            stats.borrow_mut().fetch = chunks_info.len();
-<a href=#216 id=216 data-nosnippet>216</a>        }
-<a href=#217 id=217 data-nosnippet>217</a>    }
-<a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="macro">info!</span>(<span class="string">"Disk scanned; {} chunks to fetch"</span>, stats.borrow().fetch);
-<a href=#220 id=220 data-nosnippet>220</a>
-<a href=#221 id=221 data-nosnippet>221</a>    <span class="kw">let </span>socket = os.udp_bind(<span class="prelude-val">Some</span>(CHUNKS_PORT)).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#222 id=222 data-nosnippet>222</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0</span>; PACKET_SIZE];
-<a href=#223 id=223 data-nosnippet>223</a>
-<a href=#224 id=224 data-nosnippet>224</a>    <span class="kw">let </span><span class="kw-2">mut </span>received = BTreeMap::new();
-<a href=#225 id=225 data-nosnippet>225</a>
-<a href=#226 id=226 data-nosnippet>226</a>    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = mpsc::channel(<span class="number">128</span>);
-<a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="kw">let </span>task1 = <span class="kw">async </span>{
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = tx;
-<a href=#230 id=230 data-nosnippet>230</a>        <span class="kw">while </span>!chunks_info.is_empty() {
-<a href=#231 id=231 data-nosnippet>231</a>            <span class="kw">let </span>recv = Box::pin(socket.recv(<span class="kw-2">&amp;mut </span>buf));
-<a href=#232 id=232 data-nosnippet>232</a>            <span class="kw">let </span>sleep = Box::pin(os.sleep_us(<span class="number">100_000</span>));
-<a href=#233 id=233 data-nosnippet>233</a>            <span class="kw">match </span>select(recv, sleep).<span class="kw">await </span>{
-<a href=#234 id=234 data-nosnippet>234</a>                Either::Left(((buf, _addr), <span class="kw">_</span>)) =&gt; {
-<a href=#235 id=235 data-nosnippet>235</a>                    stats.borrow_mut().pack_recv += <span class="number">1</span>;
-<a href=#236 id=236 data-nosnippet>236</a>                    <span class="macro">assert!</span>(buf.len() &gt;= <span class="number">34</span>);
-<a href=#237 id=237 data-nosnippet>237</a>
-<a href=#238 id=238 data-nosnippet>238</a>                    <span class="kw">let </span>chunk = handle_packet(buf, <span class="kw-2">&amp;mut </span>chunks_info, <span class="kw-2">&amp;mut </span>received).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#239 id=239 data-nosnippet>239</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>((pos, data)) = chunk {
-<a href=#240 id=240 data-nosnippet>240</a>                        tx.send((pos, data)).<span class="kw">await</span>;
-<a href=#241 id=241 data-nosnippet>241</a>                    }
-<a href=#242 id=242 data-nosnippet>242</a>
-<a href=#243 id=243 data-nosnippet>243</a>                    <span class="kw">if </span>received.len() &gt; <span class="number">128 </span>{
-<a href=#244 id=244 data-nosnippet>244</a>                        received.pop_last();
-<a href=#245 id=245 data-nosnippet>245</a>                    }
-<a href=#246 id=246 data-nosnippet>246</a>                }
-<a href=#247 id=247 data-nosnippet>247</a>                Either::Right(((), _sleep)) =&gt; {
-<a href=#248 id=248 data-nosnippet>248</a>                    <span class="comment">// TODO(virv): compute the number of chunks to request
-<a href=#249 id=249 data-nosnippet>249</a>                    </span><span class="kw">let </span>chunks: Vec&lt;<span class="kw">_</span>&gt; =
-<a href=#250 id=250 data-nosnippet>250</a>                        chunks_info.iter().take(<span class="number">40</span>).map(|(hash, <span class="kw">_</span>)| <span class="kw-2">*</span>hash).collect();
-<a href=#251 id=251 data-nosnippet>251</a>                    stats.borrow_mut().requested += chunks.len();
-<a href=#252 id=252 data-nosnippet>252</a>                    <span class="kw">let </span>msg = postcard::to_allocvec(<span class="kw-2">&amp;</span>UdpRequest::RequestChunks(chunks)).unwrap();
-<a href=#253 id=253 data-nosnippet>253</a>                    socket.send(server_addr, <span class="kw-2">&amp;</span>msg).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#254 id=254 data-nosnippet>254</a>                }
-<a href=#255 id=255 data-nosnippet>255</a>            }
-<a href=#256 id=256 data-nosnippet>256</a>        }
-<a href=#257 id=257 data-nosnippet>257</a>        <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, Error&gt;(())
-<a href=#258 id=258 data-nosnippet>258</a>    };
-<a href=#259 id=259 data-nosnippet>259</a>
-<a href=#260 id=260 data-nosnippet>260</a>    <span class="kw">let </span>task2 = <span class="kw">async </span>{
-<a href=#261 id=261 data-nosnippet>261</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((pos, data)) = rx.recv().<span class="kw">await </span>{
-<a href=#262 id=262 data-nosnippet>262</a>            <span class="kw">for </span>offset <span class="kw">in </span>pos {
-<a href=#263 id=263 data-nosnippet>263</a>                disk.write(offset <span class="kw">as </span>u64, <span class="kw-2">&amp;</span>data).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#264 id=264 data-nosnippet>264</a>            }
-<a href=#265 id=265 data-nosnippet>265</a>
-<a href=#266 id=266 data-nosnippet>266</a>            stats.borrow_mut().recv += <span class="number">1</span>;
-<a href=#267 id=267 data-nosnippet>267</a>
-<a href=#268 id=268 data-nosnippet>268</a>            <span class="kw">let </span>msg = UdpRequest::ActionProgress(stats.borrow().recv, stats.borrow().fetch);
-<a href=#269 id=269 data-nosnippet>269</a>            socket
-<a href=#270 id=270 data-nosnippet>270</a>                .send(server_addr, <span class="kw-2">&amp;</span>postcard::to_allocvec(<span class="kw-2">&amp;</span>msg)<span class="question-mark">?</span>)
-<a href=#271 id=271 data-nosnippet>271</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#272 id=272 data-nosnippet>272</a>        }
-<a href=#273 id=273 data-nosnippet>273</a>        <span class="prelude-val">Ok</span>(())
-<a href=#274 id=274 data-nosnippet>274</a>    };
-<a href=#275 id=275 data-nosnippet>275</a>
-<a href=#276 id=276 data-nosnippet>276</a>    <span class="kw">let </span>((), ()) = <span class="macro">futures::try_join!</span>(task1, task2)<span class="question-mark">?</span>;
-<a href=#277 id=277 data-nosnippet>277</a>
-<a href=#278 id=278 data-nosnippet>278</a>    <span class="macro">info!</span>(<span class="string">"Fetch complete, updating boot options"</span>);
-<a href=#279 id=279 data-nosnippet>279</a>
-<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">let </span>bo = os.boot_options();
-<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">let </span><span class="kw-2">mut </span>order = bo.order();
-<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">let </span>reboot_target = bo.reboot_target();
-<a href=#283 id=283 data-nosnippet>283</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(target) = reboot_target {
-<a href=#284 id=284 data-nosnippet>284</a>        order = order
-<a href=#285 id=285 data-nosnippet>285</a>            .into_iter()
-<a href=#286 id=286 data-nosnippet>286</a>            .map(|x| <span class="kw">if </span>x != target { x } <span class="kw">else </span>{ image.boot_option_id })
-<a href=#287 id=287 data-nosnippet>287</a>            .collect();
-<a href=#288 id=288 data-nosnippet>288</a>    } <span class="kw">else </span>{
-<a href=#289 id=289 data-nosnippet>289</a>        order.push(image.boot_option_id);
-<a href=#290 id=290 data-nosnippet>290</a>    };
-<a href=#291 id=291 data-nosnippet>291</a>    bo.set_order(<span class="kw-2">&amp;</span>order);
-<a href=#292 id=292 data-nosnippet>292</a>    bo.set(image.boot_option_id, <span class="kw-2">&amp;</span>image.boot_entry);
-<a href=#293 id=293 data-nosnippet>293</a>
-<a href=#294 id=294 data-nosnippet>294</a>    <span class="prelude-val">Ok</span>(())
-<a href=#295 id=295 data-nosnippet>295</a>}</code></pre></div></section></main></body></html>
+<a href=#201 id=201 data-nosnippet>201</a>            <span class="kw">if </span>blake3::hash(<span class="kw-2">&amp;</span>buf).as_bytes() == <span class="kw-2">&amp;</span>hash {
+<a href=#202 id=202 data-nosnippet>202</a>                found = <span class="prelude-val">Some</span>(offset);
+<a href=#203 id=203 data-nosnippet>203</a>                <span class="kw">break</span>;
+<a href=#204 id=204 data-nosnippet>204</a>            }
+<a href=#205 id=205 data-nosnippet>205</a>        }
+<a href=#206 id=206 data-nosnippet>206</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(found) = found {
+<a href=#207 id=207 data-nosnippet>207</a>            <span class="kw">for </span><span class="kw-2">&amp;</span>offset <span class="kw">in </span><span class="kw-2">&amp;</span>pos {
+<a href=#208 id=208 data-nosnippet>208</a>                <span class="kw">if </span>offset != found {
+<a href=#209 id=209 data-nosnippet>209</a>                    disk.write(offset <span class="kw">as </span>u64, <span class="kw-2">&amp;</span>buf).<span class="kw">await</span>.unwrap();
+<a href=#210 id=210 data-nosnippet>210</a>                }
+<a href=#211 id=211 data-nosnippet>211</a>            }
+<a href=#212 id=212 data-nosnippet>212</a>        } <span class="kw">else </span>{
+<a href=#213 id=213 data-nosnippet>213</a>            chunks_info.insert(hash, (size, csize, pos));
+<a href=#214 id=214 data-nosnippet>214</a>            stats.borrow_mut().fetch = chunks_info.len();
+<a href=#215 id=215 data-nosnippet>215</a>        }
+<a href=#216 id=216 data-nosnippet>216</a>    }
+<a href=#217 id=217 data-nosnippet>217</a>
+<a href=#218 id=218 data-nosnippet>218</a>    <span class="macro">info!</span>(<span class="string">"Disk scanned; {} chunks to fetch"</span>, stats.borrow().fetch);
+<a href=#219 id=219 data-nosnippet>219</a>
+<a href=#220 id=220 data-nosnippet>220</a>    <span class="kw">let </span>socket = os.udp_bind(<span class="prelude-val">Some</span>(CHUNKS_PORT)).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#221 id=221 data-nosnippet>221</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0</span>; PACKET_SIZE];
+<a href=#222 id=222 data-nosnippet>222</a>
+<a href=#223 id=223 data-nosnippet>223</a>    <span class="kw">let </span><span class="kw-2">mut </span>received = BTreeMap::new();
+<a href=#224 id=224 data-nosnippet>224</a>
+<a href=#225 id=225 data-nosnippet>225</a>    <span class="kw">let </span>(tx, <span class="kw-2">mut </span>rx) = mpsc::channel(<span class="number">128</span>);
+<a href=#226 id=226 data-nosnippet>226</a>
+<a href=#227 id=227 data-nosnippet>227</a>    <span class="kw">let </span>task1 = <span class="kw">async </span>{
+<a href=#228 id=228 data-nosnippet>228</a>        <span class="kw">let </span><span class="kw-2">mut </span>tx = tx;
+<a href=#229 id=229 data-nosnippet>229</a>        <span class="kw">while </span>!chunks_info.is_empty() {
+<a href=#230 id=230 data-nosnippet>230</a>            <span class="kw">let </span>recv = Box::pin(socket.recv(<span class="kw-2">&amp;mut </span>buf));
+<a href=#231 id=231 data-nosnippet>231</a>            <span class="kw">let </span>sleep = Box::pin(os.sleep_us(<span class="number">100_000</span>));
+<a href=#232 id=232 data-nosnippet>232</a>            <span class="kw">match </span>select(recv, sleep).<span class="kw">await </span>{
+<a href=#233 id=233 data-nosnippet>233</a>                Either::Left(((buf, _addr), <span class="kw">_</span>)) =&gt; {
+<a href=#234 id=234 data-nosnippet>234</a>                    stats.borrow_mut().pack_recv += <span class="number">1</span>;
+<a href=#235 id=235 data-nosnippet>235</a>                    <span class="macro">assert!</span>(buf.len() &gt;= <span class="number">34</span>);
+<a href=#236 id=236 data-nosnippet>236</a>
+<a href=#237 id=237 data-nosnippet>237</a>                    <span class="kw">let </span>chunk = handle_packet(buf, <span class="kw-2">&amp;mut </span>chunks_info, <span class="kw-2">&amp;mut </span>received).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#238 id=238 data-nosnippet>238</a>                    <span class="kw">if let </span><span class="prelude-val">Some</span>((pos, data)) = chunk {
+<a href=#239 id=239 data-nosnippet>239</a>                        tx.send((pos, data)).<span class="kw">await</span>;
+<a href=#240 id=240 data-nosnippet>240</a>                    }
+<a href=#241 id=241 data-nosnippet>241</a>
+<a href=#242 id=242 data-nosnippet>242</a>                    <span class="kw">if </span>received.len() &gt; <span class="number">128 </span>{
+<a href=#243 id=243 data-nosnippet>243</a>                        received.pop_last();
+<a href=#244 id=244 data-nosnippet>244</a>                    }
+<a href=#245 id=245 data-nosnippet>245</a>                }
+<a href=#246 id=246 data-nosnippet>246</a>                Either::Right(((), _sleep)) =&gt; {
+<a href=#247 id=247 data-nosnippet>247</a>                    <span class="comment">// TODO(virv): compute the number of chunks to request
+<a href=#248 id=248 data-nosnippet>248</a>                    </span><span class="kw">let </span>chunks: Vec&lt;<span class="kw">_</span>&gt; =
+<a href=#249 id=249 data-nosnippet>249</a>                        chunks_info.iter().take(<span class="number">40</span>).map(|(hash, <span class="kw">_</span>)| <span class="kw-2">*</span>hash).collect();
+<a href=#250 id=250 data-nosnippet>250</a>                    stats.borrow_mut().requested += chunks.len();
+<a href=#251 id=251 data-nosnippet>251</a>                    <span class="kw">let </span>msg = postcard::to_allocvec(<span class="kw-2">&amp;</span>UdpRequest::RequestChunks(chunks)).unwrap();
+<a href=#252 id=252 data-nosnippet>252</a>                    socket.send(server_addr, <span class="kw-2">&amp;</span>msg).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#253 id=253 data-nosnippet>253</a>                }
+<a href=#254 id=254 data-nosnippet>254</a>            }
+<a href=#255 id=255 data-nosnippet>255</a>        }
+<a href=#256 id=256 data-nosnippet>256</a>        <span class="prelude-val">Ok</span>::&lt;<span class="kw">_</span>, Error&gt;(())
+<a href=#257 id=257 data-nosnippet>257</a>    };
+<a href=#258 id=258 data-nosnippet>258</a>
+<a href=#259 id=259 data-nosnippet>259</a>    <span class="kw">let </span>task2 = <span class="kw">async </span>{
+<a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>((pos, data)) = rx.recv().<span class="kw">await </span>{
+<a href=#261 id=261 data-nosnippet>261</a>            <span class="kw">for </span>offset <span class="kw">in </span>pos {
+<a href=#262 id=262 data-nosnippet>262</a>                disk.write(offset <span class="kw">as </span>u64, <span class="kw-2">&amp;</span>data).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#263 id=263 data-nosnippet>263</a>            }
+<a href=#264 id=264 data-nosnippet>264</a>
+<a href=#265 id=265 data-nosnippet>265</a>            stats.borrow_mut().recv += <span class="number">1</span>;
+<a href=#266 id=266 data-nosnippet>266</a>
+<a href=#267 id=267 data-nosnippet>267</a>            <span class="kw">let </span>msg = UdpRequest::ActionProgress(stats.borrow().recv, stats.borrow().fetch);
+<a href=#268 id=268 data-nosnippet>268</a>            socket
+<a href=#269 id=269 data-nosnippet>269</a>                .send(server_addr, <span class="kw-2">&amp;</span>postcard::to_allocvec(<span class="kw-2">&amp;</span>msg)<span class="question-mark">?</span>)
+<a href=#270 id=270 data-nosnippet>270</a>                .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#271 id=271 data-nosnippet>271</a>        }
+<a href=#272 id=272 data-nosnippet>272</a>        <span class="prelude-val">Ok</span>(())
+<a href=#273 id=273 data-nosnippet>273</a>    };
+<a href=#274 id=274 data-nosnippet>274</a>
+<a href=#275 id=275 data-nosnippet>275</a>    <span class="kw">let </span>((), ()) = <span class="macro">futures::try_join!</span>(task1, task2)<span class="question-mark">?</span>;
+<a href=#276 id=276 data-nosnippet>276</a>
+<a href=#277 id=277 data-nosnippet>277</a>    <span class="macro">info!</span>(<span class="string">"Fetch complete, updating boot options"</span>);
+<a href=#278 id=278 data-nosnippet>278</a>
+<a href=#279 id=279 data-nosnippet>279</a>    <span class="kw">let </span>bo = os.boot_options();
+<a href=#280 id=280 data-nosnippet>280</a>    <span class="kw">let </span><span class="kw-2">mut </span>order = bo.order();
+<a href=#281 id=281 data-nosnippet>281</a>    <span class="kw">let </span>reboot_target = bo.reboot_target();
+<a href=#282 id=282 data-nosnippet>282</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(target) = reboot_target {
+<a href=#283 id=283 data-nosnippet>283</a>        order = order
+<a href=#284 id=284 data-nosnippet>284</a>            .into_iter()
+<a href=#285 id=285 data-nosnippet>285</a>            .map(|x| <span class="kw">if </span>x != target { x } <span class="kw">else </span>{ image.boot_option_id })
+<a href=#286 id=286 data-nosnippet>286</a>            .collect();
+<a href=#287 id=287 data-nosnippet>287</a>    } <span class="kw">else </span>{
+<a href=#288 id=288 data-nosnippet>288</a>        order.push(image.boot_option_id);
+<a href=#289 id=289 data-nosnippet>289</a>    };
+<a href=#290 id=290 data-nosnippet>290</a>    bo.set_order(<span class="kw-2">&amp;</span>order);
+<a href=#291 id=291 data-nosnippet>291</a>    bo.set(image.boot_option_id, <span class="kw-2">&amp;</span>image.boot_entry);
+<a href=#292 id=292 data-nosnippet>292</a>
+<a href=#293 id=293 data-nosnippet>293</a>    <span class="prelude-val">Ok</span>(())
+<a href=#294 id=294 data-nosnippet>294</a>}</code></pre></div></section></main></body></html>
