@@ -1,6 +1,7 @@
 [Unit]
 Description=pixie
 After=network.target
+StartLimitInterval=0
 
 [Service]
 Type=simple
@@ -10,6 +11,10 @@ ExecStart=/usr/local/bin/pixie-server -s /var/local/lib/pixie
 Environment=RUST_LOG=info
 WorkingDirectory=/var/local/lib/pixie
 ExecReload=kill -HUP $MAINPID
+Restart=always
+RestartSec=30
+LimitNOFILE=65536
+
 
 [Install]
 WantedBy=multi-user.target
