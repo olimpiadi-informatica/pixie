@@ -30,6 +30,26 @@
     box-shadow: inset #006 0 0 5px 1px;
 }
 
+.grid-green {
+    background-color: #ABFF00;
+    box-shadow: inset #304701 0 0 5px 1px;
+}
+
+.grid-yellow {
+    background-color: #FF0;
+    box-shadow: inset #808002 0 0 5px 1px;
+}
+
+.grid-red {
+    background-color: #F00;
+    box-shadow: inset #441313 0 0 5px 1px;
+}
+
+.grid-blue {
+    background-color: #24E0FF;
+    box-shadow: inset #006 0 0 5px 1px;
+}
+
 .expand {
   width: 100%;
 }

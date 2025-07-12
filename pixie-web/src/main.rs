@@ -420,8 +420,89 @@ fn App() -> impl IntoView {
         view! { <Group units group_name images hostmap time=time_in_seconds/> }.into_view()
     };
 
+    let render_group_grid = move |id: u8| {
+        let group_name = create_memo(move |_| {
+            config
+                .get()
+                .unwrap()
+                .groups
+                .get_by_second(&id)
+                .unwrap()
+                .clone()
+        });
+        let units = create_memo(move |_| -> Vec<_> {
+            units
+                .get()
+                .unwrap_or_else(Vec::new)
+                .iter()
+                .filter(|x| x.group == id)
+                .cloned()
+                .collect()
+        });
+        let render_unit_grid = move |idx: usize| {
+            let unit = create_memo(move |_| units.get()[idx].clone());
+            let ping_ago = move || time_in_seconds.get() - unit.get().last_ping_timestamp as i64;
+
+            let class = move || match ping_ago() {
+                ..0 => "grid-blue",
+                0..120 => "grid-green",
+                120..300 => "grid-yellow",
+                300.. => "grid-red",
+            };
+
+            let size_style = "width: 16px; height: 16px;";
+
+            let style = move || {
+                format!(
+                    "grid-column: {}; grid-row: {}; {size_style}",
+                    unit.get().col,
+                    unit.get().row
+                )
+            };
+
+            let popover_text = move || {
+                format!(
+                    "row {} col {}: {} seconds ago",
+                    unit.get().row,
+                    unit.get().col,
+                    ping_ago()
+                )
+            };
+
+            view! {
+                <div style=style class=class>
+                    <Popover tooltip=true placement=PopoverPlacement::Right>
+                        <PopoverTrigger slot>
+                            <div class=class style=size_style>
+                            </div>
+                        </PopoverTrigger>
+                        {popover_text}
+                    </Popover>
+                </div>
+            }
+        };
+        view! {
+            <div style="display: inline-block; text-align: center;" >
+                <h2>{group_name}</h2>
+                <div style="display: inline-grid; margin: 10px; transform: scaleY(-1);">
+                    <For each=move || 0..units.get().len() key=|x| *x children=render_unit_grid/>
+                </div>
+            </div>
+        }
+    };
+
     view! {
         <Images images=image_stats/>
+        <h1>Ping Summary</h1>
+        <Space vertical=false>
+            <For
+                each=move || {
+                    config.get().clone().into_iter().flat_map(|x| x.groups.into_iter().map(|x| x.1))
+                }
+                key=|x| *x
+                children=render_group_grid
+            />
+        </Space>
         <For
             each=move || {
                 config.get().clone().into_iter().flat_map(|x| x.groups.into_iter().map(|x| x.1))
