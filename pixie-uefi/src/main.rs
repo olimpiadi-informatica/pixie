@@ -28,6 +28,8 @@ mod reboot_to_os;
 mod register;
 mod store;
 
+const MIN_MEMORY: u64 = 500 << 20;
+
 async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
     let socket = os.udp_bind(None).await?;
 
