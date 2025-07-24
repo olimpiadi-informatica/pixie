@@ -25,7 +25,8 @@ use core::{
     task::{Context, Poll},
 };
 use uefi::{
-    boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
+    boot::{EventType, MemoryType, ScopedProtocol, TimerTrigger, Tpl},
+    mem::memory_map::MemoryMap,
     proto::{
         console::{
             serial::Serial,
@@ -570,6 +571,14 @@ impl UefiOS {
 
     pub fn shutdown(&self) -> ! {
         uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None)
+    }
+
+    pub fn get_total_mem(&self) -> u64 {
+        uefi::boot::memory_map(MemoryType::LOADER_DATA)
+            .expect("Failed to get memory map")
+            .entries()
+            .map(|entry| entry.page_count * 4096)
+            .sum()
     }
 }
 

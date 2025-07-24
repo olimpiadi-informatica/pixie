@@ -1,13 +1,18 @@
-use crate::os::{
-    error::{Error, Result},
-    mpsc, TcpStream, UefiOS, PACKET_SIZE,
+use crate::{
+    os::{
+        error::{Error, Result},
+        mpsc, TcpStream, UefiOS, PACKET_SIZE,
+    },
+    MIN_MEMORY,
 };
 use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, string::ToString, vec::Vec};
 use core::{cell::RefCell, mem, net::SocketAddrV4};
 use futures::future::{select, Either};
 use log::info;
 use lz4_flex::decompress;
-use pixie_shared::{ChunkHash, Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
+use pixie_shared::{
+    ChunkHash, Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN, MAX_CHUNK_SIZE,
+};
 use uefi::proto::console::text::Color;
 
 struct PartialChunk {
@@ -232,6 +237,9 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     let task1 = async {
         let mut tx = tx;
         let mut last_seen = Vec::new();
+        let total_mem = os.get_total_mem();
+        let max_chunks = (total_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
+        log::debug!("Total memory: {total_mem}. Max chunks in memory: {max_chunks}");
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv(&mut buf));
             let sleep = Box::pin(os.sleep_us(100_000));
@@ -247,7 +255,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                     }
 
                     assert_eq!(last_seen.len(), received.len());
-                    if last_seen.len() > 128 {
+                    if last_seen.len() > max_chunks {
                         let hash = last_seen.remove(0);
                         received
                             .remove(&hash)

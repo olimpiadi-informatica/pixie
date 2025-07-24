@@ -3,7 +3,7 @@ use crate::{
         error::{Error, Result},
         mpsc, TcpStream, UefiOS,
     },
-    parse_disk,
+    parse_disk, MIN_MEMORY,
 };
 use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
@@ -102,10 +102,15 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let mut total_size = 0;
     let mut total_csize = 0;
 
-    let (tx1, mut rx1) = mpsc::channel(32);
-    let (tx2, mut rx2) = mpsc::channel(32);
-    let (tx3, mut rx3) = mpsc::channel(32);
-    let (tx4, mut rx4) = mpsc::channel(32);
+    let total_mem = os.get_total_mem();
+    let channel_size =
+        (total_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
+    log::debug!("Total memory: {total_mem}. Channel size: {channel_size}");
+
+    let (tx1, mut rx1) = mpsc::channel(channel_size);
+    let (tx2, mut rx2) = mpsc::channel(channel_size);
+    let (tx3, mut rx3) = mpsc::channel(channel_size);
+    let (tx4, mut rx4) = mpsc::channel(channel_size);
 
     let task1 = async {
         let mut tx1 = tx1;
