@@ -2,10 +2,12 @@ use crate::{
     os::{
         disk::Disk,
         error::{Error, Result},
+        BytesFmt,
     },
     store::ChunkInfo,
 };
 use alloc::vec::Vec;
+use log::info;
 
 fn le16(buf: &[u8], lo: usize) -> u16 {
     (0..2).map(|i| (buf[lo + i] as u16) << (8 * i)).sum()
@@ -244,12 +246,28 @@ async fn get_swap_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec
 /// Returns chunks *relative to the start of the partition*.
 async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkInfo>> {
     if let Some(chunks) = get_ext4_chunks(disk, start, end).await? {
+        info!(
+            "Ext4 partition with {} chunks of size {}",
+            chunks.len(),
+            BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
+        );
         Ok(chunks)
     } else if let Some(chunks) = get_ntfs_chunks(disk, start, end).await? {
+        info!(
+            "NTFS partition with {} chunks of size {}",
+            chunks.len(),
+            BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
+        );
         Ok(chunks)
     } else if let Some(chunks) = get_swap_chunks(disk, start, end).await? {
+        info!(
+            "Swap partition with {} chunks of size {}",
+            chunks.len(),
+            BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
+        );
         Ok(chunks)
     } else {
+        info!("Unknown partition type");
         Ok(vec![ChunkInfo {
             start: 0,
             size: (end - start) as usize,
@@ -268,6 +286,10 @@ async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     for partition in partitions {
         let begin = partition.byte_start as usize;
         let end = partition.byte_end as usize;
+        info!(
+            "Partition starting at {begin}, size {}",
+            BytesFmt((end - begin) as u64)
+        );
 
         if pos < begin {
             chunks.push(ChunkInfo {

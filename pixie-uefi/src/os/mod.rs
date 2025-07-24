@@ -55,7 +55,7 @@ mod timer;
 
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
-struct BytesFmt(u64);
+pub struct BytesFmt(pub u64);
 
 impl Display for BytesFmt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -547,7 +547,7 @@ impl UefiOS {
             }
 
             os.messages.push_back((time, level, target.into(), msg));
-            const MAX_MESSAGES: usize = 5;
+            const MAX_MESSAGES: usize = 10;
             if os.messages.len() > MAX_MESSAGES {
                 os.messages.pop_front();
             }
