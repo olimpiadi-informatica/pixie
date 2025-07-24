@@ -55,7 +55,7 @@
 <a href=#55 id=55 data-nosnippet>55</a>
 <a href=#56 id=56 data-nosnippet>56</a><span class="kw">pub use </span>net::{TcpStream, UdpHandle, PACKET_SIZE};
 <a href=#57 id=57 data-nosnippet>57</a>
-<a href=#58 id=58 data-nosnippet>58</a><span class="kw">struct </span>BytesFmt(u64);
+<a href=#58 id=58 data-nosnippet>58</a><span class="kw">pub struct </span>BytesFmt(<span class="kw">pub </span>u64);
 <a href=#59 id=59 data-nosnippet>59</a>
 <a href=#60 id=60 data-nosnippet>60</a><span class="kw">impl </span>Display <span class="kw">for </span>BytesFmt {
 <a href=#61 id=61 data-nosnippet>61</a>    <span class="kw">fn </span>fmt(<span class="kw-2">&amp;</span><span class="self">self</span>, f: <span class="kw-2">&amp;mut </span>fmt::Formatter&lt;<span class="lifetime">'_</span>&gt;) -&gt; fmt::Result {
@@ -547,7 +547,7 @@
 <a href=#547 id=547 data-nosnippet>547</a>            }
 <a href=#548 id=548 data-nosnippet>548</a>
 <a href=#549 id=549 data-nosnippet>549</a>            os.messages.push_back((time, level, target.into(), msg));
-<a href=#550 id=550 data-nosnippet>550</a>            <span class="kw">const </span>MAX_MESSAGES: usize = <span class="number">5</span>;
+<a href=#550 id=550 data-nosnippet>550</a>            <span class="kw">const </span>MAX_MESSAGES: usize = <span class="number">10</span>;
 <a href=#551 id=551 data-nosnippet>551</a>            <span class="kw">if </span>os.messages.len() &gt; MAX_MESSAGES {
 <a href=#552 id=552 data-nosnippet>552</a>                os.messages.pop_front();
 <a href=#553 id=553 data-nosnippet>553</a>            }
