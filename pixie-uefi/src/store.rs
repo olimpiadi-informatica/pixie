@@ -1,12 +1,13 @@
 use crate::{
     os::{
         error::{Error, Result},
-        mpsc, TcpStream, UefiOS,
+        mpsc, BytesFmt, TcpStream, UefiOS,
     },
     parse_disk, MIN_MEMORY,
 };
 use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
+use log::info;
 use lz4_flex::compress;
 use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
 use uefi::proto::console::text::Color;
@@ -69,6 +70,10 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
 
     let mut disk = os.open_first_disk();
     let chunks = parse_disk::parse_disk(&mut disk).await?;
+    info!(
+        "Total size of chunks: {}",
+        BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
+    );
 
     // Split up chunks.
     let mut final_chunks = Vec::<ChunkInfo>::new();
