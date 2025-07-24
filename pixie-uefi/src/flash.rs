@@ -7,7 +7,7 @@ use core::{cell::RefCell, mem, net::SocketAddrV4};
 use futures::future::{select, Either};
 use log::info;
 use lz4_flex::decompress;
-use pixie_shared::{Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
+use pixie_shared::{ChunkHash, Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN};
 use uefi::proto::console::text::Color;
 
 struct PartialChunk {
@@ -57,21 +57,24 @@ struct Stats {
     requested: usize,
 }
 
-async fn handle_packet(
+fn handle_packet(
     buf: &[u8],
-    chunks_info: &mut BTreeMap<[u8; 32], (usize, usize, Vec<usize>)>,
-    received: &mut BTreeMap<[u8; 32], PartialChunk>,
+    chunks_info: &mut BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
+    received: &mut BTreeMap<ChunkHash, PartialChunk>,
+    last_seen: &mut Vec<ChunkHash>,
 ) -> Result<Option<(Vec<usize>, Vec<u8>)>> {
-    let hash: &[u8; 32] = buf[..32].try_into().unwrap();
+    let hash: ChunkHash = buf[..32].try_into().unwrap();
     let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
-    let csize = match chunks_info.get(hash) {
+    let csize = match chunks_info.get(&hash) {
         Some(&(_, csize, _)) => csize,
         _ => return Ok(None),
     };
 
     let pchunk = received
-        .entry(*hash)
+        .entry(hash)
         .or_insert_with(|| PartialChunk::new(csize));
+    last_seen.retain(|x| x != &hash);
+    last_seen.push(hash);
 
     let rot_index = (index as u16).wrapping_add(32) as usize;
     match &mut pchunk.missing_first[rot_index] {
@@ -101,8 +104,9 @@ async fn handle_packet(
         }
     }
 
-    let (size, _, pos) = chunks_info.remove(hash).unwrap();
-    let mut pchunk = received.remove(hash).unwrap();
+    let (size, _, pos) = chunks_info.remove(&hash).unwrap();
+    let mut pchunk = received.remove(&hash).unwrap();
+    last_seen.retain(|x| x != &hash);
 
     let mut xor = [[0; BODY_LEN]; 32];
     for packet in 0..pchunk.missing_first.len() {
@@ -126,6 +130,7 @@ async fn handle_packet(
 
     let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
         .map_err(|e| Error::Generic(e.to_string()))?;
+    assert_eq!(data.len(), size);
 
     Ok(Some((pos, data)))
 }
@@ -226,6 +231,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     let task1 = async {
         let mut tx = tx;
+        let mut last_seen = Vec::new();
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv(&mut buf));
             let sleep = Box::pin(os.sleep_us(100_000));
@@ -234,13 +240,18 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                     stats.borrow_mut().pack_recv += 1;
                     assert!(buf.len() >= 34);
 
-                    let chunk = handle_packet(buf, &mut chunks_info, &mut received).await?;
+                    let chunk =
+                        handle_packet(buf, &mut chunks_info, &mut received, &mut last_seen)?;
                     if let Some((pos, data)) = chunk {
                         tx.send((pos, data)).await;
                     }
 
-                    if received.len() > 128 {
-                        received.pop_last();
+                    assert_eq!(last_seen.len(), received.len());
+                    if last_seen.len() > 128 {
+                        let hash = last_seen.remove(0);
+                        received
+                            .remove(&hash)
+                            .expect("last_seen should contain only received chunks");
                     }
                 }
                 Either::Right(((), _sleep)) => {
