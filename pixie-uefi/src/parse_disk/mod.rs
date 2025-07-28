@@ -7,6 +7,7 @@ use log::info;
 use pixie_shared::MAX_CHUNK_SIZE;
 
 mod ext4;
+mod fat;
 mod gpt;
 mod ntfs;
 mod swap;
@@ -31,7 +32,14 @@ fn le64_32_32(buf: &[u8], lo: usize, hi: usize) -> u64 {
 
 /// Returns chunks *relative to the start of the partition*.
 async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkInfo>> {
-    if let Some(chunks) = ext4::get_ext4_chunks(disk, start, end).await? {
+    if let Some(chunks) = fat::get_fat_chunks(disk, start, end).await? {
+        info!(
+            "FAT partition with {} chunks of size {}",
+            chunks.len(),
+            BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
+        );
+        Ok(chunks)
+    } else if let Some(chunks) = ext4::get_ext4_chunks(disk, start, end).await? {
         info!(
             "Ext4 partition with {} chunks of size {}",
             chunks.len(),
