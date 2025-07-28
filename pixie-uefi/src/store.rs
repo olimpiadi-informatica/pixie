@@ -75,34 +75,11 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
     );
 
-    // Split up chunks.
-    let mut final_chunks = Vec::<ChunkInfo>::new();
-    for ChunkInfo { mut start, size } in chunks {
-        let end = start + size;
-
-        if let Some(last) = final_chunks.last() {
-            assert!(last.start + last.size <= start);
-            if last.start + last.size == start {
-                start = last.start;
-                final_chunks.pop();
-            }
-        }
-
-        while start < end {
-            let split = (start + 1).next_multiple_of(MAX_CHUNK_SIZE).min(end);
-            final_chunks.push(ChunkInfo {
-                start,
-                size: split - start,
-            });
-            start = split;
-        }
-    }
-
     let udp = os.udp_bind(None).await?;
     let stream_get_csize = os.connect(server_address).await?;
     let stream_upload_chunk = os.connect(server_address).await?;
 
-    let total = final_chunks.len();
+    let total = chunks.len();
 
     let mut total_size = 0;
     let mut total_csize = 0;
@@ -119,7 +96,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
 
     let task1 = async {
         let mut tx1 = tx1;
-        for chunk_info in final_chunks {
+        for chunk_info in chunks {
             let mut data = vec![0; chunk_info.size];
             disk.read(chunk_info.start as u64, &mut data).await?;
             let cdata = compress(&data);
