@@ -2,6 +2,7 @@
 set -xe
 
 TEMPDIR=$(mktemp -d)
+DEV=""
 
 mkdir $TEMPDIR/mnt
 
@@ -9,6 +10,7 @@ cleanup() {
   # Ignore errors in cleanup.
   set +e
   umount -l -q $TEMPDIR/mnt
+  [ -z "$DEV" ] || losetup -d $DEV
   rm -rf $TEMPDIR
   # Kill descendants, but not itself.
   trap '' SIGTERM
@@ -41,7 +43,7 @@ if ! ip link show br-pixie; then
     ip addr add 10.0.0.1/8 brd 10.255.255.255 dev br-pixie
 fi
 
-RUST_BACKTRACE=short RUST_LOG=debug ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
+RUST_BACKTRACE=short RUST_LOG=debug RUST_LOG_STYLE=always ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
 
 run_qemu() {
     OVMF=/usr/share/OVMF/OVMF_CODE_4M.fd
@@ -64,11 +66,15 @@ run_qemu() {
 }
 
 truncate -s 8G $TEMPDIR/disk.img
-mkfs.ext4 $TEMPDIR/disk.img
-DEV=$(losetup --show --find $TEMPDIR/disk.img)
-mount $DEV $TEMPDIR/mnt
-cp ./pixie-server/target/debug/pixie-server $TEMPDIR/mnt
-umount $TEMPDIR/mnt
+echo -e "label: gpt\n- 1GiB - -\n- - L -" | sfdisk $TEMPDIR/disk.img
+DEV=$(losetup --partscan --show --find $TEMPDIR/disk.img)
+mkfs.ntfs -f ${DEV}p1
+mkfs.ext4 ${DEV}p2
+for PART in ${DEV}p*; do
+    mount $PART $TEMPDIR/mnt
+    cp ./pixie-server/target/debug/pixie-server $TEMPDIR/mnt
+    umount $TEMPDIR/mnt
+done
 losetup -d $DEV
 
 curl 'http://localhost:8080/admin/curr_action/all/store'
@@ -82,13 +88,15 @@ truncate -s 8G $TEMPDIR/disk.img
 curl 'http://localhost:8080/admin/curr_action/all/flash'
 run_qemu $TEMPDIR/flash-1.log
 
-DEV=$(losetup --show --find $TEMPDIR/disk.img)
-mount -o ro $DEV $TEMPDIR/mnt
-if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
-    echo "pixie-server does not contain the expected content"
-    exit 1
-fi
-umount $TEMPDIR/mnt
+DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
+for PART in ${DEV}p*; do
+    mount -o ro $PART $TEMPDIR/mnt
+    if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
+        echo "pixie-server does not contain the expected content"
+        exit 1
+    fi
+    umount $TEMPDIR/mnt
+done
 losetup -d $DEV
 
 # Check that we don't fetch any data if the disk contents have not changed.
@@ -96,13 +104,15 @@ losetup -d $DEV
 curl 'http://localhost:8080/admin/curr_action/all/flash'
 run_qemu $TEMPDIR/flash-2.log
 
-DEV=$(losetup --show --find $TEMPDIR/disk.img)
-mount $DEV $TEMPDIR/mnt
-if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
-    echo "pixie-server does not contain the expected content"
-    exit 1
-fi
-umount $TEMPDIR/mnt
+DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
+for PART in ${DEV}p*; do
+    mount -o ro $PART $TEMPDIR/mnt
+    if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
+        echo "pixie-server does not contain the expected content"
+        exit 1
+    fi
+    umount $TEMPDIR/mnt
+done
 losetup -d $DEV
 
 if ! grep "Disk scanned; 0 chunks to fetch" $TEMPDIR/flash-2.log &>/dev/null
