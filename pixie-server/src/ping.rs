@@ -5,7 +5,7 @@ use crate::{
     state::{State, UnitSelector},
 };
 use anyhow::{bail, Result};
-use pixie_shared::{PACKET_LEN, PING_PORT};
+use pixie_shared::{PING_PORT, UDP_BODY_LEN};
 use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
@@ -17,7 +17,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PING_PORT)).await?;
     log::info!("Listening on {}", socket.local_addr()?);
 
-    let mut buf = [0; PACKET_LEN];
+    let mut buf = [0; UDP_BODY_LEN];
     loop {
         let (len, peer_addr) = tokio::select! {
             x = socket.recv_from(&mut buf) => x?,
