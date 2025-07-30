@@ -6,8 +6,8 @@ use crate::{
 };
 use anyhow::{bail, ensure, Context, Result};
 use pixie_shared::{
-    ChunkHash, HintPacket, RegistrationInfo, UdpRequest, ACTION_PORT, BODY_LEN, CHUNKS_PORT,
-    HINT_PORT, PACKET_LEN,
+    chunk_codec::Encoder, ChunkHash, HintPacket, RegistrationInfo, UdpRequest, ACTION_PORT,
+    CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
 };
 use std::{
     collections::BTreeSet,
@@ -28,7 +28,7 @@ async fn broadcast_chunks(
     mut rx: Receiver<ChunkHash>,
 ) -> Result<()> {
     let mut queue = BTreeSet::<ChunkHash>::new();
-    let mut write_buf = [0; PACKET_LEN];
+    let mut write_buf = [0; UDP_BODY_LEN];
     let mut wait_for = Instant::now();
     let mut index = [0; 32];
 
@@ -67,7 +67,7 @@ async fn broadcast_chunks(
             _ = state.cancel_token.cancelled() => break,
         };
 
-        let Some(data) = state
+        let Some(cdata) = state
             .get_chunk_cdata(index)
             .with_context(|| format!("get chunk {}", hex::encode(index)))?
         else {
@@ -75,40 +75,16 @@ async fn broadcast_chunks(
             continue;
         };
 
-        let num_packets = data.len().div_ceil(BODY_LEN);
-        write_buf[..32].clone_from_slice(&index);
-
-        let mut xor = [[0; BODY_LEN]; 32];
-
         let hosts_cfg = &state.config.hosts;
         let chunks_addr = SocketAddrV4::new(ip, CHUNKS_PORT);
 
-        for index in 0..num_packets {
-            write_buf[32..34].clone_from_slice(&(index as u16).to_le_bytes());
-            let start = index * BODY_LEN;
-            let len = BODY_LEN.min(data.len() - start);
-            let body = &data[start..start + len];
-            let group = index & 31;
-            body.iter()
-                .zip(xor[group].iter_mut())
-                .for_each(|(a, b)| *b ^= a);
-            write_buf[34..34 + len].clone_from_slice(body);
-
+        let mut encoder = Encoder::new(cdata);
+        write_buf[..32].clone_from_slice(&index);
+        while let Some(len) = encoder.next_packet(&mut write_buf[32..]) {
             time::sleep_until(wait_for).await;
 
-            let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
-            ensure!(sent_len == 34 + len, "Could not send packet");
-            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
-        }
-
-        for (index, body) in xor.iter().enumerate().take(num_packets) {
-            write_buf[32..34].clone_from_slice(&(index as u16).wrapping_sub(32).to_le_bytes());
-            let len = BODY_LEN;
-            write_buf[34..34 + len].clone_from_slice(body);
-
-            time::sleep_until(wait_for).await;
-            let sent_len = socket.send_to(&write_buf[..34 + len], chunks_addr).await?;
-            ensure!(sent_len == 34 + len, "Could not send packet");
+            let sent_len = socket.send_to(&write_buf[..32 + len], chunks_addr).await?;
+            ensure!(sent_len == 32 + len, "Could not send packet");
             wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
         }
     }
@@ -190,7 +166,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
 }
 
 async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
-    let mut buf = [0; PACKET_LEN];
+    let mut buf = [0; UDP_BODY_LEN];
     loop {
         let (len, addr) = tokio::select! {
             x = socket.recv_from(&mut buf) => x?,

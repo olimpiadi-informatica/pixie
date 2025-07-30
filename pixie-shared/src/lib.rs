@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod bijection;
+pub mod chunk_codec;
 #[cfg(feature = "std")]
 pub mod config;
 
@@ -110,9 +111,7 @@ pub struct HintPacket {
 }
 
 /// The maximum number of bytes in a udp packet with mtu 1500
-pub const PACKET_LEN: usize = 1472;
-pub const HEADER_LEN: usize = 34;
-pub const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
+pub const UDP_BODY_LEN: usize = 1472;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

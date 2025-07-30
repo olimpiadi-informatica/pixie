@@ -8,7 +8,7 @@ on:
 
 jobs:
   clippy:
-    name: Format & Clippy
+    name: Cargo Format & Clippy & Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,6 +31,7 @@ jobs:
             pushd $t
             cargo fmt --check
             cargo clippy -- -D warnings
+            cargo test --no-fail-fast --all-features
             popd
           done
 

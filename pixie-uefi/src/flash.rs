@@ -11,36 +11,9 @@ use futures::future::{select, Either};
 use log::info;
 use lz4_flex::decompress;
 use pixie_shared::{
-    ChunkHash, Image, TcpRequest, UdpRequest, BODY_LEN, CHUNKS_PORT, HEADER_LEN, MAX_CHUNK_SIZE,
+    chunk_codec::Decoder, ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT, MAX_CHUNK_SIZE,
 };
 use uefi::proto::console::text::Color;
-
-struct PartialChunk {
-    data: Vec<u8>,
-    missing_first: Vec<bool>,
-    missing_second: [u16; 32],
-    missing_third: u16,
-}
-
-impl PartialChunk {
-    fn new(csize: usize) -> Self {
-        let num_packets = csize.div_ceil(BODY_LEN);
-        let data = vec![0; 32 * BODY_LEN + csize];
-        let missing_first = vec![true; 32 + num_packets];
-        let missing_second: [u16; 32] = (0..32)
-            .map(|i| ((num_packets + 31 - i) / 32) as u16)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let missing_third = missing_second.iter().map(|&x| (x != 0) as u16).sum();
-        PartialChunk {
-            data,
-            missing_first,
-            missing_second,
-            missing_third,
-        }
-    }
-}
 
 async fn fetch_image(stream: &TcpStream) -> Result<Image> {
     let req = TcpRequest::GetImage;
@@ -65,76 +38,32 @@ struct Stats {
 fn handle_packet(
     buf: &[u8],
     chunks_info: &mut BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
-    received: &mut BTreeMap<ChunkHash, PartialChunk>,
+    received: &mut BTreeMap<ChunkHash, Decoder>,
     last_seen: &mut Vec<ChunkHash>,
 ) -> Result<Option<(Vec<usize>, Vec<u8>)>> {
     let hash: ChunkHash = buf[..32].try_into().unwrap();
-    let index = u16::from_le_bytes(buf[32..34].try_into().unwrap()) as usize;
     let csize = match chunks_info.get(&hash) {
         Some(&(_, csize, _)) => csize,
         _ => return Ok(None),
     };
 
-    let pchunk = received
-        .entry(hash)
-        .or_insert_with(|| PartialChunk::new(csize));
+    let decoder = received.entry(hash).or_insert_with(|| Decoder::new(csize));
     last_seen.retain(|x| x != &hash);
     last_seen.push(hash);
 
-    let rot_index = (index as u16).wrapping_add(32) as usize;
-    match &mut pchunk.missing_first[rot_index] {
-        false => return Ok(None),
-        x @ true => *x = false,
+    if let Err(e) = decoder.add_packet(&buf[32..]) {
+        log::warn!("Received invalid packet for chunk {hash:02x?}: {e}");
+        return Ok(None);
     }
-
-    let start = rot_index * BODY_LEN;
-    pchunk.data[start..start + buf.len() - HEADER_LEN].clone_from_slice(&buf[HEADER_LEN..]);
-
-    let group = index & 31;
-    match &mut pchunk.missing_second[group] {
-        0 => return Ok(None),
-        x @ 1 => *x = 0,
-        x @ 2.. => {
-            *x -= 1;
-            return Ok(None);
-        }
-    }
-
-    match &mut pchunk.missing_third {
-        0 => unreachable!(),
-        x @ 1 => *x = 0,
-        x @ 2.. => {
-            *x -= 1;
-            return Ok(None);
-        }
-    }
+    let Some(cdata) = decoder.finish() else {
+        return Ok(None);
+    };
 
     let (size, _, pos) = chunks_info.remove(&hash).unwrap();
-    let mut pchunk = received.remove(&hash).unwrap();
+    received.remove(&hash).unwrap();
     last_seen.retain(|x| x != &hash);
 
-    let mut xor = [[0; BODY_LEN]; 32];
-    for packet in 0..pchunk.missing_first.len() {
-        if !pchunk.missing_first[packet] {
-            let group = packet & 31;
-            pchunk.data[BODY_LEN * packet..]
-                .iter()
-                .zip(xor[group].iter_mut())
-                .for_each(|(a, b)| *b ^= a);
-        }
-    }
-    for packet in 0..pchunk.missing_first.len() {
-        if pchunk.missing_first[packet] {
-            let group = packet & 31;
-            pchunk.data[BODY_LEN * packet..]
-                .iter_mut()
-                .zip(xor[group].iter())
-                .for_each(|(a, b)| *a = *b);
-        }
-    }
-
-    let data = decompress(&pchunk.data[32 * BODY_LEN..], size)
-        .map_err(|e| Error::Generic(e.to_string()))?;
+    let data = decompress(&cdata, size).map_err(|e| Error::Generic(e.to_string()))?;
     assert_eq!(data.len(), size);
 
     Ok(Some((pos, data)))
