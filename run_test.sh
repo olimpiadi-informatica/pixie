@@ -89,6 +89,7 @@ curl 'http://localhost:8080/admin/curr_action/all/flash'
 run_qemu $TEMPDIR/flash-1.log
 
 DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
+fsck -N ${DEV}p*
 for PART in ${DEV}p*; do
     mount -o ro $PART $TEMPDIR/mnt
     if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
@@ -105,6 +106,7 @@ curl 'http://localhost:8080/admin/curr_action/all/flash'
 run_qemu $TEMPDIR/flash-2.log
 
 DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
+fsck -N ${DEV}p*
 for PART in ${DEV}p*; do
     mount -o ro $PART $TEMPDIR/mnt
     if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
