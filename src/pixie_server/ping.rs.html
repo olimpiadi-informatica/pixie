@@ -5,7 +5,7 @@
 <a href=#5 id=5 data-nosnippet>5</a>    state::{State, UnitSelector},
 <a href=#6 id=6 data-nosnippet>6</a>};
 <a href=#7 id=7 data-nosnippet>7</a><span class="kw">use </span>anyhow::{bail, <span class="prelude-ty">Result</span>};
-<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>pixie_shared::{PACKET_LEN, PING_PORT};
+<a href=#8 id=8 data-nosnippet>8</a><span class="kw">use </span>pixie_shared::{PING_PORT, UDP_BODY_LEN};
 <a href=#9 id=9 data-nosnippet>9</a><span class="kw">use </span>std::{
 <a href=#10 id=10 data-nosnippet>10</a>    net::{IpAddr, Ipv4Addr},
 <a href=#11 id=11 data-nosnippet>11</a>    sync::Arc,
@@ -17,7 +17,7 @@
 <a href=#17 id=17 data-nosnippet>17</a>    <span class="kw">let </span>socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PING_PORT)).<span class="kw">await</span><span class="question-mark">?</span>;
 <a href=#18 id=18 data-nosnippet>18</a>    <span class="macro">log::info!</span>(<span class="string">"Listening on {}"</span>, socket.local_addr()<span class="question-mark">?</span>);
 <a href=#19 id=19 data-nosnippet>19</a>
-<a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0</span>; PACKET_LEN];
+<a href=#20 id=20 data-nosnippet>20</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = [<span class="number">0</span>; UDP_BODY_LEN];
 <a href=#21 id=21 data-nosnippet>21</a>    <span class="kw">loop </span>{
 <a href=#22 id=22 data-nosnippet>22</a>        <span class="kw">let </span>(len, peer_addr) = <span class="macro">tokio::select!</span> {
 <a href=#23 id=23 data-nosnippet>23</a>            x = socket.recv_from(<span class="kw-2">&amp;mut </span>buf) =&gt; x<span class="question-mark">?</span>,

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BODY_LEN","HEADER_LEN","MAX_SIZE","MIN_SIZE","PACKET_LEN"],"enum":["DecoderError"],"struct":["Decoder","Encoder"]};
