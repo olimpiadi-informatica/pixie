@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["get_ext4_chunks","get_ntfs_chunks","get_swap_chunks","le16","le32","le64","le64_32_32","parse_disk","parse_gpt","parse_partition"]};
+window.SIDEBAR_ITEMS = {"fn":["le16","le32","le64","le64_32_32","parse_disk","parse_partition","parse_partition_table"],"mod":["ext4","fat","gpt","ntfs","swap"]};
