@@ -9,7 +9,7 @@ blake3 = "1.8.2"
 clap = { version = "4.5.40", features = ["derive"] }
 env_logger = { version = "0.11.6", default-features = false, features = ["auto-color", "humantime"] }
 interfaces = "0.0.9"
-ipnet = { version = "2.9.0", features = ["serde"] }
+ipnet = { version = "2.11.0", features = ["serde"] }
 libc = "0.2.174"
 log = "0.4.27"
 macaddr = { version = "1.0.1", features = ["serde"] }
