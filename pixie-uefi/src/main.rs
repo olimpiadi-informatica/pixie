@@ -28,6 +28,9 @@ mod reboot_to_os;
 mod register;
 mod store;
 
+#[cfg(feature = "coverage")]
+mod export_cov;
+
 const MIN_MEMORY: u64 = 500 << 20;
 
 async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
@@ -63,6 +66,9 @@ async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
 }
 
 async fn shutdown(os: UefiOS) -> ! {
+    #[cfg(feature = "coverage")]
+    export_cov::export(os).await;
+
     log::info!("Shutting down...");
     os.sleep_us(1_000_000).await;
     os.shutdown()

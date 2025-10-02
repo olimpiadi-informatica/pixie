@@ -5,3 +5,4 @@ buildroot/pixie.tar.gz
 pixie-web/dist
 .*.swp
 pixie-shared/Cargo.lock
+/prof-out

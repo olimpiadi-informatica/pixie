@@ -43,7 +43,7 @@ if ! ip link show br-pixie; then
     ip addr add 10.0.0.1/8 brd 10.255.255.255 dev br-pixie
 fi
 
-RUST_BACKTRACE=short RUST_LOG=debug RUST_LOG_STYLE=always ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
+RUST_BACKTRACE=short RUST_LOG=debug RUST_LOG_STYLE=always LLVM_PROFILE_FILE=prof-out/pixie-server-%m-%p.profraw ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
 
 run_qemu() {
     OVMF=/usr/share/OVMF/OVMF_CODE_4M.fd
@@ -51,6 +51,8 @@ run_qemu() {
     then
       OVMF=/usr/share/edk2/x64/OVMF_CODE.4m.fd
     fi
+    FILE=prof-out/pixie-uefi-$RANDOM.profraw
+    truncate -s 500M $FILE
     qemu-system-x86_64 \
         -nographic \
         -chardev stdio,id=char0,logfile=$1,signal=off \
@@ -61,6 +63,7 @@ run_qemu() {
         -m 1G \
         -drive if=pflash,format=raw,file=$OVMF \
         -drive file=$TEMPDIR/disk.img,if=none,id=nvm,format=raw \
+        -drive file=$FILE,format=raw \
         -device nvme,serial=deadbeef,drive=nvm \
         -nic bridge,mac=52:54:00:12:34:56,br=br-pixie,model=virtio-net-pci
 }

@@ -50,18 +50,46 @@ pub struct Disk {
 // available; support having more than one disk.
 impl Disk {
     pub fn new(os: UefiOS) -> Disk {
-        let handle = uefi::boot::find_handles::<DiskIo>()
+        let (_size, handle) = uefi::boot::find_handles::<DiskIo>()
             .unwrap()
             .into_iter()
-            .find(|handle| {
-                let op = open_disk(*handle);
-                if let Ok((_, block)) = op {
-                    if block.media().is_media_present() {
-                        return true;
-                    }
+            .filter_map(|handle| {
+                let op = open_disk(handle);
+                let Ok((_, block)) = op else {
+                    return None;
+                };
+                let m = block.media();
+                if !m.is_media_present() {
+                    return None;
                 }
-                false
+                let size = (m.last_block() as u128 + 1) * (m.block_size() as u128);
+                Some((size, handle))
             })
+            .max_by_key(|(size, _)| *size)
+            .expect("Disk not found");
+
+        let (disk, block) = open_disk(handle).unwrap();
+        Disk { disk, block, os }
+    }
+
+    #[cfg(feature = "coverage")]
+    pub fn open_with_size(os: UefiOS, base_size: i64) -> Disk {
+        let (_size, handle) = uefi::boot::find_handles::<DiskIo>()
+            .unwrap()
+            .into_iter()
+            .filter_map(|handle| {
+                let op = open_disk(handle);
+                let Ok((_, block)) = op else {
+                    return None;
+                };
+                let m = block.media();
+                if !m.is_media_present() {
+                    return None;
+                }
+                let size = (m.last_block() as i64 + 1) * (m.block_size() as i64);
+                Some(((size - base_size).abs(), handle))
+            })
+            .min_by_key(|(size, _)| *size)
             .expect("Disk not found");
 
         let (disk, block) = open_disk(handle).unwrap();
@@ -81,6 +109,13 @@ impl Disk {
         Ok(self
             .disk
             .read_disk(self.block.media().media_id(), offset, buf)?)
+    }
+
+    #[cfg(feature = "coverage")]
+    pub fn write_(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        Ok(self
+            .disk
+            .write_disk(self.block.media().media_id(), offset, buf)?)
     }
 
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
