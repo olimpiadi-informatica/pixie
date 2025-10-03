@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["MIN_MEMORY"],"fn":["complete_action","get_action","main","run","server_discover","shutdown"],"mod":["flash","os","parse_disk","reboot_to_os","register","store"]};
+window.SIDEBAR_ITEMS = {"constant":["MIN_MEMORY"],"fn":["complete_action","get_action","main","run","server_discover","shutdown"],"mod":["export_cov","flash","os","parse_disk","reboot_to_os","register","store"]};
