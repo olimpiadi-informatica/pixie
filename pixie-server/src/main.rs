@@ -25,7 +25,7 @@ use tokio::{signal::unix::SignalKind, task::JoinHandle};
 ///
 /// This function searches the address in the arp cache, if it is not available it tries to
 /// populate it by pinging the peer.
-fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
+fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
     struct Zombie {
         inner: Child,
     }
@@ -40,8 +40,6 @@ fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
     if ip.is_loopback() {
         bail!("localhost not supported");
     }
-
-    let s = ip.to_string();
 
     // Repeat twice, sending a ping if looking at ip neigh the first time fails.
     for _ in 0..2 {
@@ -60,7 +58,7 @@ fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
             let line = line?;
             let mut parts = line.split(' ');
 
-            if parts.next() == Some(&s) {
+            if parts.next().and_then(|s| s.parse().ok()) == Some(ip) {
                 let mac = parts.nth(3).unwrap();
                 if let Ok(mac) = mac.parse() {
                     return Ok(mac);
@@ -69,7 +67,7 @@ fn find_mac(ip: Ipv4Addr) -> Result<MacAddr6> {
         }
 
         let _ = Command::new("ping")
-            .args([&s, "-c", "1", "-W", "0.1"])
+            .args([&ip.to_string(), "-c", "1", "-W", "0.1"])
             .stdout(Stdio::null())
             .spawn()?
             .wait();

@@ -142,7 +142,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                     data.station.image = images[(images
                         .iter()
                         .position(|x| x == &data.station.image)
-                        .ok_or(Error::Generic("Invalid image name".into()))?
+                        .ok_or(Error::msg("Invalid image name"))?
                         + 1)
                         % images.len()]
                     .clone();

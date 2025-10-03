@@ -11,7 +11,8 @@ use futures::future::{select, Either};
 use log::info;
 use lz4_flex::decompress;
 use pixie_shared::{
-    chunk_codec::Decoder, ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT, MAX_CHUNK_SIZE,
+    chunk_codec::Decoder, util::BytesFmt, ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT,
+    MAX_CHUNK_SIZE,
 };
 use uefi::proto::console::text::Color;
 
@@ -168,7 +169,10 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         let mut last_seen = Vec::new();
         let total_mem = os.get_total_mem();
         let max_chunks = (total_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
-        log::debug!("Total memory: {total_mem}. Max chunks in memory: {max_chunks}");
+        log::debug!(
+            "Total memory: {}. Max chunks in memory: {max_chunks}",
+            BytesFmt(total_mem)
+        );
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv(&mut buf));
             let sleep = Box::pin(os.sleep_us(100_000));

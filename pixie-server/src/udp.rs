@@ -4,14 +4,14 @@ use crate::{
     find_mac, find_network,
     state::{State, UnitSelector},
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use pixie_shared::{
     chunk_codec::Encoder, ChunkHash, HintPacket, RegistrationInfo, UdpRequest, ACTION_PORT,
     CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
 };
 use std::{
     collections::BTreeSet,
-    net::{IpAddr, Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddrV4},
     ops::Bound,
     sync::Arc,
 };
@@ -168,20 +168,17 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
 async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
     let mut buf = [0; UDP_BODY_LEN];
     loop {
-        let (len, addr) = tokio::select! {
+        let (len, peer_addr) = tokio::select! {
             x = socket.recv_from(&mut buf) => x?,
             _ = state.cancel_token.cancelled() => break,
         };
         let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
             Ok(UdpRequest::Discover) => {
-                socket.send_to(&[], addr).await?;
+                socket.send_to(&[], peer_addr).await?;
             }
             Ok(UdpRequest::ActionProgress(frac, tot)) => {
-                let IpAddr::V4(peer_ip) = addr.ip() else {
-                    bail!("IPv6 is not supported")
-                };
-                match find_mac(peer_ip) {
+                match find_mac(peer_addr.ip()) {
                     Ok(peer_mac) => {
                         state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
                     }
@@ -196,7 +193,7 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
                 }
             }
             Err(e) => {
-                log::warn!("Invalid request from {addr}: {e}");
+                log::warn!("Invalid request from {peer_addr}: {e}");
             }
         }
     }

@@ -18,12 +18,13 @@ use alloc::{
 use core::{
     cell::{Ref, RefMut},
     ffi::c_void,
-    fmt::{self, Display, Write},
+    fmt::Write,
     future::{poll_fn, Future, PollFn},
     net::SocketAddrV4,
     ptr::NonNull,
     task::{Context, Poll},
 };
+use pixie_shared::util::BytesFmt;
 use uefi::{
     boot::{EventType, MemoryType, ScopedProtocol, TimerTrigger, Tpl},
     mem::memory_map::MemoryMap,
@@ -54,22 +55,6 @@ mod sync;
 mod timer;
 
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
-
-pub struct BytesFmt(pub u64);
-
-impl Display for BytesFmt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0 < (1 << 10) {
-            write!(f, "{}B", self.0)
-        } else if self.0 < (1 << 20) {
-            write!(f, "{:.2}KiB", self.0 as f64 / 1024.0)
-        } else if self.0 < (1 << 30) {
-            write!(f, "{:.2}MiB", self.0 as f64 / (1 << 20) as f64)
-        } else {
-            write!(f, "{:.2}GiB", self.0 as f64 / (1 << 30) as f64)
-        }
-    }
-}
 
 struct UefiOSImpl {
     timer: Timer,

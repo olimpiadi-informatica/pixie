@@ -1,46 +1,24 @@
-use std::{collections::HashMap, fmt, net::Ipv4Addr};
+use std::{collections::HashMap, net::Ipv4Addr};
 
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
+use gloo_net::http::Request;
+use js_sys::Uint8Array;
 use leptos::*;
 use leptos_use::{use_preferred_dark, use_timestamp};
-use pixie_shared::{Config, ImagesStats, StatusUpdate, Unit};
-use reqwest::Url;
+use pixie_shared::{util::BytesFmt, Config, ImagesStats, StatusUpdate, Unit};
 use thaw::{
     Button, ButtonColor, ButtonGroup, ButtonVariant, GlobalStyle, Popover, PopoverPlacement,
     PopoverTrigger, Space, Table, Theme, ThemeProvider,
 };
+use wasm_bindgen_futures::stream::JsStream;
 
 fn send_req(url: String) {
-    let url = if url.starts_with("http") {
-        Url::parse(&url).expect("invalid url")
-    } else {
-        let location = window().location();
-        Url::parse(&location.href().expect("no href"))
-            .expect("invalid href")
-            .join(&url)
-            .expect("invalid url")
-    };
     spawn_local(async move {
-        reqwest::get(url.clone())
+        Request::get(&url)
+            .send()
             .await
             .unwrap_or_else(|_| panic!("Request to {url} failed"));
     });
-}
-
-struct Bytes(u64);
-
-impl fmt::Display for Bytes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0 < 1024 {
-            write!(f, "{} B", self.0)
-        } else if self.0 < 1024 * 1024 {
-            write!(f, "{:.2} KiB", self.0 as f64 / 1024.0)
-        } else if self.0 < 1024 * 1024 * 1024 {
-            write!(f, "{:.2} MiB", self.0 as f64 / 1024.0 / 1024.0)
-        } else {
-            write!(f, "{:.2} GiB", self.0 as f64 / 1024.0 / 1024.0 / 1024.0)
-        }
-    }
 }
 
 #[component]
@@ -61,8 +39,8 @@ fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
             <tr>
                 <td>{name}</td>
                 <td>{version}</td>
-                <td>{Bytes(image.0).to_string()}</td>
-                <td>{Bytes(image.1).to_string()}</td>
+                <td>{BytesFmt(image.0).to_string()}</td>
+                <td>{BytesFmt(image.1).to_string()}</td>
                 <td>
                     <ButtonGroup>
                         {
@@ -133,14 +111,15 @@ fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
             <tr>
                 <td>"Total"</td>
                 <td></td>
-                <td>{move || Bytes(total_csize().unwrap_or_default()).to_string()}</td>
+                <td></td>
+                <td>{move || BytesFmt(total_csize().unwrap_or_default()).to_string()}</td>
                 <td></td>
             </tr>
             <tr>
                 <td>"Reclaimable"</td>
                 <td></td>
-                <td>{move || Bytes(reclaimable().unwrap_or_default()).to_string()}</td>
                 <td></td>
+                <td>{move || BytesFmt(reclaimable().unwrap_or_default()).to_string()}</td>
                 <td>
                     <Button
                         color=ButtonColor::Primary
@@ -341,12 +320,6 @@ fn App() -> impl IntoView {
             .unwrap_or_else(Vec::new)
     });
 
-    let location =
-        Url::parse(&window().location().href().expect("no href")).expect("invalid url href");
-    let status_url = location
-        .join("admin/status")
-        .expect("could not make relative URL");
-
     let handle_message = move |msg| match msg {
         StatusUpdate::Units(mut u) => {
             u.sort_by_key(|x| x.static_ip());
@@ -368,30 +341,25 @@ fn App() -> impl IntoView {
 
         let _disconnect = Disconnect(set_connected);
 
-        let stream = reqwest::get(status_url)
-            .await
-            .expect("could not connect to server");
-        let mut buf = vec![];
-        stream
-            .bytes_stream()
-            .for_each(|x| {
-                let data = x.unwrap();
-                let mut data = &data[..];
-                while let Some((newline_pos, _)) =
-                    data.iter().enumerate().find(|(_, x)| **x == b'\n')
-                {
-                    buf.extend_from_slice(&data[..newline_pos]);
-                    let msg: StatusUpdate =
-                        serde_json::from_slice(&buf).expect("invalid message from server");
-                    buf.clear();
-                    handle_message(msg);
-                    data = &data[newline_pos + 1..];
-                }
-                buf.extend_from_slice(data);
+        let req = Request::get("admin/status");
+        let res = req.send().await.expect("could not connect to server");
+        let body = res.body().expect("could not get body");
+        let js_stream = JsStream::from(body.values());
+        let mut stream = js_stream.map(|item| item.map(|js_val| Uint8Array::new(&js_val).to_vec()));
 
-                async {}
-            })
-            .await;
+        let mut buf = vec![];
+        while let Some(data) = stream.try_next().await.unwrap() {
+            let mut data = &data[..];
+            while let Some(newline_pos) = data.iter().position(|x| *x == b'\n') {
+                buf.extend_from_slice(&data[..newline_pos]);
+                let msg: StatusUpdate =
+                    serde_json::from_slice(&buf).expect("invalid message from server");
+                buf.clear();
+                handle_message(msg);
+                data = &data[newline_pos + 1..];
+            }
+            buf.extend_from_slice(data);
+        }
     });
 
     let time = use_timestamp();

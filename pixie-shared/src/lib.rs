@@ -6,6 +6,7 @@ pub mod bijection;
 pub mod chunk_codec;
 #[cfg(feature = "std")]
 pub mod config;
+pub mod util;
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use blake3::OUT_LEN;

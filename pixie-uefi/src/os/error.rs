@@ -1,5 +1,6 @@
 use alloc::{borrow::ToOwned, string::String};
 use core::fmt::{Display, Formatter};
+use derive_more::From;
 use smoltcp::socket::{
     tcp::{self, ConnectError, RecvError},
     udp::{self, BindError},
@@ -7,63 +8,21 @@ use smoltcp::socket::{
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;
 
-#[derive(Debug)]
+#[derive(Debug, From)]
 pub enum Error {
-    Connect(ConnectError),
-    TcpSend(tcp::SendError),
-    UdpSend(udp::SendError),
-    Recv(RecvError),
-    Bind(BindError),
-    Postcard(postcard::Error),
-    Uefi(uefi::Error),
+    Connect(#[from] ConnectError),
+    TcpSend(#[from] tcp::SendError),
+    UdpSend(#[from] udp::SendError),
+    Recv(#[from] RecvError),
+    Bind(#[from] BindError),
+    Postcard(#[from] postcard::Error),
+    Uefi(#[from] uefi::Error),
     Generic(String),
 }
 
 impl Error {
     pub fn msg(s: &str) -> Error {
         Error::Generic(s.to_owned())
-    }
-}
-
-impl From<ConnectError> for Error {
-    fn from(c: ConnectError) -> Self {
-        Error::Connect(c)
-    }
-}
-
-impl From<tcp::SendError> for Error {
-    fn from(c: tcp::SendError) -> Self {
-        Error::TcpSend(c)
-    }
-}
-
-impl From<udp::SendError> for Error {
-    fn from(c: udp::SendError) -> Self {
-        Error::UdpSend(c)
-    }
-}
-
-impl From<RecvError> for Error {
-    fn from(c: RecvError) -> Self {
-        Error::Recv(c)
-    }
-}
-
-impl From<BindError> for Error {
-    fn from(c: BindError) -> Self {
-        Error::Bind(c)
-    }
-}
-
-impl From<postcard::Error> for Error {
-    fn from(c: postcard::Error) -> Self {
-        Error::Postcard(c)
-    }
-}
-
-impl From<uefi::Error> for Error {
-    fn from(c: uefi::Error) -> Self {
-        Error::Uefi(c)
     }
 }
 

@@ -1,9 +1,10 @@
 use crate::{
-    os::{disk::Disk, error::Result, BytesFmt},
+    os::{disk::Disk, error::Result},
     store::ChunkInfo,
 };
 use alloc::vec::Vec;
 use log::info;
+use pixie_shared::util::BytesFmt;
 
 pub async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     let disk_size = disk.size() as usize;
@@ -17,7 +18,7 @@ pub async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
         let begin = partition.byte_start as usize;
         let end = partition.byte_end as usize;
         info!(
-            "Partition starting at {begin}, size {}",
+            "Partition starting at 0x{begin:x}, size {}",
             BytesFmt((end - begin) as u64)
         );
 

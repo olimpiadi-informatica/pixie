@@ -4,12 +4,12 @@ use crate::{
     find_mac,
     state::{State, UnitSelector},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use macaddr::MacAddr6;
 use pixie_shared::{TcpRequest, ACTION_PORT};
 use std::{
     io::ErrorKind,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 use tokio::{
@@ -57,10 +57,7 @@ async fn handle_connection(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
 ) -> Result<()> {
-    let IpAddr::V4(peer_ip) = peer_addr.ip() else {
-        bail!("IPv6 is not supported")
-    };
-    let peer_mac = match find_mac(peer_ip) {
+    let peer_mac = match find_mac(peer_addr.ip()) {
         Ok(peer_mac) => peer_mac,
         Err(err) => {
             log::error!("Error handling tcp connection: {err}");

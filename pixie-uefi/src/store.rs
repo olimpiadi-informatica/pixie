@@ -1,7 +1,7 @@
 use crate::{
     os::{
         error::{Error, Result},
-        mpsc, BytesFmt, TcpStream, UefiOS,
+        mpsc, TcpStream, UefiOS,
     },
     parse_disk, MIN_MEMORY,
 };
@@ -9,7 +9,7 @@ use alloc::{rc::Rc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
 use log::info;
 use lz4_flex::compress;
-use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use pixie_shared::{util::BytesFmt, Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
 use uefi::proto::console::text::Color;
 
 #[derive(Debug)]
@@ -87,7 +87,10 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let total_mem = os.get_total_mem();
     let channel_size =
         (total_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
-    log::debug!("Total memory: {total_mem}. Channel size: {channel_size}");
+    log::debug!(
+        "Total memory: {}. Channel size: {channel_size}",
+        BytesFmt(total_mem)
+    );
 
     let (tx1, mut rx1) = mpsc::channel(channel_size);
     let (tx2, mut rx2) = mpsc::channel(channel_size);
@@ -203,7 +206,11 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     // TODO(virv): this could be better
     stream_upload_chunk.force_close().await;
 
-    log::info!("image saved. Total size {total_size}, total csize {total_csize}");
+    log::info!(
+        "image saved. Total size {}, total csize {}",
+        BytesFmt(total_size as u64),
+        BytesFmt(total_csize as u64)
+    );
 
     Ok(())
 }

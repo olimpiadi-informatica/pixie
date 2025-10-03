@@ -69,11 +69,12 @@ run_qemu() {
 }
 
 truncate -s 8G $TEMPDIR/disk.img
-echo -e "label: gpt\n- 1GiB - -\n- - L -" | sfdisk $TEMPDIR/disk.img
+echo -e "label: gpt\n- 1GiB - -\n- 1GiB - -\n- - L -" | sfdisk $TEMPDIR/disk.img
 DEV=$(losetup --partscan --show --find $TEMPDIR/disk.img)
-mkfs.ntfs -f ${DEV}p1
-mkfs.ext4 ${DEV}p2
-for PART in ${DEV}p*; do
+mkswap ${DEV}p1
+mkfs.ntfs -f ${DEV}p2
+mkfs.ext4 ${DEV}p3
+for PART in ${DEV}p{2..3}; do
     mount $PART $TEMPDIR/mnt
     cp ./pixie-server/target/debug/pixie-server $TEMPDIR/mnt
     umount $TEMPDIR/mnt
@@ -92,8 +93,8 @@ curl 'http://localhost:8080/admin/curr_action/all/flash'
 run_qemu $TEMPDIR/flash-1.log
 
 DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
-fsck -N ${DEV}p*
-for PART in ${DEV}p*; do
+fsck -n ${DEV}p*
+for PART in ${DEV}p{2..3}; do
     mount -o ro $PART $TEMPDIR/mnt
     if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
         echo "pixie-server does not contain the expected content"
@@ -109,8 +110,8 @@ curl 'http://localhost:8080/admin/curr_action/all/flash'
 run_qemu $TEMPDIR/flash-2.log
 
 DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
-fsck -N ${DEV}p*
-for PART in ${DEV}p*; do
+fsck -n ${DEV}p*
+for PART in ${DEV}p{2..3}; do
     mount -o ro $PART $TEMPDIR/mnt
     if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
         echo "pixie-server does not contain the expected content"

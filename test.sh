@@ -15,7 +15,7 @@ LLVM_COV="$LLVM_TOOLS_DIR/llvm-cov"
 LLVM_PROFDATA="$LLVM_TOOLS_DIR/llvm-profdata"
 
 pushd pixie-shared
-RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/pixie-shared-test-%m-%p.profraw cargo +nightly test --no-fail-fast --all-features
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-shared-%m-%p.profraw cargo +nightly test --no-fail-fast --all-features
 popd
 
 pushd pixie-uefi
@@ -27,7 +27,7 @@ trunk build
 popd
 
 pushd pixie-server
-RUSTFLAGS='-C instrument-coverage' cargo +nightly build
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/build-pixie-server-%m-%p.profraw cargo +nightly build
 popd
 
 mkdir -p "${STORAGE_DIR}/tftpboot" "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks" "${STORAGE_DIR}/admin"

@@ -4,13 +4,9 @@ use crate::{
     find_mac,
     state::{State, UnitSelector},
 };
-use anyhow::{bail, Result};
+use anyhow::Result;
 use pixie_shared::{PING_PORT, UDP_BODY_LEN};
-use std::{
-    net::{IpAddr, Ipv4Addr},
-    sync::Arc,
-    time::SystemTime,
-};
+use std::{net::Ipv4Addr, sync::Arc, time::SystemTime};
 use tokio::net::UdpSocket;
 
 pub async fn main(state: Arc<State>) -> Result<()> {
@@ -23,10 +19,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             x = socket.recv_from(&mut buf) => x?,
             _ = state.cancel_token.cancelled() => break,
         };
-        let IpAddr::V4(peer_ip) = peer_addr.ip() else {
-            bail!("IPv6 is not supported")
-        };
-        let peer_mac = match find_mac(peer_ip) {
+        let peer_mac = match find_mac(peer_addr.ip()) {
             Ok(peer_mac) => peer_mac,
             Err(err) => {
                 log::error!("Error handling ping packet: {err}");
