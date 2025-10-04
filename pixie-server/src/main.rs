@@ -143,15 +143,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    let state2 = state.clone();
-    tokio::spawn(async move {
-        let mut sighup = tokio::signal::unix::signal(SignalKind::hangup())
-            .expect("failed to register SIGHUP handler");
-        while let Some(()) = sighup.recv().await {
-            state2.reload().unwrap();
-        }
-    });
-
     async fn flatten(task: JoinHandle<Result<()>>) -> Result<()> {
         task.await??;
         Ok(())

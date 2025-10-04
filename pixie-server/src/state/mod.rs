@@ -94,7 +94,7 @@ pub struct State {
     /// The config parsed from the config file.
     pub config: Config,
     /// The hostmap built from the hostmap file.
-    hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
+    pub hostmap: HashMap<Ipv4Addr, String>,
 
     units: watch::Sender<Vec<Unit>>,
     registration_hint: Mutex<Option<RegistrationInfo>>,
@@ -216,23 +216,13 @@ impl State {
             storage_dir,
             run_dir,
             config,
-            hostmap: watch::Sender::new(hostmap),
+            hostmap,
             units,
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
             cancel_token,
         })
-    }
-
-    pub fn reload(&self) -> Result<()> {
-        let hostmap = build_hostmap(self.config.hosts.hostsfile.as_deref())?;
-        self.hostmap.send_replace(hostmap);
-        Ok(())
-    }
-
-    pub fn subscribe_hostmap(&self) -> watch::Receiver<HashMap<Ipv4Addr, String>> {
-        self.hostmap.subscribe()
     }
 }
 

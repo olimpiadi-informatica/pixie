@@ -114,13 +114,9 @@ fn get_hosts(
 
 pub async fn main(state: Arc<State>) -> Result<()> {
     let mut units_rx = state.subscribe_units();
-    let mut hostmap_rx = state.subscribe_hostmap();
 
     write_config(&state).await?;
-    let mut hosts = get_hosts(
-        &hostmap_rx.borrow_and_update(),
-        &units_rx.borrow_and_update(),
-    );
+    let mut hosts = get_hosts(&state.hostmap, &units_rx.borrow_and_update());
     write_hosts(&state, &hosts).await?;
 
     let dnsmasq = DnsmasqHandle {
@@ -138,14 +134,10 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     loop {
         tokio::select! {
             ret = units_rx.changed() => ret.unwrap(),
-            ret = hostmap_rx.changed() => ret.unwrap(),
             _ = state.cancel_token.cancelled() => break,
         }
 
-        let hosts2 = get_hosts(
-            &hostmap_rx.borrow_and_update(),
-            &units_rx.borrow_and_update(),
-        );
+        let hosts2 = get_hosts(&state.hostmap, &units_rx.borrow_and_update());
         if hosts != hosts2 {
             hosts = hosts2;
             write_hosts(&state, &hosts).await?;

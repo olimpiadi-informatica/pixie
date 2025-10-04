@@ -156,19 +156,18 @@ async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoRespo
 ///
 /// Stream of json-formatted events on changes to the database.
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
-    let initial_messages = [StatusUpdate::Config(state.config.clone())];
+    let initial_messages = [
+        StatusUpdate::Config(state.config.clone()),
+        StatusUpdate::HostMap(state.hostmap.clone()),
+    ];
 
     let units_rx = WatchStream::new(state.subscribe_units());
     let image_rx = WatchStream::new(state.subscribe_images());
-    let hostmap_rx = WatchStream::new(state.subscribe_hostmap());
 
     let messages = futures::stream::iter(initial_messages)
         .chain(futures::stream::select(
-            futures::stream::select(
-                image_rx.map(StatusUpdate::ImagesStats),
-                units_rx.map(StatusUpdate::Units),
-            ),
-            hostmap_rx.map(StatusUpdate::HostMap),
+            image_rx.map(StatusUpdate::ImagesStats),
+            units_rx.map(StatusUpdate::Units),
         ))
         .take_until(state.cancel_token.clone().cancelled_owned());
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
