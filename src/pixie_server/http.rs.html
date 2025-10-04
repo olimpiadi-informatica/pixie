@@ -156,65 +156,64 @@
 <a href=#156 id=156 data-nosnippet>156</a>///
 <a href=#157 id=157 data-nosnippet>157</a>/// Stream of json-formatted events on changes to the database.
 <a href=#158 id=158 data-nosnippet>158</a></span><span class="kw">async fn </span>status(extract::State(state): extract::State&lt;Arc&lt;State&gt;&gt;) -&gt; <span class="kw">impl </span>IntoResponse {
-<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">let </span>initial_messages = [StatusUpdate::Config(state.config.clone())];
-<a href=#160 id=160 data-nosnippet>160</a>
-<a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">let </span>units_rx = WatchStream::new(state.subscribe_units());
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="kw">let </span>image_rx = WatchStream::new(state.subscribe_images());
-<a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">let </span>hostmap_rx = WatchStream::new(state.subscribe_hostmap());
-<a href=#164 id=164 data-nosnippet>164</a>
-<a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">let </span>messages = futures::stream::iter(initial_messages)
-<a href=#166 id=166 data-nosnippet>166</a>        .chain(futures::stream::select(
-<a href=#167 id=167 data-nosnippet>167</a>            futures::stream::select(
-<a href=#168 id=168 data-nosnippet>168</a>                image_rx.map(StatusUpdate::ImagesStats),
-<a href=#169 id=169 data-nosnippet>169</a>                units_rx.map(StatusUpdate::Units),
-<a href=#170 id=170 data-nosnippet>170</a>            ),
-<a href=#171 id=171 data-nosnippet>171</a>            hostmap_rx.map(StatusUpdate::HostMap),
-<a href=#172 id=172 data-nosnippet>172</a>        ))
-<a href=#173 id=173 data-nosnippet>173</a>        .take_until(state.cancel_token.clone().cancelled_owned());
-<a href=#174 id=174 data-nosnippet>174</a>    <span class="kw">let </span>lines = messages.map(|msg| serde_json::to_string(<span class="kw-2">&amp;</span>msg).map(|x| x + <span class="string">"\n"</span>));
-<a href=#175 id=175 data-nosnippet>175</a>
-<a href=#176 id=176 data-nosnippet>176</a>    Response::builder()
-<a href=#177 id=177 data-nosnippet>177</a>        .header(<span class="string">"Content-Type"</span>, <span class="string">"application/json"</span>)
-<a href=#178 id=178 data-nosnippet>178</a>        .header(<span class="string">"Cache-Control"</span>, <span class="string">"no-cache"</span>)
-<a href=#179 id=179 data-nosnippet>179</a>        .header(<span class="string">"X-Accel-Buffering"</span>, <span class="string">"no"</span>)
-<a href=#180 id=180 data-nosnippet>180</a>        .body(Body::from_stream(lines))
-<a href=#181 id=181 data-nosnippet>181</a>        .unwrap()
-<a href=#182 id=182 data-nosnippet>182</a>}
-<a href=#183 id=183 data-nosnippet>183</a>
-<a href=#184 id=184 data-nosnippet>184</a><span class="kw">pub async fn </span>main(state: Arc&lt;State&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#185 id=185 data-nosnippet>185</a>    <span class="kw">let </span>HttpConfig {
-<a href=#186 id=186 data-nosnippet>186</a>        listen_on,
-<a href=#187 id=187 data-nosnippet>187</a>        <span class="kw-2">ref </span>password,
-<a href=#188 id=188 data-nosnippet>188</a>    } = state.config.http;
-<a href=#189 id=189 data-nosnippet>189</a>
-<a href=#190 id=190 data-nosnippet>190</a>    <span class="kw">let </span>admin_path = state.storage_dir.join(<span class="string">"admin"</span>);
-<a href=#191 id=191 data-nosnippet>191</a>
-<a href=#192 id=192 data-nosnippet>192</a>    <span class="kw">let </span><span class="kw-2">mut </span>router = Router::new()
-<a href=#193 id=193 data-nosnippet>193</a>        .route(<span class="string">"/admin/status"</span>, get(status))
-<a href=#194 id=194 data-nosnippet>194</a>        .route(<span class="string">"/admin/gc"</span>, get(gc))
-<a href=#195 id=195 data-nosnippet>195</a>        .route(<span class="string">"/admin/action/:unit_selector/:action"</span>, get(action))
-<a href=#196 id=196 data-nosnippet>196</a>        .route(
-<a href=#197 id=197 data-nosnippet>197</a>            <span class="string">"/admin/curr_action/:unit_selector/:action"</span>,
-<a href=#198 id=198 data-nosnippet>198</a>            get(curr_action),
-<a href=#199 id=199 data-nosnippet>199</a>        )
-<a href=#200 id=200 data-nosnippet>200</a>        .route(<span class="string">"/admin/image/:unit_selector/:image"</span>, get(image))
-<a href=#201 id=201 data-nosnippet>201</a>        .route(<span class="string">"/admin/forget/:unit_selector"</span>, get(forget))
-<a href=#202 id=202 data-nosnippet>202</a>        .route(<span class="string">"/admin/rollback/:image"</span>, get(rollback))
-<a href=#203 id=203 data-nosnippet>203</a>        .route(<span class="string">"/admin/delete/:image"</span>, get(delete_image))
-<a href=#204 id=204 data-nosnippet>204</a>        .nest_service(
-<a href=#205 id=205 data-nosnippet>205</a>            <span class="string">"/"</span>,
-<a href=#206 id=206 data-nosnippet>206</a>            ServeDir::new(<span class="kw-2">&amp;</span>admin_path).append_index_html_on_directories(<span class="bool-val">true</span>),
-<a href=#207 id=207 data-nosnippet>207</a>        );
-<a href=#208 id=208 data-nosnippet>208</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(password) = password {
-<a href=#209 id=209 data-nosnippet>209</a>        router = router.layer(ValidateRequestHeaderLayer::basic(<span class="string">"admin"</span>, password));
-<a href=#210 id=210 data-nosnippet>210</a>    }
-<a href=#211 id=211 data-nosnippet>211</a>    router = router.layer(TraceLayer::new_for_http());
-<a href=#212 id=212 data-nosnippet>212</a>
-<a href=#213 id=213 data-nosnippet>213</a>    <span class="kw">let </span>shutdown_token = state.cancel_token.clone().cancelled_owned();
-<a href=#214 id=214 data-nosnippet>214</a>    <span class="kw">let </span>listener = TcpListener::bind(listen_on).<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#215 id=215 data-nosnippet>215</a>    axum::serve(listener, router.with_state(state))
-<a href=#216 id=216 data-nosnippet>216</a>        .with_graceful_shutdown(shutdown_token)
-<a href=#217 id=217 data-nosnippet>217</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
-<a href=#218 id=218 data-nosnippet>218</a>
-<a href=#219 id=219 data-nosnippet>219</a>    <span class="prelude-val">Ok</span>(())
-<a href=#220 id=220 data-nosnippet>220</a>}</code></pre></div></section></main></body></html>
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="kw">let </span>initial_messages = [
+<a href=#160 id=160 data-nosnippet>160</a>        StatusUpdate::Config(state.config.clone()),
+<a href=#161 id=161 data-nosnippet>161</a>        StatusUpdate::HostMap(state.hostmap.clone()),
+<a href=#162 id=162 data-nosnippet>162</a>    ];
+<a href=#163 id=163 data-nosnippet>163</a>
+<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">let </span>units_rx = WatchStream::new(state.subscribe_units());
+<a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">let </span>image_rx = WatchStream::new(state.subscribe_images());
+<a href=#166 id=166 data-nosnippet>166</a>
+<a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">let </span>messages = futures::stream::iter(initial_messages)
+<a href=#168 id=168 data-nosnippet>168</a>        .chain(futures::stream::select(
+<a href=#169 id=169 data-nosnippet>169</a>            image_rx.map(StatusUpdate::ImagesStats),
+<a href=#170 id=170 data-nosnippet>170</a>            units_rx.map(StatusUpdate::Units),
+<a href=#171 id=171 data-nosnippet>171</a>        ))
+<a href=#172 id=172 data-nosnippet>172</a>        .take_until(state.cancel_token.clone().cancelled_owned());
+<a href=#173 id=173 data-nosnippet>173</a>    <span class="kw">let </span>lines = messages.map(|msg| serde_json::to_string(<span class="kw-2">&amp;</span>msg).map(|x| x + <span class="string">"\n"</span>));
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>    Response::builder()
+<a href=#176 id=176 data-nosnippet>176</a>        .header(<span class="string">"Content-Type"</span>, <span class="string">"application/json"</span>)
+<a href=#177 id=177 data-nosnippet>177</a>        .header(<span class="string">"Cache-Control"</span>, <span class="string">"no-cache"</span>)
+<a href=#178 id=178 data-nosnippet>178</a>        .header(<span class="string">"X-Accel-Buffering"</span>, <span class="string">"no"</span>)
+<a href=#179 id=179 data-nosnippet>179</a>        .body(Body::from_stream(lines))
+<a href=#180 id=180 data-nosnippet>180</a>        .unwrap()
+<a href=#181 id=181 data-nosnippet>181</a>}
+<a href=#182 id=182 data-nosnippet>182</a>
+<a href=#183 id=183 data-nosnippet>183</a><span class="kw">pub async fn </span>main(state: Arc&lt;State&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#184 id=184 data-nosnippet>184</a>    <span class="kw">let </span>HttpConfig {
+<a href=#185 id=185 data-nosnippet>185</a>        listen_on,
+<a href=#186 id=186 data-nosnippet>186</a>        <span class="kw-2">ref </span>password,
+<a href=#187 id=187 data-nosnippet>187</a>    } = state.config.http;
+<a href=#188 id=188 data-nosnippet>188</a>
+<a href=#189 id=189 data-nosnippet>189</a>    <span class="kw">let </span>admin_path = state.storage_dir.join(<span class="string">"admin"</span>);
+<a href=#190 id=190 data-nosnippet>190</a>
+<a href=#191 id=191 data-nosnippet>191</a>    <span class="kw">let </span><span class="kw-2">mut </span>router = Router::new()
+<a href=#192 id=192 data-nosnippet>192</a>        .route(<span class="string">"/admin/status"</span>, get(status))
+<a href=#193 id=193 data-nosnippet>193</a>        .route(<span class="string">"/admin/gc"</span>, get(gc))
+<a href=#194 id=194 data-nosnippet>194</a>        .route(<span class="string">"/admin/action/:unit_selector/:action"</span>, get(action))
+<a href=#195 id=195 data-nosnippet>195</a>        .route(
+<a href=#196 id=196 data-nosnippet>196</a>            <span class="string">"/admin/curr_action/:unit_selector/:action"</span>,
+<a href=#197 id=197 data-nosnippet>197</a>            get(curr_action),
+<a href=#198 id=198 data-nosnippet>198</a>        )
+<a href=#199 id=199 data-nosnippet>199</a>        .route(<span class="string">"/admin/image/:unit_selector/:image"</span>, get(image))
+<a href=#200 id=200 data-nosnippet>200</a>        .route(<span class="string">"/admin/forget/:unit_selector"</span>, get(forget))
+<a href=#201 id=201 data-nosnippet>201</a>        .route(<span class="string">"/admin/rollback/:image"</span>, get(rollback))
+<a href=#202 id=202 data-nosnippet>202</a>        .route(<span class="string">"/admin/delete/:image"</span>, get(delete_image))
+<a href=#203 id=203 data-nosnippet>203</a>        .nest_service(
+<a href=#204 id=204 data-nosnippet>204</a>            <span class="string">"/"</span>,
+<a href=#205 id=205 data-nosnippet>205</a>            ServeDir::new(<span class="kw-2">&amp;</span>admin_path).append_index_html_on_directories(<span class="bool-val">true</span>),
+<a href=#206 id=206 data-nosnippet>206</a>        );
+<a href=#207 id=207 data-nosnippet>207</a>    <span class="kw">if let </span><span class="prelude-val">Some</span>(password) = password {
+<a href=#208 id=208 data-nosnippet>208</a>        router = router.layer(ValidateRequestHeaderLayer::basic(<span class="string">"admin"</span>, password));
+<a href=#209 id=209 data-nosnippet>209</a>    }
+<a href=#210 id=210 data-nosnippet>210</a>    router = router.layer(TraceLayer::new_for_http());
+<a href=#211 id=211 data-nosnippet>211</a>
+<a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">let </span>shutdown_token = state.cancel_token.clone().cancelled_owned();
+<a href=#213 id=213 data-nosnippet>213</a>    <span class="kw">let </span>listener = TcpListener::bind(listen_on).<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#214 id=214 data-nosnippet>214</a>    axum::serve(listener, router.with_state(state))
+<a href=#215 id=215 data-nosnippet>215</a>        .with_graceful_shutdown(shutdown_token)
+<a href=#216 id=216 data-nosnippet>216</a>        .<span class="kw">await</span><span class="question-mark">?</span>;
+<a href=#217 id=217 data-nosnippet>217</a>
+<a href=#218 id=218 data-nosnippet>218</a>    <span class="prelude-val">Ok</span>(())
+<a href=#219 id=219 data-nosnippet>219</a>}</code></pre></div></section></main></body></html>

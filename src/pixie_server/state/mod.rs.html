@@ -94,7 +94,7 @@
 <a href=#94 id=94 data-nosnippet>94</a>    <span class="doccomment">/// The config parsed from the config file.
 <a href=#95 id=95 data-nosnippet>95</a>    </span><span class="kw">pub </span>config: Config,
 <a href=#96 id=96 data-nosnippet>96</a>    <span class="doccomment">/// The hostmap built from the hostmap file.
-<a href=#97 id=97 data-nosnippet>97</a>    </span>hostmap: watch::Sender&lt;HashMap&lt;Ipv4Addr, String&gt;&gt;,
+<a href=#97 id=97 data-nosnippet>97</a>    </span><span class="kw">pub </span>hostmap: HashMap&lt;Ipv4Addr, String&gt;,
 <a href=#98 id=98 data-nosnippet>98</a>
 <a href=#99 id=99 data-nosnippet>99</a>    units: watch::Sender&lt;Vec&lt;Unit&gt;&gt;,
 <a href=#100 id=100 data-nosnippet>100</a>    registration_hint: Mutex&lt;<span class="prelude-ty">Option</span>&lt;RegistrationInfo&gt;&gt;,
@@ -216,7 +216,7 @@
 <a href=#216 id=216 data-nosnippet>216</a>            storage_dir,
 <a href=#217 id=217 data-nosnippet>217</a>            run_dir,
 <a href=#218 id=218 data-nosnippet>218</a>            config,
-<a href=#219 id=219 data-nosnippet>219</a>            hostmap: watch::Sender::new(hostmap),
+<a href=#219 id=219 data-nosnippet>219</a>            hostmap,
 <a href=#220 id=220 data-nosnippet>220</a>            units,
 <a href=#221 id=221 data-nosnippet>221</a>            registration_hint: Mutex::new(<span class="prelude-val">None</span>),
 <a href=#222 id=222 data-nosnippet>222</a>            images_stats: watch::Sender::new(images_stats),
@@ -224,22 +224,12 @@
 <a href=#224 id=224 data-nosnippet>224</a>            cancel_token,
 <a href=#225 id=225 data-nosnippet>225</a>        })
 <a href=#226 id=226 data-nosnippet>226</a>    }
-<a href=#227 id=227 data-nosnippet>227</a>
-<a href=#228 id=228 data-nosnippet>228</a>    <span class="kw">pub fn </span>reload(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#229 id=229 data-nosnippet>229</a>        <span class="kw">let </span>hostmap = build_hostmap(<span class="self">self</span>.config.hosts.hostsfile.as_deref())<span class="question-mark">?</span>;
-<a href=#230 id=230 data-nosnippet>230</a>        <span class="self">self</span>.hostmap.send_replace(hostmap);
-<a href=#231 id=231 data-nosnippet>231</a>        <span class="prelude-val">Ok</span>(())
-<a href=#232 id=232 data-nosnippet>232</a>    }
-<a href=#233 id=233 data-nosnippet>233</a>
-<a href=#234 id=234 data-nosnippet>234</a>    <span class="kw">pub fn </span>subscribe_hostmap(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; watch::Receiver&lt;HashMap&lt;Ipv4Addr, String&gt;&gt; {
-<a href=#235 id=235 data-nosnippet>235</a>        <span class="self">self</span>.hostmap.subscribe()
-<a href=#236 id=236 data-nosnippet>236</a>    }
-<a href=#237 id=237 data-nosnippet>237</a>}
-<a href=#238 id=238 data-nosnippet>238</a>
-<a href=#239 id=239 data-nosnippet>239</a><span class="kw">impl </span>Drop <span class="kw">for </span>State {
-<a href=#240 id=240 data-nosnippet>240</a>    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
-<a href=#241 id=241 data-nosnippet>241</a>        <span class="comment">// If we fail to remove the directory it's not an issue as it will be deleted on shutdown
-<a href=#242 id=242 data-nosnippet>242</a>        // and doesn't take much space.
-<a href=#243 id=243 data-nosnippet>243</a>        </span><span class="kw">let _ </span>= std::fs::remove_dir_all(<span class="kw-2">&amp;</span><span class="self">self</span>.run_dir);
-<a href=#244 id=244 data-nosnippet>244</a>    }
-<a href=#245 id=245 data-nosnippet>245</a>}</code></pre></div></section></main></body></html>
+<a href=#227 id=227 data-nosnippet>227</a>}
+<a href=#228 id=228 data-nosnippet>228</a>
+<a href=#229 id=229 data-nosnippet>229</a><span class="kw">impl </span>Drop <span class="kw">for </span>State {
+<a href=#230 id=230 data-nosnippet>230</a>    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+<a href=#231 id=231 data-nosnippet>231</a>        <span class="comment">// If we fail to remove the directory it's not an issue as it will be deleted on shutdown
+<a href=#232 id=232 data-nosnippet>232</a>        // and doesn't take much space.
+<a href=#233 id=233 data-nosnippet>233</a>        </span><span class="kw">let _ </span>= std::fs::remove_dir_all(<span class="kw-2">&amp;</span><span class="self">self</span>.run_dir);
+<a href=#234 id=234 data-nosnippet>234</a>    }
+<a href=#235 id=235 data-nosnippet>235</a>}</code></pre></div></section></main></body></html>

@@ -143,27 +143,18 @@
 <a href=#143 id=143 data-nosnippet>143</a>        }
 <a href=#144 id=144 data-nosnippet>144</a>    });
 <a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">let </span>state2 = state.clone();
-<a href=#147 id=147 data-nosnippet>147</a>    tokio::spawn(<span class="kw">async move </span>{
-<a href=#148 id=148 data-nosnippet>148</a>        <span class="kw">let </span><span class="kw-2">mut </span>sighup = tokio::signal::unix::signal(SignalKind::hangup())
-<a href=#149 id=149 data-nosnippet>149</a>            .expect(<span class="string">"failed to register SIGHUP handler"</span>);
-<a href=#150 id=150 data-nosnippet>150</a>        <span class="kw">while let </span><span class="prelude-val">Some</span>(()) = sighup.recv().<span class="kw">await </span>{
-<a href=#151 id=151 data-nosnippet>151</a>            state2.reload().unwrap();
-<a href=#152 id=152 data-nosnippet>152</a>        }
-<a href=#153 id=153 data-nosnippet>153</a>    });
-<a href=#154 id=154 data-nosnippet>154</a>
-<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">async fn </span>flatten(task: JoinHandle&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
-<a href=#156 id=156 data-nosnippet>156</a>        task.<span class="kw">await</span><span class="question-mark">??</span>;
-<a href=#157 id=157 data-nosnippet>157</a>        <span class="prelude-val">Ok</span>(())
-<a href=#158 id=158 data-nosnippet>158</a>    }
-<a href=#159 id=159 data-nosnippet>159</a>
-<a href=#160 id=160 data-nosnippet>160</a>    <span class="kw">let </span>dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
-<a href=#161 id=161 data-nosnippet>161</a>    <span class="kw">let </span>http_task = flatten(tokio::spawn(http::main(state.clone())));
-<a href=#162 id=162 data-nosnippet>162</a>    <span class="kw">let </span>udp_task = flatten(tokio::spawn(udp::main(state.clone())));
-<a href=#163 id=163 data-nosnippet>163</a>    <span class="kw">let </span>tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
-<a href=#164 id=164 data-nosnippet>164</a>    <span class="kw">let </span>ping_task = flatten(tokio::spawn(ping::main(state.clone())));
-<a href=#165 id=165 data-nosnippet>165</a>
-<a href=#166 id=166 data-nosnippet>166</a>    <span class="macro">tokio::try_join!</span>(dnsmasq_task, http_task, udp_task, tcp_task, ping_task)<span class="question-mark">?</span>;
-<a href=#167 id=167 data-nosnippet>167</a>
-<a href=#168 id=168 data-nosnippet>168</a>    <span class="prelude-val">Ok</span>(())
-<a href=#169 id=169 data-nosnippet>169</a>}</code></pre></div></section></main></body></html>
+<a href=#146 id=146 data-nosnippet>146</a>    <span class="kw">async fn </span>flatten(task: JoinHandle&lt;<span class="prelude-ty">Result</span>&lt;()&gt;&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+<a href=#147 id=147 data-nosnippet>147</a>        task.<span class="kw">await</span><span class="question-mark">??</span>;
+<a href=#148 id=148 data-nosnippet>148</a>        <span class="prelude-val">Ok</span>(())
+<a href=#149 id=149 data-nosnippet>149</a>    }
+<a href=#150 id=150 data-nosnippet>150</a>
+<a href=#151 id=151 data-nosnippet>151</a>    <span class="kw">let </span>dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
+<a href=#152 id=152 data-nosnippet>152</a>    <span class="kw">let </span>http_task = flatten(tokio::spawn(http::main(state.clone())));
+<a href=#153 id=153 data-nosnippet>153</a>    <span class="kw">let </span>udp_task = flatten(tokio::spawn(udp::main(state.clone())));
+<a href=#154 id=154 data-nosnippet>154</a>    <span class="kw">let </span>tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
+<a href=#155 id=155 data-nosnippet>155</a>    <span class="kw">let </span>ping_task = flatten(tokio::spawn(ping::main(state.clone())));
+<a href=#156 id=156 data-nosnippet>156</a>
+<a href=#157 id=157 data-nosnippet>157</a>    <span class="macro">tokio::try_join!</span>(dnsmasq_task, http_task, udp_task, tcp_task, ping_task)<span class="question-mark">?</span>;
+<a href=#158 id=158 data-nosnippet>158</a>
+<a href=#159 id=159 data-nosnippet>159</a>    <span class="prelude-val">Ok</span>(())
+<a href=#160 id=160 data-nosnippet>160</a>}</code></pre></div></section></main></body></html>
