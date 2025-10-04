@@ -142,7 +142,7 @@
 <a href=#142 id=142 data-nosnippet>142</a>                    data.station.image = images[(images
 <a href=#143 id=143 data-nosnippet>143</a>                        .iter()
 <a href=#144 id=144 data-nosnippet>144</a>                        .position(|x| x == <span class="kw-2">&amp;</span>data.station.image)
-<a href=#145 id=145 data-nosnippet>145</a>                        .ok_or(Error::Generic(<span class="string">"Invalid image name"</span>.into()))<span class="question-mark">?
+<a href=#145 id=145 data-nosnippet>145</a>                        .ok_or(Error::msg(<span class="string">"Invalid image name"</span>))<span class="question-mark">?
 <a href=#146 id=146 data-nosnippet>146</a>                        </span>+ <span class="number">1</span>)
 <a href=#147 id=147 data-nosnippet>147</a>                        % images.len()]
 <a href=#148 id=148 data-nosnippet>148</a>                    .clone();

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["App","Disconnect","Group","Images","main","send_req"],"struct":["AppProps","Bytes","DisconnectProps","GroupProps","ImagesProps"]};
+window.SIDEBAR_ITEMS = {"fn":["App","Disconnect","Group","Images","main","send_req"],"struct":["AppProps","DisconnectProps","GroupProps","ImagesProps"]};
