@@ -8,8 +8,12 @@ use pixie_shared::util::BytesFmt;
 
 pub async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     let disk_size = disk.size() as usize;
-    let Ok(partitions) = disk.partitions() else {
-        return Ok(None);
+    let partitions = match disk.partitions() {
+        Ok(partitions) => partitions,
+        Err(e) => {
+            log::debug!("Failed to parse GPT partitions: {e:?}");
+            return Ok(None);
+        }
     };
 
     let mut pos = 0usize;

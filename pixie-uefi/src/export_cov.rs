@@ -6,5 +6,5 @@ pub async fn export(os: UefiOS) {
     let mut coverage = vec![];
     // SAFETY: we never create threads anyway.
     unsafe { minicov::capture_coverage(&mut coverage).unwrap() };
-    disk.write_(0, &coverage).unwrap();
+    disk.write_sync(0, &coverage).unwrap();
 }
