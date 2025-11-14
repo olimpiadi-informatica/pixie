@@ -19,10 +19,10 @@ use core::{
     cell::{Ref, RefMut},
     ffi::c_void,
     fmt::Write,
-    future::{poll_fn, Future, PollFn},
+    future::{poll_fn, Future},
     net::SocketAddrV4,
     ptr::NonNull,
-    task::{Context, Poll},
+    task::Poll,
 };
 use pixie_shared::util::BytesFmt;
 use uefi::{
@@ -290,7 +290,7 @@ impl UefiOS {
         RefMut::map(self.borrow_mut(), |f| f.net.as_mut().unwrap())
     }
 
-    pub fn wait_for_ip(self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+    pub fn wait_for_ip(self) -> impl Future<Output = ()> {
         poll_fn(move |cx| {
             if self.net().has_ip() {
                 Poll::Ready(())
@@ -303,7 +303,7 @@ impl UefiOS {
 
     /// Interrupt task execution.
     /// This is useful to yield the CPU to other tasks.
-    pub fn schedule(&self) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+    pub fn schedule(&self) -> impl Future<Output = ()> {
         let mut ready = false;
         poll_fn(move |cx| {
             if ready {
@@ -316,7 +316,7 @@ impl UefiOS {
         })
     }
 
-    pub fn sleep_us(self, us: u64) -> PollFn<impl FnMut(&mut Context<'_>) -> Poll<()>> {
+    pub fn sleep_us(self, us: u64) -> impl Future<Output = ()> {
         let tgt = self.timer().micros() as u64 + us;
         poll_fn(move |cx| {
             let now = self.timer().micros() as u64;
@@ -409,11 +409,11 @@ impl UefiOS {
         UdpHandle::new(*self, port).await
     }
 
-    pub async fn read_key(&self) -> Result<Key> {
-        Ok(poll_fn(move |cx| {
+    pub fn read_key(&self) -> impl Future<Output = Result<Key>> + '_ {
+        poll_fn(move |cx| {
             let key = self.borrow_mut().input.read_key();
             if let Err(e) = key {
-                return Poll::Ready(Err(e));
+                return Poll::Ready(Err(e.into()));
             }
             let key = key.unwrap();
             if let Some(key) = key {
@@ -422,7 +422,6 @@ impl UefiOS {
             cx.waker().wake_by_ref();
             Poll::Pending
         })
-        .await?)
     }
 
     pub fn write_with_color(&self, msg: &str, fg: Color, bg: Color) {

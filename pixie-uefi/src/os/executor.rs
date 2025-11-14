@@ -1,16 +1,13 @@
 use super::{sync::SyncRefCell, UefiOS};
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
-use core::{cell::RefCell, pin::Pin, task::Context};
-use futures::{
-    task::{waker_ref, ArcWake},
-    Future,
+use alloc::{boxed::Box, collections::VecDeque, sync::Arc, task::Wake};
+use core::{
+    cell::RefCell,
+    future::Future,
+    pin::Pin,
+    task::{Context, Waker},
 };
 
 pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
-
-static EXECUTOR: SyncRefCell<Executor> = SyncRefCell::new(Executor {
-    tasks: VecDeque::new(),
-});
 
 struct TaskInner {
     pub in_queue: bool,
@@ -47,18 +44,22 @@ impl Task {
 unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
 
-impl ArcWake for Task {
-    fn wake_by_ref(task: &Arc<Self>) {
-        if !task.inner.borrow().in_queue {
-            task.inner.borrow_mut().in_queue = true;
-            EXECUTOR.borrow_mut().tasks.push_back(task.clone());
+impl Wake for Task {
+    fn wake(self: Arc<Self>) {
+        if !self.inner.borrow().in_queue {
+            self.inner.borrow_mut().in_queue = true;
+            EXECUTOR.borrow_mut().ready_tasks.push_back(self);
         }
     }
 }
 
+static EXECUTOR: SyncRefCell<Executor> = SyncRefCell::new(Executor {
+    ready_tasks: VecDeque::new(),
+});
+
 pub struct Executor {
     // TODO(veluca): scheduling.
-    tasks: VecDeque<Arc<Task>>,
+    ready_tasks: VecDeque<Arc<Task>>,
 }
 
 impl Executor {
@@ -66,16 +67,16 @@ impl Executor {
         loop {
             let task = EXECUTOR
                 .borrow_mut()
-                .tasks
+                .ready_tasks
                 .pop_front()
-                .expect("Executor should never run out of tasks");
+                .expect("Executor should never run out of ready tasks");
 
             task.inner.borrow_mut().in_queue = false;
-            let waker = waker_ref(&task);
-            let context = &mut Context::from_waker(&waker);
+            let waker = Waker::from(task.clone());
+            let mut context = Context::from_waker(&waker);
             let mut fut = task.inner.borrow_mut().future.take().unwrap();
             let begin = os.timer().micros();
-            let status = fut.as_mut().poll(context);
+            let status = fut.as_mut().poll(&mut context);
             let end = os.timer().micros();
             task.inner.borrow_mut().micros += end - begin;
             if status.is_pending() {
@@ -85,6 +86,6 @@ impl Executor {
     }
 
     pub(super) fn spawn(task: Arc<Task>) {
-        EXECUTOR.borrow_mut().tasks.push_back(task);
+        EXECUTOR.borrow_mut().ready_tasks.push_back(task);
     }
 }

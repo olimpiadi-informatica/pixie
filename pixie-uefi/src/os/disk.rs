@@ -12,11 +12,11 @@ use gpt_disk_io::{
 };
 use uefi::{
     boot::{OpenProtocolParams, ScopedProtocol},
-    proto::media::{block::BlockIO, disk::DiskIo},
+    proto::media::block::BlockIO,
     Handle,
 };
 
-fn open_disk(handle: Handle) -> Result<(ScopedProtocol<DiskIo>, ScopedProtocol<BlockIO>)> {
+fn open_disk(handle: Handle) -> Result<ScopedProtocol<BlockIO>> {
     let image_handle = uefi::boot::image_handle();
     let bio = unsafe {
         uefi::boot::open_protocol::<BlockIO>(
@@ -28,8 +28,7 @@ fn open_disk(handle: Handle) -> Result<(ScopedProtocol<DiskIo>, ScopedProtocol<B
             uefi::boot::OpenProtocolAttributes::GetProtocol,
         )?
     };
-    let proto = uefi::boot::open_protocol_exclusive::<DiskIo>(handle)?;
-    Ok((proto, bio))
+    Ok(bio)
 }
 
 #[derive(Debug)]
@@ -41,7 +40,6 @@ pub struct DiskPartition {
 }
 
 pub struct Disk {
-    disk: ScopedProtocol<DiskIo>,
     block: ScopedProtocol<BlockIO>,
     os: UefiOS,
 }
@@ -50,12 +48,11 @@ pub struct Disk {
 // available; support having more than one disk.
 impl Disk {
     pub fn new(os: UefiOS) -> Disk {
-        let (_size, handle) = uefi::boot::find_handles::<DiskIo>()
+        let (_size, handle) = uefi::boot::find_handles::<BlockIO>()
             .unwrap()
             .into_iter()
             .filter_map(|handle| {
-                let op = open_disk(handle);
-                let Ok((_, block)) = op else {
+                let Ok(block) = open_disk(handle) else {
                     return None;
                 };
                 let m = block.media();
@@ -68,18 +65,17 @@ impl Disk {
             .max_by_key(|(size, _)| *size)
             .expect("Disk not found");
 
-        let (disk, block) = open_disk(handle).unwrap();
-        Disk { disk, block, os }
+        let block = open_disk(handle).unwrap();
+        Disk { block, os }
     }
 
     #[cfg(feature = "coverage")]
     pub fn open_with_size(os: UefiOS, base_size: i64) -> Disk {
-        let (_size, handle) = uefi::boot::find_handles::<DiskIo>()
+        let (_size, handle) = uefi::boot::find_handles::<BlockIO>()
             .unwrap()
             .into_iter()
             .filter_map(|handle| {
-                let op = open_disk(handle);
-                let Ok((_, block)) = op else {
+                let Ok(block) = open_disk(handle) else {
                     return None;
                 };
                 let m = block.media();
@@ -92,37 +88,84 @@ impl Disk {
             .min_by_key(|(size, _)| *size)
             .expect("Disk not found");
 
-        let (disk, block) = open_disk(handle).unwrap();
-        Disk { disk, block, os }
+        let block = open_disk(handle).unwrap();
+        Disk { block, os }
     }
 
     pub fn size(&self) -> u64 {
         self.block.media().block_size() as u64 * (self.block.media().last_block() + 1)
     }
 
-    pub async fn flush(&mut self) {
-        self.block.flush_blocks().unwrap();
+    pub async fn flush(&mut self) -> Result<()> {
+        self.block.flush_blocks()?;
+        Ok(())
+    }
+
+    pub fn read_sync(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        let block_size = self.block.media().block_size() as u64;
+        let media_id = self.block.media().media_id();
+        let start_block = offset / block_size;
+        let end_block = (offset + buf.len() as u64).div_ceil(block_size);
+        let num_blocks = end_block - start_block;
+        if buf.len() as u64 != num_blocks * block_size
+            || !(buf.as_ptr() as usize).is_multiple_of(16)
+        {
+            //log::warn!(
+            //    "Unaligned read: offset {}, block size {}, buf addr {:p}, buf len {}",
+            //    offset,
+            //    block_size,
+            //    buf.as_ptr(),
+            //    buf.len()
+            //);
+            let mut buf2 = vec![0u8; (num_blocks * block_size) as usize + 15];
+            let delta = buf2.as_ptr().align_offset(16);
+            let buf2 = &mut buf2[delta..delta + (num_blocks * block_size) as usize];
+            self.block.read_blocks(media_id, start_block, buf2)?;
+            let start_offset = (offset % block_size) as usize;
+            buf.copy_from_slice(&buf2[start_offset..start_offset + buf.len()]);
+        } else {
+            self.block.read_blocks(media_id, start_block, buf)?;
+        }
+        Ok(())
     }
 
     pub async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
         self.os.schedule().await;
-        Ok(self
-            .disk
-            .read_disk(self.block.media().media_id(), offset, buf)?)
+        self.read_sync(offset, buf)
     }
 
-    #[cfg(feature = "coverage")]
-    pub fn write_(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
-        Ok(self
-            .disk
-            .write_disk(self.block.media().media_id(), offset, buf)?)
+    pub fn write_sync(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        let block_size = self.block.media().block_size() as u64;
+        let media_id = self.block.media().media_id();
+        let start_block = offset / block_size;
+        let end_block = (offset + buf.len() as u64).div_ceil(block_size);
+        let num_blocks = end_block - start_block;
+        if buf.len() as u64 != num_blocks * block_size
+            || !(buf.as_ptr() as usize).is_multiple_of(16)
+        {
+            //log::warn!(
+            //    "Unaligned write: offset {}, block size {}, buf addr {:p}, buf len {}",
+            //    offset,
+            //    block_size,
+            //    buf.as_ptr(),
+            //    buf.len()
+            //);
+            let mut buf2 = vec![0u8; (num_blocks * block_size) as usize + 15];
+            let delta = buf2.as_ptr().align_offset(16);
+            let buf2 = &mut buf2[delta..delta + (num_blocks * block_size) as usize];
+            self.block.read_blocks(media_id, start_block, buf2)?;
+            let start_offset = (offset % block_size) as usize;
+            buf2[start_offset..start_offset + buf.len()].copy_from_slice(buf);
+            self.block.write_blocks(media_id, start_block, buf2)?;
+        } else {
+            self.block.write_blocks(media_id, start_block, buf)?;
+        }
+        Ok(())
     }
 
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         self.os.schedule().await;
-        Ok(self
-            .disk
-            .write_disk(self.block.media().media_id(), offset, buf)?)
+        self.write_sync(offset, buf)
     }
 
     pub fn partitions(&mut self) -> Result<Vec<DiskPartition>> {
@@ -175,17 +218,13 @@ impl gpt_disk_io::BlockIo for &mut Disk {
         Ok(self.block.media().last_block() + 1)
     }
     fn read_blocks(&mut self, start_lba: Lba, dst: &mut [u8]) -> Result<()> {
-        self.disk.read_disk(
-            self.block.media().media_id(),
-            self.block.media().block_size() as u64 * start_lba.0,
-            dst,
-        )?;
-        Ok(())
+        self.read_sync(self.block.media().block_size() as u64 * start_lba.0, dst)
     }
     fn write_blocks(&mut self, _start_lba: Lba, _src: &[u8]) -> Result<()> {
         unreachable!();
     }
     fn flush(&mut self) -> Result<()> {
-        Ok(self.block.flush_blocks()?)
+        // This is a no-op because write_blocks isn't implemented.
+        Ok(())
     }
 }
