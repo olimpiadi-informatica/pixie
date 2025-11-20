@@ -42,6 +42,7 @@ pub struct DiskPartition {
 pub struct Disk {
     block: ScopedProtocol<BlockIO>,
     os: UefiOS,
+    buf: spin::Mutex<Vec<u8>>,
 }
 
 unsafe impl Send for Disk {}
@@ -69,7 +70,7 @@ impl Disk {
             .expect("Disk not found");
 
         let block = open_disk(handle).unwrap();
-        Disk { block, os }
+        Disk { block, os, buf: spin::Mutex::new(vec![]) }
     }
 
     #[cfg(feature = "coverage")]
@@ -110,25 +111,16 @@ impl Disk {
         let start_block = offset / block_size;
         let end_block = (offset + buf.len() as u64).div_ceil(block_size);
         let num_blocks = end_block - start_block;
-        if buf.len() as u64 != num_blocks * block_size
-            || !(buf.as_ptr() as usize).is_multiple_of(16)
-        {
-            //log::warn!(
-            //    "Unaligned read: offset {}, block size {}, buf addr {:p}, buf len {}",
-            //    offset,
-            //    block_size,
-            //    buf.as_ptr(),
-            //    buf.len()
-            //);
-            let mut buf2 = vec![0u8; (num_blocks * block_size) as usize + 15];
-            let delta = buf2.as_ptr().align_offset(16);
-            let buf2 = &mut buf2[delta..delta + (num_blocks * block_size) as usize];
-            self.block.read_blocks(media_id, start_block, buf2)?;
-            let start_offset = (offset % block_size) as usize;
-            buf.copy_from_slice(&buf2[start_offset..start_offset + buf.len()]);
-        } else {
-            self.block.read_blocks(media_id, start_block, buf)?;
+        let mut buf2 = self.buf.try_lock().unwrap();
+        let buf_size = ((num_blocks + 32) * block_size) as usize;
+        if buf2.len() < buf_size {
+            buf2.resize(buf_size, 0);
         }
+        let delta = buf2.as_ptr().align_offset(block_size as usize) + block_size as usize * 8;
+        let buf2 = &mut buf2[delta..delta+(num_blocks * block_size) as usize];
+        self.block.read_blocks(media_id, start_block, buf2)?;
+        let start_offset = (offset % block_size) as usize;
+        buf.copy_from_slice(&buf2[start_offset..start_offset + buf.len()]);
         Ok(())
     }
 

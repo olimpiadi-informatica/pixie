@@ -9,7 +9,7 @@ use alloc::{rc::Rc, sync::Arc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
 use log::info;
 use lz4_flex::compress;
-use pixie_shared::{util::BytesFmt, Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use pixie_shared::{util::BytesFmt, Chunk, Image, Offset, TcpRequest, UdpRequest};
 use spin::Mutex;
 use uefi::proto::console::text::Color;
 
@@ -85,13 +85,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let mut total_size = 0;
     let mut total_csize = 0;
 
-    let total_mem = os.get_total_mem();
-    let channel_size =
-        (total_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
-    log::debug!(
-        "Total memory: {}. Channel size: {channel_size}",
-        BytesFmt(total_mem)
-    );
+    let channel_size = 32;
 
     let (tx1, mut rx1) = mpsc::channel(channel_size);
     let (tx2, mut rx2) = mpsc::channel(channel_size);

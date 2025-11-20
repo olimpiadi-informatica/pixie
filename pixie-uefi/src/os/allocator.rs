@@ -35,3 +35,7 @@ static ALLOCATOR: Talck<spin::Mutex<()>, AllocOnOom> = Talc::new(AllocOnOom {
     next_block_size: 1 << 20,
 })
 .lock();
+
+pub fn allocation_stats() -> Counters {
+    ALLOCATOR.try_lock().unwrap().get_counters().clone()
+}

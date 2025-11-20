@@ -151,6 +151,9 @@ impl UefiOS {
         // Never call this function twice.
         assert!(OS.read().is_none());
 
+        // Allocate 1 mb of low memory.
+        let _ = uefi::boot::allocate_pool(MemoryType::LOADER_DATA, 1 << 20);
+
         uefi::helpers::init().unwrap();
 
         // Ensure we never exit boot services.
@@ -443,7 +446,7 @@ impl UefiOS {
             let cols = mode.columns();
 
             os.write_with_color(&format!("uptime: {time:10.1}s"), Color::White, Color::Black);
-            os.maybe_advance_to_col(cols / 3);
+            os.maybe_advance_to_col(cols / 4);
 
             if let Some(ip) = ip {
                 os.write_with_color(&format!("IP: {ip}"), Color::White, Color::Black);
@@ -451,14 +454,23 @@ impl UefiOS {
                 os.write_with_color("DHCP...", Color::Yellow, Color::Black);
             }
 
-            os.maybe_advance_to_col(3 * cols / 5);
+            os.maybe_advance_to_col(cols / 2);
 
             let vrx = os.net.as_ref().unwrap().vrx;
             let vtx = os.net.as_ref().unwrap().vtx;
             os.write_with_color(
-                &format!("rx: {}/s tx: {}/s\n\n", BytesFmt(vrx), BytesFmt(vtx)),
+                &format!("rx: {}/s tx: {}/s", BytesFmt(vrx), BytesFmt(vtx)),
                 Color::White,
                 Color::Black,
+            );
+
+            let stats = allocator::allocation_stats();
+
+            os.maybe_advance_to_col(cols * 3 / 4);
+            os.write_with_color(
+                &format!("alloc: {} uefi alloc: {}\n\n", BytesFmt(stats.allocated_bytes as u64), BytesFmt(stats.claimed_bytes as u64)),
+                Color::White,
+                Color::Black
             );
 
             os.tasks.sort_by_key(|t| -t.micros());
