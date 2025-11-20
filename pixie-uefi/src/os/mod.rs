@@ -5,7 +5,6 @@ use self::{
     executor::{Executor, Task},
     net::NetworkInterface,
     rng::Rng,
-    sync::SyncRefCell,
     timer::Timer,
 };
 use alloc::{
@@ -16,15 +15,16 @@ use alloc::{
     vec::Vec,
 };
 use core::{
-    cell::{Ref, RefMut},
     ffi::c_void,
     fmt::Write,
     future::{poll_fn, Future},
     net::SocketAddrV4,
+    panic::Location,
     ptr::NonNull,
     task::Poll,
 };
 use pixie_shared::util::BytesFmt;
+use spin::{Mutex, RwLock};
 use uefi::{
     boot::{EventType, MemoryType, ScopedProtocol, TimerTrigger, Tpl},
     mem::memory_map::MemoryMap,
@@ -52,7 +52,6 @@ mod executor;
 pub mod mpsc;
 mod net;
 mod rng;
-mod sync;
 mod timer;
 
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
@@ -70,6 +69,9 @@ struct UefiOSImpl {
     ui_pos: usize,
     ui_drawer: Option<Box<dyn Fn(UefiOS) + 'static>>,
 }
+
+unsafe impl Send for UefiOSImpl {}
+unsafe impl Sync for UefiOSImpl {}
 
 impl UefiOSImpl {
     fn cols(&mut self) -> usize {
@@ -127,7 +129,7 @@ impl UefiOSImpl {
     }
 }
 
-static OS: SyncRefCell<Option<UefiOSImpl>> = SyncRefCell::new(None);
+static OS: RwLock<Option<UefiOSImpl>> = RwLock::new(None);
 
 #[non_exhaustive]
 #[derive(Clone, Copy)]
@@ -143,11 +145,11 @@ unsafe extern "efiapi" fn exit_boot_services(_e: Event, _ctx: Option<NonNull<c_v
 impl UefiOS {
     pub fn start<F, Fut>(mut f: F) -> !
     where
-        F: FnMut(UefiOS) -> Fut + 'static,
-        Fut: Future<Output = Result<()>>,
+        F: FnMut(UefiOS) -> Fut + 'static + Send,
+        Fut: Future<Output = Result<()>> + Send,
     {
         // Never call this function twice.
-        assert!(OS.borrow().is_none());
+        assert!(OS.read().is_none());
 
         uefi::helpers::init().unwrap();
 
@@ -179,7 +181,7 @@ impl UefiOS {
 
         vga.clear().unwrap();
 
-        *OS.borrow_mut() = Some(UefiOSImpl {
+        *OS.write() = Some(UefiOSImpl {
             timer,
             rng,
             tasks: Vec::new(),
@@ -199,7 +201,7 @@ impl UefiOS {
         log::set_max_level(log::LevelFilter::Trace);
 
         let net = NetworkInterface::new(os);
-        os.borrow_mut().net = Some(net);
+        OS.write().as_mut().unwrap().net = Some(net);
 
         os.spawn("init", async move {
             loop {
@@ -228,9 +230,14 @@ impl UefiOS {
         os.spawn(
             "[net_poll]",
             poll_fn(move |cx| {
-                let (mut net, timer) =
-                    RefMut::map_split(os.borrow_mut(), |os| (&mut os.net, &mut os.timer));
-                net.as_mut().unwrap().poll(&timer);
+                let timer = os.timer();
+                OS.write()
+                    .as_mut()
+                    .unwrap()
+                    .net
+                    .as_mut()
+                    .unwrap()
+                    .poll(&timer);
                 // TODO(veluca): figure out whether we can suspend the task.
                 cx.waker().wake_by_ref();
                 Poll::Pending
@@ -247,11 +254,12 @@ impl UefiOS {
                     let dt = (now - ptm).total_micros() as f64 / 1_000_000.0;
                     ptm = now;
 
-                    let mut net = os.net();
-                    net.vrx = ((net.rx - prx) as f64 / dt) as u64;
-                    prx = net.rx;
-                    net.vtx = ((net.tx - ptx) as f64 / dt) as u64;
-                    ptx = net.tx;
+                    os.with_net(|net| {
+                        net.vrx = ((net.rx - prx) as f64 / dt) as u64;
+                        prx = net.rx;
+                        net.vtx = ((net.tx - ptx) as f64 / dt) as u64;
+                        ptx = net.tx;
+                    });
                 }
                 os.sleep_us(1_000_000).await;
             }
@@ -267,33 +275,23 @@ impl UefiOS {
         Executor::run(os)
     }
 
-    fn borrow(&self) -> Ref<'static, UefiOSImpl> {
-        Ref::map(OS.borrow(), |f| f.as_ref().unwrap())
+    pub fn timer(&self) -> Timer {
+        OS.try_read().unwrap().as_ref().unwrap().timer.clone()
     }
 
-    fn borrow_mut(&self) -> RefMut<'static, UefiOSImpl> {
-        RefMut::map(OS.borrow_mut(), |f| f.as_mut().unwrap())
+    pub fn rand_u64(&self) -> u64 {
+        OS.try_write().unwrap().as_mut().unwrap().rng.rand_u64()
     }
 
-    pub fn timer(&self) -> Ref<'static, Timer> {
-        Ref::map(self.borrow(), |f| &f.timer)
-    }
-
-    pub fn rng(&self) -> RefMut<'static, Rng> {
-        RefMut::map(self.borrow_mut(), |f| &mut f.rng)
-    }
-
-    fn tasks(&self) -> RefMut<'static, Vec<Arc<Task>>> {
-        RefMut::map(self.borrow_mut(), |f| &mut f.tasks)
-    }
-
-    pub fn net(&self) -> RefMut<'static, NetworkInterface> {
-        RefMut::map(self.borrow_mut(), |f| f.net.as_mut().unwrap())
+    pub fn with_net<T, F: FnOnce(&mut NetworkInterface) -> T>(&self, f: F) -> T {
+        let mut os = OS.try_write().unwrap();
+        let net = os.as_mut().unwrap().net.as_mut().unwrap();
+        f(net)
     }
 
     pub fn wait_for_ip(self) -> impl Future<Output = ()> {
         poll_fn(move |cx| {
-            if self.net().has_ip() {
+            if self.with_net(|n| n.has_ip()) {
                 Poll::Ready(())
             } else {
                 cx.waker().wake_by_ref();
@@ -412,7 +410,7 @@ impl UefiOS {
 
     pub fn read_key(&self) -> impl Future<Output = Result<Key>> + '_ {
         poll_fn(move |cx| {
-            let key = self.borrow_mut().input.read_key();
+            let key = OS.try_write().unwrap().as_mut().unwrap().input.read_key();
             if let Err(e) = key {
                 return Poll::Ready(Err(e.into()));
             }
@@ -426,15 +424,20 @@ impl UefiOS {
     }
 
     pub fn write_with_color(&self, msg: &str, fg: Color, bg: Color) {
-        self.borrow_mut().write_with_color(msg, fg, bg);
+        OS.try_write()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .write_with_color(msg, fg, bg);
     }
 
     fn draw_ui(&self) {
         // Write the header.
         {
             let time = self.timer().micros() as f32 * 0.000_001;
-            let ip = self.net().ip();
-            let mut os = self.borrow_mut();
+            let ip = self.with_net(|n| n.ip());
+            let mut os = OS.try_write().unwrap();
+            let os = os.as_mut().unwrap();
 
             let mode = os.vga.current_mode().unwrap().unwrap();
             let cols = mode.columns();
@@ -490,31 +493,32 @@ impl UefiOS {
             os.write_with_color("\n", Color::Black, Color::Black);
         }
         {
-            let ui = self.borrow_mut().ui_drawer.take();
+            let ui = OS.try_write().unwrap().as_mut().unwrap().ui_drawer.take();
             if let Some(ui) = &ui {
                 ui(*self);
             }
-            self.borrow_mut().ui_drawer = ui;
+            OS.try_write().unwrap().as_mut().unwrap().ui_drawer = ui;
         }
         // Actually draw the changes.
-        self.borrow_mut().flush_ui_buf();
+        OS.try_write().unwrap().as_mut().unwrap().flush_ui_buf();
     }
 
     pub fn force_ui_redraw(&self) {
         // TODO(virv): during network initialization we already start logging
-        if self.borrow().net.is_none() {
+        if OS.read().as_ref().unwrap().net.is_none() {
             return;
         }
         self.draw_ui()
     }
 
-    pub fn set_ui_drawer<F: Fn(UefiOS) + 'static>(&self, f: F) {
-        self.borrow_mut().ui_drawer = Some(Box::new(f));
+    pub fn set_ui_drawer<F: Fn(UefiOS) + 'static + Send>(&self, f: F) {
+        OS.try_write().unwrap().as_mut().unwrap().ui_drawer = Some(Box::new(f));
     }
 
     fn append_message(&self, time: f64, level: log::Level, target: &str, msg: String) {
         {
-            let mut os = self.borrow_mut();
+            let mut os = OS.try_write().unwrap();
+            let os = os.as_mut().unwrap();
 
             if let Some(serial) = &mut os.serial {
                 let style = match level {
@@ -543,10 +547,15 @@ impl UefiOS {
     /// Spawn a new task.
     pub fn spawn<Fut>(&self, name: &'static str, f: Fut)
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + 'static + Send,
     {
         let task = executor::Task::new(name, f);
-        self.tasks().push(task.clone());
+        OS.try_write()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .tasks
+            .push(task.clone());
         Executor::spawn(task);
     }
 

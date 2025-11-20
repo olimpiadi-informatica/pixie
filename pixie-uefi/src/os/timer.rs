@@ -1,6 +1,7 @@
 use core::arch::x86_64::_rdtsc;
 use smoltcp::time::Instant;
 
+#[derive(Clone)]
 pub struct Timer {
     ticks_at_start: i64,
     ticks_per_micro: i64,

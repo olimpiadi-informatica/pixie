@@ -1,13 +1,13 @@
-use super::{sync::SyncRefCell, UefiOS};
+use super::UefiOS;
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc, task::Wake};
 use core::{
-    cell::RefCell,
     future::Future,
     pin::Pin,
     task::{Context, Waker},
 };
+use spin::Mutex;
 
-pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
+pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static + Send>>;
 
 struct TaskInner {
     pub in_queue: bool,
@@ -17,17 +17,17 @@ struct TaskInner {
 
 pub(super) struct Task {
     pub name: &'static str,
-    inner: RefCell<TaskInner>,
+    inner: Mutex<TaskInner>,
 }
 
 impl Task {
     pub(super) fn new<Fut>(name: &'static str, future: Fut) -> Arc<Task>
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = ()> + 'static + Send,
     {
         Arc::new(Task {
             name,
-            inner: RefCell::new(TaskInner {
+            inner: Mutex::new(TaskInner {
                 in_queue: false,
                 future: Some(Box::pin(future)),
                 micros: 0,
@@ -36,24 +36,22 @@ impl Task {
     }
 
     pub(super) fn micros(&self) -> i64 {
-        self.inner.borrow().micros
+        self.inner.lock().micros
     }
 }
 
-// SAFETY: we never create threads anyway.
-unsafe impl Send for Task {}
-unsafe impl Sync for Task {}
-
 impl Wake for Task {
     fn wake(self: Arc<Self>) {
-        if !self.inner.borrow().in_queue {
-            self.inner.borrow_mut().in_queue = true;
-            EXECUTOR.borrow_mut().ready_tasks.push_back(self);
+        let mut inner = self.inner.lock();
+        if !inner.in_queue {
+            inner.in_queue = true;
+            drop(inner);
+            EXECUTOR.lock().ready_tasks.push_back(self);
         }
     }
 }
 
-static EXECUTOR: SyncRefCell<Executor> = SyncRefCell::new(Executor {
+static EXECUTOR: Mutex<Executor> = Mutex::new(Executor {
     ready_tasks: VecDeque::new(),
 });
 
@@ -66,26 +64,26 @@ impl Executor {
     pub fn run(os: UefiOS) -> ! {
         loop {
             let task = EXECUTOR
-                .borrow_mut()
+                .lock()
                 .ready_tasks
                 .pop_front()
                 .expect("Executor should never run out of ready tasks");
 
-            task.inner.borrow_mut().in_queue = false;
+            task.inner.lock().in_queue = false;
             let waker = Waker::from(task.clone());
             let mut context = Context::from_waker(&waker);
-            let mut fut = task.inner.borrow_mut().future.take().unwrap();
+            let mut fut = task.inner.lock().future.take().unwrap();
             let begin = os.timer().micros();
             let status = fut.as_mut().poll(&mut context);
             let end = os.timer().micros();
-            task.inner.borrow_mut().micros += end - begin;
+            task.inner.lock().micros += end - begin;
             if status.is_pending() {
-                task.inner.borrow_mut().future = Some(fut);
+                task.inner.lock().future = Some(fut);
             }
         }
     }
 
     pub(super) fn spawn(task: Arc<Task>) {
-        EXECUTOR.borrow_mut().ready_tasks.push_back(task);
+        EXECUTOR.lock().ready_tasks.push_back(task);
     }
 }

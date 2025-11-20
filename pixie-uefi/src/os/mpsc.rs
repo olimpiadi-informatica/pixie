@@ -1,5 +1,6 @@
-use alloc::{collections::VecDeque, rc::Rc};
+use alloc::{collections::VecDeque, rc::Rc, sync::Arc};
 use core::{cell::RefCell, future::poll_fn, task::Poll, task::Waker};
+use spin::Mutex;
 
 struct Data<T> {
     size: usize,
@@ -10,14 +11,14 @@ struct Data<T> {
 }
 
 pub struct Sender<T> {
-    inner: Rc<RefCell<Data<T>>>,
+    inner: Arc<Mutex<Data<T>>>,
 }
 
 impl<T> Sender<T> {
     pub async fn send(&mut self, value: T) {
         let mut value = Some(value);
         poll_fn(|cx| {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = self.inner.lock();
             if inner.queue.len() < inner.size {
                 inner.queue.push_back(value.take().unwrap());
                 if let Some(waker) = inner.rx_waker.take() {
@@ -35,7 +36,7 @@ impl<T> Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.inner.lock();
         inner.tx_count -= 1;
         if let Some(waker) = inner.rx_waker.take() {
             waker.wake();
@@ -44,13 +45,13 @@ impl<T> Drop for Sender<T> {
 }
 
 pub struct Receiver<T> {
-    inner: Rc<RefCell<Data<T>>>,
+    inner: Arc<Mutex<Data<T>>>,
 }
 
 impl<T> Receiver<T> {
     pub async fn recv(&mut self) -> Option<T> {
         poll_fn(|cx| {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = self.inner.lock();
             if let Some(value) = inner.queue.pop_front() {
                 if let Some(waker) = inner.tx_waker.take() {
                     waker.wake();
@@ -68,7 +69,7 @@ impl<T> Receiver<T> {
 }
 
 pub fn channel<T>(size: usize) -> (Sender<T>, Receiver<T>) {
-    let inner = Rc::new(RefCell::new(Data {
+    let inner = Arc::new(Mutex::new(Data {
         size,
         tx_count: 1,
         tx_waker: None,

@@ -182,7 +182,7 @@ impl NetworkInterface {
         ));
 
         let mut interface_config = Config::new(hw_addr);
-        interface_config.random_seed = os.rng().rand_u64();
+        interface_config.random_seed = os.rand_u64();
         let now = Instant::from_micros(os.timer().micros());
         let interface = Interface::new(interface_config, &mut device, now);
         let mut dhcp_socket = Dhcpv4Socket::new();
@@ -198,7 +198,7 @@ impl NetworkInterface {
             dhcp_socket_handle,
             device,
             socket_set,
-            ephemeral_port_counter: os.rng().rand_u64(),
+            ephemeral_port_counter: os.rand_u64(),
             rx: 0,
             tx: 0,
             vrx: 0,
@@ -276,17 +276,19 @@ impl TcpStream {
         tcp_socket.set_congestion_control(smoltcp::socket::tcp::CongestionControl::Cubic);
         tcp_socket.set_timeout(Some(Duration::from_secs(5)));
         tcp_socket.set_keep_alive(Some(Duration::from_secs(1)));
-        let sport = os.net().get_ephemeral_port();
-        tcp_socket.connect(
-            os.net().interface.context(),
-            IpEndpoint {
-                addr: (*addr.ip()).into(),
-                port: addr.port(),
-            },
-            sport,
-        )?;
+        os.with_net(|n| {
+            let sport = n.get_ephemeral_port();
+            tcp_socket.connect(
+                n.interface.context(),
+                IpEndpoint {
+                    addr: (*addr.ip()).into(),
+                    port: addr.port(),
+                },
+                sport,
+            )
+        })?;
 
-        let handle = os.net().socket_set.add(tcp_socket);
+        let handle = os.with_net(|n| n.socket_set.add(tcp_socket));
 
         let ret = TcpStream { handle, os };
 
@@ -304,10 +306,7 @@ impl TcpStream {
         poll_fn(move |cx| {
             let state = self
                 .os
-                .net()
-                .socket_set
-                .get_mut::<TcpSocket>(self.handle)
-                .state();
+                .with_net(|n| n.socket_set.get_mut::<TcpSocket>(self.handle).state());
             let res = f(state);
             if let Some(res) = res {
                 Poll::Ready(res)
@@ -322,7 +321,7 @@ impl TcpStream {
     pub async fn wait_until_closed(&self) {
         self.wait_for_state(|s| if s == State::Closed { Some(()) } else { None })
             .await;
-        self.os.net().socket_set.remove(self.handle);
+        self.os.with_net(|n| n.socket_set.remove(self.handle));
     }
 
     async fn fail_if_closed(&self) -> Result<()> {
@@ -337,21 +336,21 @@ impl TcpStream {
 
         let mut pos = 0;
         let send = poll_fn(move |cx| {
-            let mut net = self.os.net();
-            let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
-            let sent = socket.send_slice(&data[pos..]);
-            if let Err(err) = sent {
-                return Poll::Ready(Err(Error::TcpSend(err)));
-            }
-            pos += sent.unwrap();
-            if pos < data.len() {
-                socket.register_send_waker(cx.waker());
+            self.os.with_net(|net| {
+                let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
+                let sent = socket.send_slice(&data[pos..]);
+                if let Err(err) = sent {
+                    return Poll::Ready(Err(Error::TcpSend(err)));
+                }
+                pos += sent.unwrap();
                 net.tx += sent.unwrap() as u64;
-                Poll::Pending
-            } else {
-                net.tx += sent.unwrap() as u64;
-                Poll::Ready(Ok(()))
-            }
+                if pos < data.len() {
+                    socket.register_send_waker(cx.waker());
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok(()))
+                }
+            })
         });
 
         select(send, Box::pin(self.fail_if_closed()))
@@ -361,28 +360,29 @@ impl TcpStream {
     }
 
     /// Returns the number of bytes received (0 if connection is closed on the other end without
-    /// receiving any data.
+    /// receiving any data).
     pub async fn recv(&self, data: &mut [u8]) -> Result<usize> {
         poll_fn(move |cx| {
-            let mut net = self.os.net();
-            let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
-            if !socket.may_recv() {
-                return Poll::Ready(Ok(0));
-            }
-            let recvd = socket.recv_slice(data);
-            if recvd == Err(smoltcp::socket::tcp::RecvError::Finished) {
-                return Poll::Ready(Ok(0));
-            }
-            if let Err(err) = recvd {
-                return Poll::Ready(Err(Error::Recv(err)));
-            }
-            if recvd.unwrap() == 0 {
-                socket.register_recv_waker(cx.waker());
-                Poll::Pending
-            } else {
-                net.rx += recvd.unwrap() as u64;
-                Poll::Ready(Ok(recvd.unwrap()))
-            }
+            self.os.with_net(|net| {
+                let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
+                if !socket.may_recv() {
+                    return Poll::Ready(Ok(0));
+                }
+                let recvd = socket.recv_slice(data);
+                if recvd == Err(smoltcp::socket::tcp::RecvError::Finished) {
+                    return Poll::Ready(Ok(0));
+                }
+                if let Err(err) = recvd {
+                    return Poll::Ready(Err(Error::Recv(err)));
+                }
+                if recvd.unwrap() == 0 {
+                    socket.register_recv_waker(cx.waker());
+                    Poll::Pending
+                } else {
+                    net.rx += recvd.unwrap() as u64;
+                    Poll::Ready(Ok(recvd.unwrap()))
+                }
+            })
         })
         .await
     }
@@ -412,10 +412,7 @@ impl TcpStream {
     pub async fn close_send(&self) {
         {
             self.os
-                .net()
-                .socket_set
-                .get_mut::<TcpSocket>(self.handle)
-                .close();
+                .with_net(|n| n.socket_set.get_mut::<TcpSocket>(self.handle).close());
         }
         self.wait_for_state(|state| match state {
             State::Closed | State::Closing | State::FinWait1 | State::FinWait2 => Some(()),
@@ -427,10 +424,7 @@ impl TcpStream {
     pub async fn force_close(&self) {
         {
             self.os
-                .net()
-                .socket_set
-                .get_mut::<TcpSocket>(self.handle)
-                .abort();
+                .with_net(|n| n.socket_set.get_mut::<TcpSocket>(self.handle).abort());
         }
         self.wait_until_closed().await;
     }
@@ -459,11 +453,11 @@ impl UdpHandle {
         let sport = if let Some(p) = listen_port {
             p
         } else {
-            os.net().get_ephemeral_port()
+            os.with_net(|n| n.get_ephemeral_port())
         };
         udp_socket.bind(sport)?;
 
-        let handle = os.net().socket_set.add(udp_socket);
+        let handle = os.with_net(|n| n.socket_set.add(udp_socket));
 
         let ret = UdpHandle { handle, os };
         Ok(ret)
@@ -476,16 +470,17 @@ impl UdpHandle {
         };
 
         Ok(poll_fn(move |cx| {
-            let mut net = self.os.net();
-            let socket = net.socket_set.get_mut::<UdpSocket>(self.handle);
-            if !socket.can_send() {
-                socket.register_send_waker(cx.waker());
-                Poll::Pending
-            } else {
-                let status = socket.send_slice(data, endpoint);
-                net.tx = net.tx.wrapping_add(data.len() as u64);
-                Poll::Ready(status)
-            }
+            self.os.with_net(|net| {
+                let socket = net.socket_set.get_mut::<UdpSocket>(self.handle);
+                if !socket.can_send() {
+                    socket.register_send_waker(cx.waker());
+                    Poll::Pending
+                } else {
+                    let status = socket.send_slice(data, endpoint);
+                    net.tx = net.tx.wrapping_add(data.len() as u64);
+                    Poll::Ready(status)
+                }
+            })
         })
         .await?)
     }
@@ -493,35 +488,34 @@ impl UdpHandle {
     pub async fn recv<'a>(&self, buf: &'a mut [u8; PACKET_SIZE]) -> (&'a mut [u8], SocketAddrV4) {
         let buf2 = &mut *buf;
         let (len, addr) = poll_fn(move |cx| {
-            let mut net = self.os.net();
-            let socket = net.socket_set.get_mut::<UdpSocket>(self.handle);
-            if !socket.can_recv() {
-                socket.register_recv_waker(cx.waker());
-                Poll::Pending
-            } else {
-                // Cannot fail if can_recv() returned true.
-                let recvd = socket.recv_slice(buf2).unwrap();
-                let IpAddr::V4(ip) = (recvd.1).endpoint.addr.into() else {
-                    unreachable!();
-                };
-                let port = (recvd.1).endpoint.port;
-                Poll::Ready((recvd.0, SocketAddrV4::new(ip, port)))
-            }
+            self.os.with_net(|net| {
+                let socket = net.socket_set.get_mut::<UdpSocket>(self.handle);
+                if !socket.can_recv() {
+                    socket.register_recv_waker(cx.waker());
+                    Poll::Pending
+                } else {
+                    // Cannot fail if can_recv() returned true.
+                    let recvd = socket.recv_slice(buf2).unwrap();
+                    let IpAddr::V4(ip) = (recvd.1).endpoint.addr.into() else {
+                        unreachable!();
+                    };
+                    let port = (recvd.1).endpoint.port;
+                    Poll::Ready((recvd.0, SocketAddrV4::new(ip, port)))
+                }
+            })
         })
         .await;
 
-        self.os.net().rx += len as u64;
+        self.os.with_net(|n| n.rx += len as u64);
 
         (&mut buf[..len], addr)
     }
 
     pub fn close(&mut self) {
-        self.os
-            .net()
-            .socket_set
-            .get_mut::<UdpSocket>(self.handle)
-            .close();
-        self.os.net().socket_set.remove(self.handle);
+        self.os.with_net(|n| {
+            n.socket_set.get_mut::<UdpSocket>(self.handle).close();
+            n.socket_set.remove(self.handle)
+        });
     }
 }
 

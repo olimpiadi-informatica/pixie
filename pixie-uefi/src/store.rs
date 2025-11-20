@@ -5,11 +5,12 @@ use crate::{
     },
     parse_disk, MIN_MEMORY,
 };
-use alloc::{rc::Rc, vec::Vec};
+use alloc::{rc::Rc, sync::Arc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
 use log::info;
 use lz4_flex::compress;
 use pixie_shared::{util::BytesFmt, Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use spin::Mutex;
 use uefi::proto::console::text::Color;
 
 #[derive(Debug)]
@@ -39,9 +40,9 @@ enum State {
 }
 
 pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
-    let stats = Rc::new(RefCell::new(State::ReadingPartitions));
+    let stats = Arc::new(Mutex::new(State::ReadingPartitions));
     let stats2 = stats.clone();
-    os.set_ui_drawer(move |os| match &*stats2.borrow() {
+    os.set_ui_drawer(move |os| match &*stats2.try_lock().unwrap() {
         State::ReadingPartitions => {
             os.write_with_color("Reading partitions...", Color::White, Color::Black)
         }
@@ -154,12 +155,12 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     };
 
     let task5 = async {
-        stats.replace(State::PushingChunks {
+        *stats.try_lock().unwrap() = State::PushingChunks {
             cur: 0,
             total,
             tsize: 0,
             tcsize: 0,
-        });
+        };
 
         let mut chunks = Vec::new();
         while let Some((chunk, has_chunk)) = rx4.recv().await {
@@ -172,12 +173,12 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
             total_size += chunk.size;
             total_csize += chunk.csize;
 
-            stats.replace(State::PushingChunks {
+            *stats.try_lock().unwrap() = State::PushingChunks {
                 cur: chunks.len(),
                 total,
                 tsize: total_size,
                 tcsize: total_csize,
-            });
+            };
             udp.send(
                 server_address,
                 &postcard::to_allocvec(&UdpRequest::ActionProgress(chunks.len(), total))?,

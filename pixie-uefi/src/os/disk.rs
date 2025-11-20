@@ -44,6 +44,9 @@ pub struct Disk {
     os: UefiOS,
 }
 
+unsafe impl Send for Disk {}
+unsafe impl Sync for Disk {}
+
 // TODO(veluca): consider making parts of this actually async, i.e. by using DiskIo2/BlockIO2 if
 // available; support having more than one disk.
 impl Disk {

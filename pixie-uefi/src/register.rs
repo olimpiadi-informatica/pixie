@@ -2,10 +2,11 @@ use crate::os::{
     error::{Error, Result},
     UefiOS, PACKET_SIZE,
 };
-use alloc::{boxed::Box, rc::Rc, vec::Vec};
+use alloc::{boxed::Box, rc::Rc, sync::Arc, vec::Vec};
 use core::{cell::RefCell, net::SocketAddrV4};
 use futures::future::{select, Either};
 use pixie_shared::{HintPacket, RegistrationInfo, TcpRequest, HINT_PORT};
+use spin::Mutex;
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
 #[derive(Debug, Default)]
@@ -15,11 +16,11 @@ struct Data {
 }
 
 pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
-    let data = Rc::new(RefCell::new(Data::default()));
+    let data = Arc::new(Mutex::new(Data::default()));
     let data2 = data.clone();
 
     os.set_ui_drawer(move |os| {
-        let data2 = data2.borrow();
+        let data2 = data2.try_lock().unwrap();
         os.write_with_color(
             &format!("Group:  {}\n", data2.station.group),
             if data2.selected == 0 {
@@ -73,7 +74,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                 match select(recv, key).await {
                     Either::Left(((buf, _), _)) => {
                         let hint: HintPacket = postcard::from_bytes(buf)?;
-                        data.borrow_mut().station = hint.station;
+                        data.try_lock().unwrap().station = hint.station;
                         images = hint.images;
                         groups = hint.groups.into_iter().map(|(k, _)| k).collect();
                         os.force_ui_redraw();
@@ -89,15 +90,15 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         };
 
         if key == Key::Special(ScanCode::DOWN) {
-            let mut data = data.borrow_mut();
+            let mut data = data.try_lock().unwrap();
             data.selected = (data.selected + 1).min(3);
         }
         if key == Key::Special(ScanCode::UP) {
-            let mut data = data.borrow_mut();
+            let mut data = data.try_lock().unwrap();
             data.selected = data.selected.saturating_sub(1);
         }
         if key == Key::Special(ScanCode::LEFT) {
-            let mut data = data.borrow_mut();
+            let mut data = data.try_lock().unwrap();
             match data.selected {
                 0 => {
                     data.station.group = groups
@@ -125,7 +126,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
             }
         }
         if key == Key::Special(ScanCode::RIGHT) {
-            let mut data = data.borrow_mut();
+            let mut data = data.try_lock().unwrap();
             match data.selected {
                 0 => {
                     data.station.group = groups
@@ -156,7 +157,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         os.force_ui_redraw();
     }
 
-    let msg = TcpRequest::Register(data.borrow().station.clone());
+    let msg = TcpRequest::Register(data.try_lock().unwrap().station.clone());
     let buf = postcard::to_allocvec(&msg)?;
     let stream = os.connect(server_addr).await?;
     stream.send_u64_le(buf.len() as u64).await?;
@@ -167,7 +168,10 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     // TODO(virv): this could be better
     stream.force_close().await;
 
-    log::info!("Registration successful! {:?}", data.borrow().station);
+    log::info!(
+        "Registration successful! {:?}",
+        data.try_lock().unwrap().station
+    );
 
     Ok(())
 }
