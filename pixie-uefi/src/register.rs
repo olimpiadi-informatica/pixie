@@ -168,10 +168,8 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     // TODO(virv): this could be better
     stream.force_close().await;
 
-    log::info!(
-        "Registration successful! {:?}",
-        data.try_lock().unwrap().station
-    );
+    let station = data.try_lock().unwrap().station.clone();
+    log::info!("Registration successful! {station:?}",);
 
     Ok(())
 }
