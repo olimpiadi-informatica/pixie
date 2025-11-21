@@ -6,7 +6,11 @@ use crate::{
     MIN_MEMORY,
 };
 use alloc::{boxed::Box, collections::BTreeMap, string::ToString, sync::Arc, vec::Vec};
-use core::{mem, net::SocketAddrV4};
+use core::{
+    mem,
+    net::SocketAddrV4,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 use futures::future::{select, Either};
 use log::info;
 use lz4_flex::decompress;
@@ -29,12 +33,12 @@ async fn fetch_image(stream: &TcpStream) -> Result<Image> {
 }
 
 struct Stats {
-    chunks: usize,
-    unique: usize,
-    fetch: usize,
-    recv: usize,
-    pack_recv: usize,
-    requested: usize,
+    chunks: AtomicUsize,
+    unique: AtomicUsize,
+    fetch: AtomicUsize,
+    recv: AtomicUsize,
+    pack_recv: AtomicUsize,
+    requested: AtomicUsize,
 }
 
 fn handle_packet(
@@ -89,41 +93,41 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     info!("Obtained chunks; {} distinct chunks", chunks_info.len());
 
-    let stats = Arc::new(Mutex::new(Stats {
-        chunks: image.disk.len(),
-        unique: chunks_info.len(),
-        fetch: 0,
-        recv: 0,
-        pack_recv: 0,
-        requested: 0,
-    }));
+    let stats = Arc::new(Stats {
+        chunks: AtomicUsize::new(image.disk.len()),
+        unique: AtomicUsize::new(chunks_info.len()),
+        fetch: AtomicUsize::new(0),
+        recv: AtomicUsize::new(0),
+        pack_recv: AtomicUsize::new(0),
+        requested: AtomicUsize::new(0),
+    });
 
     let stats2 = stats.clone();
     os.set_ui_drawer(move |os| {
         os.write_with_color(
-            &format!("{} total chunks\n", stats2.try_lock().unwrap().chunks),
+            &format!("{} total chunks\n", stats2.chunks.load(Ordering::Relaxed)),
             Color::White,
             Color::Black,
         );
         os.write_with_color(
-            &format!("{} unique chunks\n", stats2.try_lock().unwrap().unique),
+            &format!("{} unique chunks\n", stats2.unique.load(Ordering::Relaxed)),
             Color::White,
             Color::Black,
         );
         os.write_with_color(
-            &format!("{} chunks to fetch\n", stats2.try_lock().unwrap().fetch),
+            &format!("{} chunks to fetch\n", stats2.fetch.load(Ordering::Relaxed)),
             Color::White,
             Color::Black,
         );
         os.write_with_color(
-            &format!("{} chunks received\n", stats2.try_lock().unwrap().recv),
+            &format!("{} chunks received\n", stats2.recv.load(Ordering::Relaxed)),
             Color::White,
             Color::Black,
         );
         os.write_with_color(
             &format!(
                 "{} packets received\n",
-                stats2.try_lock().unwrap().pack_recv
+                stats2.pack_recv.load(Ordering::Relaxed)
             ),
             Color::White,
             Color::Black,
@@ -131,7 +135,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         os.write_with_color(
             &format!(
                 "{} chunks requested\n",
-                stats2.try_lock().unwrap().requested
+                stats2.requested.load(Ordering::Relaxed)
             ),
             Color::White,
             Color::Black,
@@ -158,13 +162,13 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
             }
         } else {
             chunks_info.insert(hash, (size, csize, pos));
-            stats.lock().fetch = chunks_info.len();
+            stats.fetch.store(chunks_info.len(), Ordering::Relaxed);
         }
     }
 
     info!(
         "Disk scanned; {} chunks to fetch",
-        stats.try_lock().unwrap().fetch
+        stats.fetch.load(Ordering::Relaxed)
     );
 
     let socket = os.udp_bind(Some(CHUNKS_PORT)).await?;
@@ -188,7 +192,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
             let sleep = Box::pin(os.sleep_us(100_000));
             match select(recv, sleep).await {
                 Either::Left(((buf, _addr), _)) => {
-                    stats.try_lock().unwrap().pack_recv += 1;
+                    stats.pack_recv.fetch_add(1, Ordering::Relaxed);
                     assert!(buf.len() >= 34);
 
                     let chunk =
@@ -209,7 +213,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                     // TODO(virv): compute the number of chunks to request
                     let chunks: Vec<_> =
                         chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
-                    stats.try_lock().unwrap().requested += chunks.len();
+                    stats.requested.fetch_add(chunks.len(), Ordering::Relaxed);
                     let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
                     socket.send(server_addr, &msg).await?;
                 }
@@ -224,11 +228,14 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                 disk.write(offset as u64, &data).await?;
             }
 
-            let mut stats = stats.try_lock().unwrap();
-            stats.recv += 1;
+            //let mut stats = stats.try_lock().unwrap();
+            stats.recv.fetch_add(1, Ordering::Relaxed);
 
-            let msg = UdpRequest::ActionProgress(stats.recv, stats.fetch);
-            drop(stats);
+            let msg = UdpRequest::ActionProgress(
+                stats.recv.load(Ordering::Relaxed),
+                stats.fetch.load(Ordering::Relaxed),
+            );
+            //drop(stats);
 
             socket
                 .send(server_addr, &postcard::to_allocvec(&msg)?)
