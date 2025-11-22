@@ -10,6 +10,7 @@ use core::{
     task::Poll,
 };
 use futures::future::select;
+use log::warn;
 use smoltcp::{
     iface::{Config, Interface, PollResult, SocketHandle, SocketSet},
     phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
@@ -149,6 +150,7 @@ pub struct NetworkInterface {
     device: SnpDevice,
     socket_set: SocketSet<'static>,
     dhcp_socket_handle: SocketHandle,
+    dhcp_lost: bool,
     ephemeral_port_counter: u64,
     pub(super) rx: u64,
     pub(super) tx: u64,
@@ -196,6 +198,7 @@ impl NetworkInterface {
         NetworkInterface {
             interface,
             dhcp_socket_handle,
+            dhcp_lost: true,
             device,
             socket_set,
             ephemeral_port_counter: os.rand_u64(),
@@ -236,6 +239,7 @@ impl NetworkInterface {
 
         if let Some(dhcp_status) = dhcp_status {
             if let Event::Configured(config) = dhcp_status {
+                self.dhcp_lost = false;
                 self.interface.update_ip_addrs(|a| {
                     a.push(IpCidr::Ipv4(config.address)).unwrap();
                 });
@@ -245,11 +249,9 @@ impl NetworkInterface {
                         .add_default_ipv4_route(router)
                         .unwrap();
                 }
-            } else {
-                self.interface.update_ip_addrs(|a| {
-                    a.clear();
-                });
-                self.interface.routes_mut().remove_default_ipv4_route();
+            } else if !self.dhcp_lost {
+                warn!("DHCP configuration lost");
+                self.dhcp_lost = true;
             }
         }
 
