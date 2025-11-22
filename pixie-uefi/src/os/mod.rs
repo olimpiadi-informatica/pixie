@@ -57,7 +57,6 @@ mod timer;
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
 struct UefiOSImpl {
-    timer: Timer,
     rng: Rng,
     tasks: Vec<Arc<Task>>,
     input: ScopedProtocol<Input>,
@@ -169,7 +168,7 @@ impl UefiOS {
             .unwrap();
         }
 
-        let timer = Timer::new();
+        Timer::new(); // initialize timer
         let rng = Rng::new();
 
         let input_handles = uefi::boot::find_handles::<Input>().unwrap();
@@ -185,7 +184,6 @@ impl UefiOS {
         vga.clear().unwrap();
 
         *OS.write() = Some(UefiOSImpl {
-            timer,
             rng,
             tasks: Vec::new(),
             input,
@@ -279,7 +277,7 @@ impl UefiOS {
     }
 
     pub fn timer(&self) -> Timer {
-        OS.try_read().unwrap().as_ref().unwrap().timer.clone()
+        Timer::new()
     }
 
     pub fn rand_u64(&self) -> u64 {
@@ -468,9 +466,13 @@ impl UefiOS {
 
             os.maybe_advance_to_col(cols * 3 / 4);
             os.write_with_color(
-                &format!("alloc: {} uefi alloc: {}\n\n", BytesFmt(stats.allocated_bytes as u64), BytesFmt(stats.claimed_bytes as u64)),
+                &format!(
+                    "alloc: {} uefi alloc: {}\n\n",
+                    BytesFmt(stats.allocated_bytes as u64),
+                    BytesFmt(stats.claimed_bytes as u64)
+                ),
                 Color::White,
-                Color::Black
+                Color::Black,
             );
 
             os.tasks.sort_by_key(|t| -t.micros());
