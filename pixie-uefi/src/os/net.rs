@@ -239,15 +239,20 @@ impl NetworkInterface {
 
         if let Some(dhcp_status) = dhcp_status {
             if let Event::Configured(config) = dhcp_status {
-                self.dhcp_lost = false;
-                self.interface.update_ip_addrs(|a| {
-                    a.push(IpCidr::Ipv4(config.address)).unwrap();
-                });
-                if let Some(router) = config.router {
-                    self.interface
-                        .routes_mut()
-                        .add_default_ipv4_route(router)
-                        .unwrap();
+                let new_ip = config.address;
+                if &[IpCidr::Ipv4(new_ip)] != self.interface.ip_addrs() {
+                    self.interface.routes_mut().remove_default_ipv4_route();
+                    self.dhcp_lost = false;
+                    self.interface.update_ip_addrs(|a| {
+                        a.clear();
+                        a.push(IpCidr::Ipv4(new_ip)).unwrap();
+                    });
+                    if let Some(router) = config.router {
+                        self.interface
+                            .routes_mut()
+                            .add_default_ipv4_route(router)
+                            .unwrap();
+                    }
                 }
             } else if !self.dhcp_lost {
                 // warn!("DHCP configuration lost");
