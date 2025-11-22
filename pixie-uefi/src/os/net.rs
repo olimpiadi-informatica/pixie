@@ -250,7 +250,7 @@ impl NetworkInterface {
                         .unwrap();
                 }
             } else if !self.dhcp_lost {
-                warn!("DHCP configuration lost");
+                // warn!("DHCP configuration lost");
                 self.dhcp_lost = true;
             }
         }
