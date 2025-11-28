@@ -40,7 +40,7 @@ EOF
 if ! ip link show br-pixie; then
     ip link add br-pixie type bridge
     ip link set dev br-pixie up
-    ip addr add 10.0.0.1/8 brd 10.255.255.255 dev br-pixie
+    ip addr add 10.0.0.1/8 dev br-pixie
 fi
 
 RUST_BACKTRACE=short RUST_LOG=debug RUST_LOG_STYLE=always LLVM_PROFILE_FILE=prof-out/pixie-server-%m-%p.profraw ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
@@ -61,11 +61,13 @@ run_qemu() {
         -enable-kvm \
         -cpu host -smp cores=2 \
         -m 1G \
+        -boot order=n \
         -drive if=pflash,format=raw,file=$OVMF \
         -drive file=$TEMPDIR/disk.img,if=none,id=nvm,format=raw \
         -drive file=$FILE,format=raw \
         -device nvme,serial=deadbeef,drive=nvm \
-        -nic bridge,mac=52:54:00:12:34:56,br=br-pixie,model=virtio-net-pci
+        -netdev bridge,br=br-pixie,id=net0 \
+        -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56,bootindex=1
 }
 
 truncate -s 8G $TEMPDIR/disk.img
