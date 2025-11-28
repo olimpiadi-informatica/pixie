@@ -118,7 +118,9 @@ pub const UDP_BODY_LEN: usize = 1472;
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     /// Reboot into the OS.
-    Reboot,
+    Boot,
+    /// Restart the machine.
+    Restart,
     /// Shutdown the machine.
     Shutdown,
     /// Register the machine.
@@ -134,7 +136,8 @@ pub enum Action {
 impl Display for Action {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
         match self {
-            Action::Reboot => write!(fmt, "reboot"),
+            Action::Boot => write!(fmt, "reboot"),
+            Action::Restart => write!(fmt, "restart"),
             Action::Shutdown => write!(fmt, "shutdown"),
             Action::Register => write!(fmt, "register"),
             Action::Store => write!(fmt, "store"),

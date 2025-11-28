@@ -144,7 +144,8 @@ async fn run(os: UefiOS) -> Result<()> {
                 log::info!("Command: {command:?}");
                 match command {
                     Action::Wait => unreachable!(),
-                    Action::Reboot => reboot_to_os(os).await,
+                    Action::Boot => reboot_to_os(os).await,
+                    Action::Restart => {}
                     Action::Shutdown => shutdown(os).await,
                     Action::Register => register(os, server).await?,
                     Action::Store => store(os, server).await?,
@@ -155,6 +156,10 @@ async fn run(os: UefiOS) -> Result<()> {
                 complete_action(&tcp).await?;
                 tcp.close_send().await;
                 tcp.force_close().await;
+
+                if command == Action::Restart {
+                    os.reset();
+                }
             }
         }
     }

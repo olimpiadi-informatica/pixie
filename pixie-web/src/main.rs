@@ -148,7 +148,8 @@ fn Group(
         let mac = move || unit.get().mac.to_string();
         let url_flash = move || format!("admin/action/{}/flash", mac());
         let url_store = move || format!("admin/action/{}/store", mac());
-        let url_boot = move || format!("admin/action/{}/reboot", mac());
+        let url_boot = move || format!("admin/action/{}/boot", mac());
+        let url_restart = move || format!("admin/action/{}/restart", mac());
         let url_cancel = move || format!("admin/action/{}/wait", mac());
         let url_register = move || format!("admin/action/{}/register", mac());
         let url_shutdown = move || format!("admin/action/{}/shutdown", mac());
@@ -206,7 +207,10 @@ fn Group(
                             "store"
                         </Button>
                         <Button color=ButtonColor::Success on_click=move |_| send_req(url_boot())>
-                            "reboot"
+                            "boot"
+                        </Button>
+                        <Button color=ButtonColor::Success on_click=move |_| send_req(url_restart())>
+                            "restart"
                         </Button>
                         <Button color=ButtonColor::Primary on_click=move |_| send_req(url_cancel())>
                             "wait"
@@ -237,7 +241,8 @@ fn Group(
     };
 
     let url_flash = move || format!("admin/action/{}/flash", group_name.get());
-    let url_boot = move || format!("admin/action/{}/reboot", group_name.get());
+    let url_boot = move || format!("admin/action/{}/boot", group_name.get());
+    let url_restart = move || format!("admin/action/{}/restart", group_name.get());
     let url_cancel = move || format!("admin/action/{}/wait", group_name.get());
 
     let image_button = move |image: String| {
@@ -259,6 +264,9 @@ fn Group(
                 </Button>
                 <Button color=ButtonColor::Success on_click=move |_| send_req(url_boot())>
                     "Set all machines to boot into the OS"
+                </Button>
+                <Button color=ButtonColor::Success on_click=move |_| send_req(url_restart())>
+                    "Restart all machines"
                 </Button>
                 <Button color=ButtonColor::Primary on_click=move |_| send_req(url_cancel())>
                     "Set all machines to wait for next command"
