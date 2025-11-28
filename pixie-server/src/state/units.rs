@@ -137,12 +137,12 @@ impl State {
                     action
                 } else {
                     match unit.next_action {
-                        Action::Store | Action::Flash | Action::Register => {
+                        Action::Restart | Action::Store | Action::Flash | Action::Register => {
                             unit.curr_action = Some(unit.next_action);
                             unit.next_action = Action::Wait;
                             modified = true;
                         }
-                        Action::Reboot | Action::Wait | Action::Shutdown => {
+                        Action::Boot | Action::Wait | Action::Shutdown => {
                             modified = false;
                         }
                     }
