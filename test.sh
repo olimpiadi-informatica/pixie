@@ -39,27 +39,26 @@ cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 trap '' SIGTERM
 sudo ./run_test.sh ${SELFDIR}/storage
 
-TEST_OBJECTS=$( \
-      for file in \
-        $( \
-          RUSTFLAGS="-C instrument-coverage" \
-            cargo +nightly test --manifest-path pixie-shared/Cargo.toml --no-fail-fast --all-features --no-run --message-format=json \
-              | jq -r "select(.profile.test == true) | .filenames[]" \
-              | grep -v dSYM - \
-        ); \
-      do \
-        printf "%s %s " -object $file; \
-      done \
-    )
+TEST_OBJECTS=$(
+  for file in \
+    $(
+      RUSTFLAGS="-C instrument-coverage" \
+        cargo +nightly test --manifest-path pixie-shared/Cargo.toml --no-fail-fast --all-features --no-run --message-format=json |
+        jq -r "select(.profile.test == true) | .filenames[]" |
+        grep -v dSYM -
+    ); do
+    printf "%s %s " -object $file
+  done
+)
 
 "$LLVM_PROFDATA" merge -sparse prof-out/*.profraw -o prof-out/pixie.profdata
 "$LLVM_COV" show \
-    -instr-profile=prof-out/pixie.profdata \
-    -object pixie-server/target/debug/pixie-server \
-    -object pixie-uefi/target/x86_64-unknown-uefi/debug/pixie-uefi.efi \
-    $TEST_OBJECTS \
-    -Xdemangler=rustfilt \
-    --ignore-filename-regex='/.cargo' \
-    --ignore-filename-regex='/.rustup' \
-    --format html \
-    -o prof-out/html
+  -instr-profile=prof-out/pixie.profdata \
+  -object pixie-server/target/debug/pixie-server \
+  -object pixie-uefi/target/x86_64-unknown-uefi/debug/pixie-uefi.efi \
+  $TEST_OBJECTS \
+  -Xdemangler=rustfilt \
+  --ignore-filename-regex='/.cargo' \
+  --ignore-filename-regex='/.rustup' \
+  --format html \
+  -o prof-out/html
