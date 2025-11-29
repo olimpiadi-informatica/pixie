@@ -47,6 +47,7 @@ jobs:
           sudo apt-get install -y dnsmasq qemu-system-x86 ovmf
           sudo mkdir -p /etc/qemu
           echo allow br-pixie | sudo tee /etc/qemu/bridge.conf
+          echo allow br-pixie1 | sudo tee -a /etc/qemu/bridge.conf
 
       - name: Install rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

@@ -1,5 +1,6 @@
 use crate::{Action, Bijection};
 use alloc::{string::String, vec::Vec};
+use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,16 +19,22 @@ pub enum DhcpMode {
     Proxy(Ipv4Addr),
 }
 
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+pub struct InterfaceConfig {
+    /// Listen on address
+    pub network: Ipv4Net,
+    /// DHCP server.
+    pub dhcp: DhcpMode,
+}
+
 /// Registered clients will always be assigned an IP in the form
 /// 10.{group_id}.{column_id}.{row_id}.
 /// Note that for this to work, the specified network interface must have an IP on the 10.0.0.0/8
 /// subnet; BEWARE that dnsmasq can be picky about the order of IP addresses.
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 pub struct HostsConfig {
-    /// Listen on address
-    pub listen_on: Ipv4Addr,
-    /// DHCP server.
-    pub dhcp: DhcpMode,
+    /// Interfaces to operate on.
+    pub interfaces: Vec<InterfaceConfig>,
     /// Hosts file to use for DHCP hostnames.
     pub hostsfile: Option<PathBuf>,
     /// Speed in bytes/second used to broadcast chunks.

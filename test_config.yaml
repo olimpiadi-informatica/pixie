@@ -1,8 +1,10 @@
 hosts:
   interfaces:
-  - network: 10.0.0.1/8
-    dhcp: !static [10.187.100.1, 10.187.200.200]
+  - network: 10.0.0.1/16
+    dhcp: !static [10.0.100.1, 10.0.200.200]
     #dhcp: !proxy 192.168.1.100
+  - network: 10.10.0.1/16
+    dhcp: !static [10.10.100.1, 10.10.200.200]
   hostsfile: /etc/hosts
   broadcast_speed: 52428800
 http:
@@ -10,7 +12,7 @@ http:
   #password: secret
 groups:
   - [room0, 0]
-  - [room1, 1]
+  - [room10, 10]
 images:
   - contestant
   - worker

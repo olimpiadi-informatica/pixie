@@ -35,29 +35,48 @@ impl Drop for DnsmasqHandle {
 }
 
 async fn write_config(state: &State) -> Result<()> {
-    let (name, _) = find_network(state.config.hosts.listen_on)?;
-
     let mut dnsmasq_conf = File::create(state.run_dir.join("dnsmasq.conf"))?;
-
-    let dhcp_dynamic_conf = match state.config.hosts.dhcp {
-        DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
-        DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{ip},proxy"),
-    };
 
     let storage_str = state.storage_dir.to_str().unwrap();
     let run_str = state.run_dir.to_str().unwrap();
+
+    let interfaces_config = state
+        .config
+        .hosts
+        .interfaces
+        .iter()
+        .map(|iface| {
+            let name = find_network(iface.network.addr())?.0;
+
+            let dhcp_dynamic_conf = match iface.dhcp {
+                DhcpMode::Static(low, high) => format!("dhcp-range=tag:netboot,{low},{high}"),
+                DhcpMode::Proxy(ip) => format!("dhcp-range=tag:netboot,{ip},proxy"),
+            };
+
+            let netaddr = iface.network.network().to_string();
+            let netmask = iface.network.netmask().to_string();
+
+            Ok(format!(
+                r#"
+## {name}
+dhcp-range=tag:!netboot,{netaddr},static,{netmask}
+{dhcp_dynamic_conf}
+interface={name}
+"#
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .join("\n");
 
     write!(
         dnsmasq_conf,
         r#"
 ### Per-network configuration
 
-## net0
-{dhcp_dynamic_conf}
-dhcp-range=tag:!netboot,10.0.0.0,static,255.0.0.0
+{interfaces_config}
+
 dhcp-hostsfile={run_str}/hosts
 dhcp-boot=pixie-uefi.efi
-interface={name}
 except-interface=lo
 user=root
 group=root
