@@ -1,17 +1,19 @@
 //! Handles [`UdpRequest`]
 
 use crate::{
-    find_mac, find_network,
+    find_mac,
     state::{State, UnitSelector},
 };
 use anyhow::{ensure, Context, Result};
+use futures::FutureExt;
+use ipnet::Ipv4Net;
 use pixie_shared::{
-    chunk_codec::Encoder, ChunkHash, HintPacket, RegistrationInfo, UdpRequest, ACTION_PORT,
-    CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
+    chunk_codec::Encoder, ChunkHash, HintPacket, InterfaceConfig, RegistrationInfo, UdpRequest,
+    ACTION_PORT, CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
 };
 use std::{
     collections::BTreeSet,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddrV4},
     ops::Bound,
     sync::Arc,
 };
@@ -24,7 +26,7 @@ use tokio::{
 async fn broadcast_chunks(
     state: &State,
     socket: &UdpSocket,
-    ip: Ipv4Addr,
+    iface: &InterfaceConfig,
     mut rx: Receiver<ChunkHash>,
 ) -> Result<()> {
     let mut queue = BTreeSet::<ChunkHash>::new();
@@ -75,8 +77,7 @@ async fn broadcast_chunks(
             continue;
         };
 
-        let hosts_cfg = &state.config.hosts;
-        let chunks_addr = SocketAddrV4::new(ip, CHUNKS_PORT);
+        let chunks_addr = SocketAddrV4::new(iface.network.broadcast(), CHUNKS_PORT);
 
         let mut encoder = Encoder::new(cdata);
         write_buf[..32].clone_from_slice(&index);
@@ -85,7 +86,7 @@ async fn broadcast_chunks(
 
             let sent_len = socket.send_to(&write_buf[..32 + len], chunks_addr).await?;
             ensure!(sent_len == 32 + len, "Could not send packet");
-            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
+            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / iface.broadcast_speed;
         }
     }
 
@@ -165,12 +166,23 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
     Ok(())
 }
 
-async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>) -> Result<()> {
+async fn handle_requests(
+    state: &State,
+    socket: &UdpSocket,
+    net_tx: Vec<(Ipv4Net, Sender<[u8; 32]>)>,
+) -> Result<()> {
     let mut buf = [0; UDP_BODY_LEN];
     loop {
         let (len, peer_addr) = tokio::select! {
             x = socket.recv_from(&mut buf) => x?,
             _ = state.cancel_token.cancelled() => break,
+        };
+        let peer_ip = match peer_addr.ip() {
+            IpAddr::V4(ip) => ip,
+            _ => panic!(),
+        };
+        let Some((_, tx)) = net_tx.iter().find(|(net, _)| net.contains(&peer_ip)) else {
+            continue;
         };
         let req: postcard::Result<UdpRequest> = postcard::from_bytes(&buf[..len]);
         match req {
@@ -201,18 +213,29 @@ async fn handle_requests(state: &State, socket: &UdpSocket, tx: Sender<[u8; 32]>
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let (_, network) = find_network(state.config.hosts.listen_on)?;
+    let (net_tx, net_rx): (_, Vec<_>) = state
+        .config
+        .hosts
+        .interfaces
+        .iter()
+        .map(|iface| {
+            let (tx, rx) = mpsc::channel(128);
+            ((iface.network, tx), (iface, rx))
+        })
+        .unzip();
 
-    let (tx, rx) = mpsc::channel(128);
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, ACTION_PORT)).await?;
     log::info!("Listening on {}", socket.local_addr()?);
     socket.set_broadcast(true)?;
 
-    tokio::try_join!(
-        broadcast_chunks(&state, &socket, network.broadcast(), rx),
-        broadcast_hint(&state, &socket, network.broadcast()),
-        handle_requests(&state, &socket, tx),
-    )?;
+    let mut tasks = vec![handle_requests(&state, &socket, net_tx).boxed()];
+
+    for (iface, rx) in net_rx {
+        tasks.push(broadcast_chunks(&state, &socket, iface, rx).boxed());
+        tasks.push(broadcast_hint(&state, &socket, iface.network.broadcast()).boxed());
+    }
+
+    futures::future::try_join_all(tasks).await?;
 
     Ok(())
 }
