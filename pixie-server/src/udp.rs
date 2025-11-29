@@ -8,8 +8,8 @@ use anyhow::{ensure, Context, Result};
 use futures::FutureExt;
 use ipnet::Ipv4Net;
 use pixie_shared::{
-    chunk_codec::Encoder, ChunkHash, HintPacket, RegistrationInfo, UdpRequest, ACTION_PORT,
-    CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
+    chunk_codec::Encoder, ChunkHash, HintPacket, InterfaceConfig, RegistrationInfo, UdpRequest,
+    ACTION_PORT, CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
 };
 use std::{
     collections::BTreeSet,
@@ -26,7 +26,7 @@ use tokio::{
 async fn broadcast_chunks(
     state: &State,
     socket: &UdpSocket,
-    ip: Ipv4Addr,
+    iface: &InterfaceConfig,
     mut rx: Receiver<ChunkHash>,
 ) -> Result<()> {
     let mut queue = BTreeSet::<ChunkHash>::new();
@@ -77,8 +77,7 @@ async fn broadcast_chunks(
             continue;
         };
 
-        let hosts_cfg = &state.config.hosts;
-        let chunks_addr = SocketAddrV4::new(ip, CHUNKS_PORT);
+        let chunks_addr = SocketAddrV4::new(iface.network.broadcast(), CHUNKS_PORT);
 
         let mut encoder = Encoder::new(cdata);
         write_buf[..32].clone_from_slice(&index);
@@ -87,7 +86,7 @@ async fn broadcast_chunks(
 
             let sent_len = socket.send_to(&write_buf[..32 + len], chunks_addr).await?;
             ensure!(sent_len == 32 + len, "Could not send packet");
-            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / hosts_cfg.broadcast_speed;
+            wait_for += 8 * (sent_len as u32) * Duration::from_secs(1) / iface.broadcast_speed;
         }
     }
 
@@ -221,7 +220,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .iter()
         .map(|iface| {
             let (tx, rx) = mpsc::channel(128);
-            ((iface.network, tx), (iface.network, rx))
+            ((iface.network, tx), (iface, rx))
         })
         .unzip();
 
@@ -231,9 +230,9 @@ pub async fn main(state: Arc<State>) -> Result<()> {
 
     let mut tasks = vec![handle_requests(&state, &socket, net_tx).boxed()];
 
-    for (network, rx) in net_rx {
-        tasks.push(broadcast_chunks(&state, &socket, network.broadcast(), rx).boxed());
-        tasks.push(broadcast_hint(&state, &socket, network.broadcast()).boxed());
+    for (iface, rx) in net_rx {
+        tasks.push(broadcast_chunks(&state, &socket, iface, rx).boxed());
+        tasks.push(broadcast_hint(&state, &socket, iface.network.broadcast()).boxed());
     }
 
     futures::future::try_join_all(tasks).await?;

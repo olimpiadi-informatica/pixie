@@ -2,14 +2,13 @@ hosts:
   interfaces:
   - network: 10.0.0.1/16
     dhcp: !static [10.0.100.1, 10.0.200.200]
-    #dhcp: !proxy 192.168.1.100
+    broadcast_speed: 52428800
   - network: 10.10.0.1/16
     dhcp: !static [10.10.100.1, 10.10.200.200]
+    broadcast_speed: 52428800
   hostsfile: /etc/hosts
-  broadcast_speed: 52428800
 http:
   listen_on: 0.0.0.0:8080
-  #password: secret
 groups:
   - [room0, 0]
   - [room10, 10]

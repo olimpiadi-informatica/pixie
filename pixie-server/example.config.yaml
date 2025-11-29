@@ -3,8 +3,8 @@ hosts:
   - network: 10.0.0.1/8
     dhcp: !static [10.187.100.1, 10.187.200.200]
     #dhcp: !proxy 192.168.1.100
+    broadcast_speed: 52428800
   hostsfile: /etc/hosts
-  broadcast_speed: 52428800
 http:
   listen_on: 0.0.0.0:8080
   #password: secret
