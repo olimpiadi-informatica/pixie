@@ -44,6 +44,7 @@ use uefi::{
     CStr16, Event, Handle, Status,
 };
 
+mod allocator;
 mod boot_options;
 pub mod disk;
 pub mod error;
