@@ -16,7 +16,6 @@ coverage = ["dep:minicov"]
 anstyle = { version = "1.0.13", default-features = false }
 blake3 = { version = "1.8.2", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
 core_detect = "1.0.0"
-derive_more = { version = "2.0.1", features = ["from"], default-features = false }
 futures = { version = "0.3.29", default-features = false, features = ["alloc", "async-await"] }
 gpt_disk_io = "0.16.2"
 log = "0.4.28"

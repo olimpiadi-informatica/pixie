@@ -5,7 +5,7 @@ use crate::{
     },
     MIN_MEMORY,
 };
-use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, string::ToString, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, vec::Vec};
 use core::{cell::RefCell, mem, net::SocketAddrV4};
 use futures::future::{select, Either};
 use log::info;
@@ -64,7 +64,7 @@ fn handle_packet(
     received.remove(&hash).unwrap();
     last_seen.retain(|x| x != &hash);
 
-    let data = decompress(&cdata, size).map_err(|e| Error::Generic(e.to_string()))?;
+    let data = decompress(&cdata, size)?;
     assert_eq!(data.len(), size);
 
     Ok(Some((pos, data)))

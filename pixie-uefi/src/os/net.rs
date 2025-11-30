@@ -341,7 +341,7 @@ impl TcpStream {
             let socket = net.socket_set.get_mut::<TcpSocket>(self.handle);
             let sent = socket.send_slice(&data[pos..]);
             if let Err(err) = sent {
-                return Poll::Ready(Err(Error::TcpSend(err)));
+                return Poll::Ready(Err(err.into()));
             }
             pos += sent.unwrap();
             if pos < data.len() {
@@ -374,7 +374,7 @@ impl TcpStream {
                 return Poll::Ready(Ok(0));
             }
             if let Err(err) = recvd {
-                return Poll::Ready(Err(Error::Recv(err)));
+                return Poll::Ready(Err(err.into()));
             }
             if recvd.unwrap() == 0 {
                 socket.register_recv_waker(cx.waker());

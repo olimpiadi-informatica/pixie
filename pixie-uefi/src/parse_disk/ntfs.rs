@@ -1,9 +1,6 @@
 use super::{le16, le32, le64};
 use crate::{
-    os::{
-        disk::Disk,
-        error::{Error, Result},
-    },
+    os::{disk::Disk, error::Result},
     store::ChunkInfo,
 };
 use alloc::vec::Vec;
@@ -42,8 +39,7 @@ pub async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option
     let bitmap_entry_address = mft_address + 6 * bytes_per_file_record;
     let mut bitmap_entry = [0u8; 1024];
     disk.read(start + bitmap_entry_address as u64, &mut bitmap_entry)
-        .await
-        .map_err(|e| Error::Generic(format!("failed to read bitmap entry: {e}")))?;
+        .await?;
 
     let mut attribute_offset = le16(&bitmap_entry, 0x14) as usize;
     while le32(&bitmap_entry, attribute_offset) != 0x80 {
@@ -75,9 +71,7 @@ pub async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option
         let mut buf = vec![0u8; bytes_per_cluster];
         for i in 0..length {
             let x = start + (offset + i) as u64 * bytes_per_cluster as u64;
-            disk.read(x, &mut buf).await.map_err(|e| {
-                Error::Generic(format!("failed to read bitmap content at {x}: {e}"))
-            })?;
+            disk.read(x, &mut buf).await?;
 
             for &byte in &buf {
                 for bit in 0..8 {
