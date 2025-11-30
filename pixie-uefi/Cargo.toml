@@ -16,16 +16,16 @@ coverage = ["dep:minicov"]
 anstyle = { version = "1.0.13", default-features = false }
 blake3 = { version = "1.8.2", default-features = false, features = ["prefer_intrinsics", "no_avx512", "pure"] }
 core_detect = "1.0.0"
-futures = { version = "0.3.29", default-features = false, features = ["alloc", "async-await"] }
+futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 gpt_disk_io = "0.16.2"
 log = "0.4.28"
-lz4_flex = { version = "0.11.5", default-features = false }
+lz4_flex = { version = "0.12.0", default-features = false }
 managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 minicov = { version = "0.3.7", optional = true }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.12.0", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async", "socket-tcp-cubic"] }
 thingbuf = { version = "0.1.6", default-features = false, features = ["alloc"] }
-uefi = { version = "0.33.0", features = ["alloc", "global_allocator", "panic_handler"] }
+uefi = { version = "0.36.1", features = ["alloc", "global_allocator", "panic_handler"] }
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"

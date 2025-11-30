@@ -25,8 +25,7 @@ use core::{
 };
 use pixie_shared::util::BytesFmt;
 use uefi::{
-    boot::{EventType, MemoryType, ScopedProtocol, TimerTrigger, Tpl},
-    mem::memory_map::MemoryMap,
+    boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
     proto::{
         console::{
             serial::Serial,
@@ -47,6 +46,7 @@ mod boot_options;
 pub mod disk;
 pub mod error;
 mod executor;
+pub mod memory;
 mod net;
 mod sync;
 mod timer;
@@ -538,14 +538,6 @@ impl UefiOS {
 
     pub fn shutdown(&self) -> ! {
         uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None)
-    }
-
-    pub fn get_total_mem(&self) -> u64 {
-        uefi::boot::memory_map(MemoryType::LOADER_DATA)
-            .expect("Failed to get memory map")
-            .entries()
-            .map(|entry| entry.page_count * 4096)
-            .sum()
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::{
     os::{
         error::{Error, Result},
-        TcpStream, UefiOS,
+        memory, TcpStream, UefiOS,
     },
     parse_disk, MIN_MEMORY,
 };
@@ -84,12 +84,12 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let mut total_size = 0;
     let mut total_csize = 0;
 
-    let total_mem = os.get_total_mem();
+    let free_mem = memory::stats().free;
     let channel_size =
-        (total_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
+        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
     log::debug!(
-        "Total memory: {}. Channel size: {channel_size}",
-        BytesFmt(total_mem)
+        "Free memory: {}. Channel size: {channel_size}",
+        BytesFmt(free_mem)
     );
 
     let (tx1, rx1) = thingbuf::mpsc::channel(channel_size);
