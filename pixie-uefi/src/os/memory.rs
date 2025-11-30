@@ -1,4 +1,5 @@
-use uefi::{boot::MemoryType, mem::memory_map::MemoryMap};
+use uefi::boot::MemoryType;
+use uefi::mem::memory_map::MemoryMap;
 
 #[derive(Debug)]
 pub struct MemoryStats {

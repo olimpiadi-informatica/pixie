@@ -1,46 +1,34 @@
-use self::{
-    boot_options::BootOptions,
-    disk::Disk,
-    error::{Error, Result},
-    executor::{Executor, Task},
-    net::NetworkInterface,
-    sync::SyncRefCell,
-    timer::Timer,
-};
-use alloc::{
-    boxed::Box,
-    collections::VecDeque,
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
-use core::{
-    cell::{Ref, RefMut},
-    ffi::c_void,
-    fmt::Write,
-    future::{poll_fn, Future},
-    net::SocketAddrV4,
-    ptr::NonNull,
-    task::Poll,
-};
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::cell::{Ref, RefMut};
+use core::ffi::c_void;
+use core::fmt::Write;
+use core::future::{poll_fn, Future};
+use core::net::SocketAddrV4;
+use core::ptr::NonNull;
+use core::task::Poll;
+
 use pixie_shared::util::BytesFmt;
-use uefi::{
-    boot::{EventType, ScopedProtocol, TimerTrigger, Tpl},
-    proto::{
-        console::{
-            serial::Serial,
-            text::{Color, Input, Key, Output},
-        },
-        device_path::{
-            build::DevicePathBuilder,
-            text::{AllowShortcuts, DevicePathToText, DisplayOnly},
-            DevicePath,
-        },
-        Protocol,
-    },
-    runtime::{VariableAttributes, VariableVendor},
-    CStr16, Event, Handle, Status,
-};
+use uefi::boot::{EventType, ScopedProtocol, TimerTrigger, Tpl};
+use uefi::proto::console::serial::Serial;
+use uefi::proto::console::text::{Color, Input, Key, Output};
+use uefi::proto::device_path::build::DevicePathBuilder;
+use uefi::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly};
+use uefi::proto::device_path::DevicePath;
+use uefi::proto::Protocol;
+use uefi::runtime::{VariableAttributes, VariableVendor};
+use uefi::{CStr16, Event, Handle, Status};
+
+use self::boot_options::BootOptions;
+use self::disk::Disk;
+use self::error::{Error, Result};
+use self::executor::{Executor, Task};
+use self::net::NetworkInterface;
+use self::sync::SyncRefCell;
+use self::timer::Timer;
 
 mod boot_options;
 pub mod disk;

@@ -1,9 +1,9 @@
-use super::{le16, le32, le64};
-use crate::{
-    os::{disk::Disk, error::Result},
-    store::ChunkInfo,
-};
 use alloc::vec::Vec;
+
+use super::{le16, le32, le64};
+use crate::os::disk::Disk;
+use crate::os::error::Result;
+use crate::store::ChunkInfo;
 
 pub async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
     if end - start < 512 {

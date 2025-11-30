@@ -1,4 +1,5 @@
-use core::{cell::RefCell, ops::Deref};
+use core::cell::RefCell;
+use core::ops::Deref;
 
 pub struct SyncRefCell<T>(RefCell<T>);
 

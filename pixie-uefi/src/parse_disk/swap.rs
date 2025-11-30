@@ -1,8 +1,8 @@
-use crate::{
-    os::{disk::Disk, error::Result},
-    store::ChunkInfo,
-};
 use alloc::vec::Vec;
+
+use crate::os::disk::Disk;
+use crate::os::error::Result;
+use crate::store::ChunkInfo;
 
 pub async fn get_swap_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
     if end - start < 4096 {

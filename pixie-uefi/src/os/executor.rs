@@ -1,13 +1,14 @@
-use crate::os::timer::Timer;
+use alloc::boxed::Box;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use alloc::task::Wake;
+use core::cell::RefCell;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Waker};
 
 use super::sync::SyncRefCell;
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc, task::Wake};
-use core::{
-    cell::RefCell,
-    future::Future,
-    pin::Pin,
-    task::{Context, Waker},
-};
+use crate::os::timer::Timer;
 
 pub(super) type BoxFuture<T = ()> = Pin<Box<dyn Future<Output = T> + 'static>>;
 

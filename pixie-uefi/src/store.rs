@@ -1,16 +1,17 @@
-use crate::{
-    os::{
-        error::{Error, Result},
-        memory, TcpStream, UefiOS,
-    },
-    parse_disk, MIN_MEMORY,
-};
-use alloc::{rc::Rc, vec::Vec};
-use core::{cell::RefCell, net::SocketAddrV4};
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::net::SocketAddrV4;
+
 use log::info;
 use lz4_flex::compress;
-use pixie_shared::{util::BytesFmt, Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use pixie_shared::util::BytesFmt;
+use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
 use uefi::proto::console::text::Color;
+
+use crate::os::error::{Error, Result};
+use crate::os::{memory, TcpStream, UefiOS};
+use crate::{parse_disk, MIN_MEMORY};
 
 #[derive(Debug)]
 pub struct ChunkInfo {

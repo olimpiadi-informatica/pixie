@@ -1,10 +1,12 @@
-use crate::{
-    os::{disk::Disk, error::Result},
-    store::ChunkInfo,
-};
 use alloc::vec::Vec;
+
 use log::info;
-use pixie_shared::{util::BytesFmt, MAX_CHUNK_SIZE};
+use pixie_shared::util::BytesFmt;
+use pixie_shared::MAX_CHUNK_SIZE;
+
+use crate::os::disk::Disk;
+use crate::os::error::Result;
+use crate::store::ChunkInfo;
 
 mod ext4;
 mod fat;
