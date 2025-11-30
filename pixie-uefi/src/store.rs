@@ -1,7 +1,7 @@
 use crate::{
     os::{
         error::{Error, Result},
-        mpsc, TcpStream, UefiOS,
+        TcpStream, UefiOS,
     },
     parse_disk, MIN_MEMORY,
 };
@@ -92,13 +92,13 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         BytesFmt(total_mem)
     );
 
-    let (tx1, mut rx1) = mpsc::channel(channel_size);
-    let (tx2, mut rx2) = mpsc::channel(channel_size);
-    let (tx3, mut rx3) = mpsc::channel(channel_size);
-    let (tx4, mut rx4) = mpsc::channel(channel_size);
+    let (tx1, rx1) = thingbuf::mpsc::channel(channel_size);
+    let (tx2, rx2) = thingbuf::mpsc::channel(channel_size);
+    let (tx3, rx3) = thingbuf::mpsc::channel(channel_size);
+    let (tx4, rx4) = thingbuf::mpsc::channel(channel_size);
 
     let task1 = async {
-        let mut tx1 = tx1;
+        let tx1 = tx1;
         for chunk_info in chunks {
             let mut data = vec![0; chunk_info.size];
             disk.read(chunk_info.start as u64, &mut data).await?;
@@ -110,37 +110,39 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
                 size: chunk_info.size,
                 csize: cdata.len(),
             };
-            tx1.send((chunk, cdata)).await;
+            tx1.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok::<_, Error>(())
     };
 
     let task2 = async {
-        let mut tx2 = tx2;
+        let tx2 = tx2;
         while let Some((chunk, cdata)) = rx1.recv().await {
             let req = TcpRequest::HasChunk(chunk.hash);
             let buf = postcard::to_allocvec(&req)?;
             stream_get_csize.send_u64_le(buf.len() as u64).await?;
             stream_get_csize.send(&buf).await?;
-            tx2.send((chunk, cdata)).await;
+            tx2.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok(())
     };
 
     let task3 = async {
-        let mut tx3 = tx3;
+        let tx3 = tx3;
         while let Some((chunk, cdata)) = rx2.recv().await {
             let len = stream_get_csize.recv_u64_le().await?;
             let mut buf = vec![0; len as usize];
             stream_get_csize.recv(&mut buf).await?;
             let has_chunk: bool = postcard::from_bytes(&buf)?;
-            tx3.send((chunk, cdata, has_chunk)).await;
+            tx3.send((chunk, cdata, has_chunk))
+                .await
+                .expect("receiver dropped");
         }
         Ok(())
     };
 
     let task4 = async {
-        let mut tx4 = tx4;
+        let tx4 = tx4;
         while let Some((chunk, cdata, has_chunk)) = rx3.recv().await {
             if !has_chunk {
                 let req = TcpRequest::UploadChunk(cdata);
@@ -148,7 +150,9 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
                 stream_upload_chunk.send_u64_le(buf.len() as u64).await?;
                 stream_upload_chunk.send(&buf).await?;
             }
-            tx4.send((chunk, has_chunk)).await;
+            tx4.send((chunk, has_chunk))
+                .await
+                .expect("receiver dropped");
         }
         Ok(())
     };

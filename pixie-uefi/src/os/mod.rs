@@ -48,7 +48,6 @@ mod boot_options;
 pub mod disk;
 pub mod error;
 mod executor;
-pub mod mpsc;
 mod net;
 mod rng;
 mod sync;
