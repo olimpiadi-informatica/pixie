@@ -1,7 +1,4 @@
-use super::{
-    error::{Error, Result},
-    UefiOS,
-};
+use super::{error::Result, UefiOS};
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -170,19 +167,14 @@ impl Disk {
 
     pub fn partitions(&mut self) -> Result<Vec<DiskPartition>> {
         let block_size = self.block_size().to_u64();
-        let mut disk = gpt_disk_io::Disk::new(self).map_err(|e| Error::Generic(e.to_string()))?;
+        let mut disk = gpt_disk_io::Disk::new(self)?;
         let mut buf = [0; 1 << 14];
-        let header = disk
-            .read_primary_gpt_header(&mut buf)
-            .map_err(|e| Error::Generic(e.to_string()))?;
+        let header = disk.read_primary_gpt_header(&mut buf)?;
         // TODO(veluca): bubble up this error.
-        let part_array_layout = header
-            .get_partition_entry_array_layout()
-            .map_err(|e| Error::Generic(e.to_string()))?;
+        let part_array_layout = header.get_partition_entry_array_layout()?;
         let mut buf = [0; 1 << 14];
         let x = disk
-            .gpt_partition_entry_array_iter(part_array_layout, &mut buf)
-            .map_err(|e| Error::Generic(e.to_string()))?
+            .gpt_partition_entry_array_iter(part_array_layout, &mut buf)?
             .filter_map(|part| {
                 let part = if let Err(err) = part {
                     return Some(Err(err));
@@ -201,8 +193,7 @@ impl Disk {
                     None
                 }
             })
-            .collect::<Result<_, _>>()
-            .map_err(|e| Error::Generic(e.to_string()))?;
+            .collect::<Result<_, _>>()?;
 
         Ok(x)
     }
