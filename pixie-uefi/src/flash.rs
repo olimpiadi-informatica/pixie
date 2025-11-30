@@ -14,6 +14,7 @@ use pixie_shared::util::BytesFmt;
 use pixie_shared::{ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT, MAX_CHUNK_SIZE};
 use uefi::proto::console::text::Color;
 
+use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::{memory, TcpStream, UefiOS, PACKET_SIZE};
 use crate::MIN_MEMORY;
@@ -230,9 +231,8 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     info!("Fetch complete, updating boot options");
 
-    let bo = os.boot_options();
-    let mut order = bo.order();
-    let reboot_target = bo.reboot_target();
+    let mut order = BootOptions::order();
+    let reboot_target = BootOptions::reboot_target();
     if let Some(target) = reboot_target {
         order = order
             .into_iter()
@@ -241,8 +241,8 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     } else {
         order.push(image.boot_option_id);
     };
-    bo.set_order(&order);
-    bo.set(image.boot_option_id, &image.boot_entry);
+    BootOptions::set_order(&order);
+    BootOptions::set(image.boot_option_id, &image.boot_entry);
 
     Ok(())
 }

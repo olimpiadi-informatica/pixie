@@ -9,6 +9,7 @@ use pixie_shared::util::BytesFmt;
 use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
 use uefi::proto::console::text::Color;
 
+use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::{memory, TcpStream, UefiOS};
 use crate::{parse_disk, MIN_MEMORY};
@@ -65,9 +66,8 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         }
     });
 
-    let bo = os.boot_options();
-    let boid = bo.reboot_target().expect("Could not find reboot target");
-    let bo_command = bo.get(boid);
+    let boid = BootOptions::reboot_target().expect("Could not find reboot target");
+    let bo_command = BootOptions::get(boid);
 
     let mut disk = os.open_first_disk();
     let chunks = parse_disk::parse_disk(&mut disk).await?;
@@ -198,7 +198,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         &stream_upload_chunk,
         Image {
             boot_option_id: boid,
-            boot_entry: bo_command,
+            boot_entry: bo_command.to_vec(),
             disk: chunk_hashes,
         },
     )
