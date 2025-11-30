@@ -1,9 +1,9 @@
-use super::{le16, le32};
-use crate::{
-    os::{disk::Disk, error::Result},
-    store::ChunkInfo,
-};
 use alloc::vec::Vec;
+
+use super::{le16, le32};
+use crate::os::disk::Disk;
+use crate::os::error::Result;
+use crate::store::ChunkInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Type {

@@ -1,12 +1,15 @@
-use crate::os::{
-    error::{Error, Result},
-    UefiOS, PACKET_SIZE,
-};
-use alloc::{boxed::Box, rc::Rc, vec::Vec};
-use core::{cell::RefCell, net::SocketAddrV4};
+use alloc::boxed::Box;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::net::SocketAddrV4;
+
 use futures::future::{select, Either};
 use pixie_shared::{HintPacket, RegistrationInfo, TcpRequest, HINT_PORT};
 use uefi::proto::console::text::{Color, Key, ScanCode};
+
+use crate::os::error::{Error, Result};
+use crate::os::{UefiOS, PACKET_SIZE};
 
 #[derive(Debug, Default)]
 struct Data {

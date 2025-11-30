@@ -1,13 +1,11 @@
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use uefi::proto::device_path::DevicePath;
+use uefi::runtime::{VariableAttributes, VariableVendor};
+use uefi::CString16;
+
 use super::UefiOS;
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
-use uefi::{
-    proto::device_path::DevicePath,
-    runtime::{VariableAttributes, VariableVendor},
-    CString16,
-};
 
 pub struct BootOptions {
     pub(super) os: UefiOS,

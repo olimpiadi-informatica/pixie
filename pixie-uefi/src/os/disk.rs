@@ -1,17 +1,14 @@
-use super::{error::Result, UefiOS};
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
-use gpt_disk_io::{
-    gpt_disk_types::{BlockSize, Lba},
-    BlockIo,
-};
-use uefi::{
-    boot::{OpenProtocolParams, ScopedProtocol},
-    proto::media::block::BlockIO,
-    Handle,
-};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use gpt_disk_io::gpt_disk_types::{BlockSize, Lba};
+use gpt_disk_io::BlockIo;
+use uefi::boot::{OpenProtocolParams, ScopedProtocol};
+use uefi::proto::media::block::BlockIO;
+use uefi::Handle;
+
+use super::error::Result;
+use super::UefiOS;
 
 fn open_disk(handle: Handle) -> Result<ScopedProtocol<BlockIO>> {
     let image_handle = uefi::boot::image_handle();

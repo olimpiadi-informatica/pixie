@@ -1,9 +1,9 @@
-use super::{le16, le32, le64_32_32};
-use crate::{
-    os::{disk::Disk, error::Result},
-    store::ChunkInfo,
-};
 use alloc::vec::Vec;
+
+use super::{le16, le32, le64_32_32};
+use crate::os::disk::Disk;
+use crate::os::error::Result;
+use crate::store::ChunkInfo;
 
 fn has_superblock(group: usize) -> bool {
     if group <= 1 {

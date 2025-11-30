@@ -1,10 +1,11 @@
-use crate::{
-    os::{disk::Disk, error::Result},
-    store::ChunkInfo,
-};
 use alloc::vec::Vec;
+
 use log::info;
 use pixie_shared::util::BytesFmt;
+
+use crate::os::disk::Disk;
+use crate::os::error::Result;
+use crate::store::ChunkInfo;
 
 pub async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     let disk_size = disk.size() as usize;

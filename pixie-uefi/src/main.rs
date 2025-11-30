@@ -5,21 +5,19 @@
 #[macro_use]
 extern crate alloc;
 
-use crate::{
-    flash::flash,
-    os::{
-        error::{Error, Result},
-        TcpStream, UefiOS, PACKET_SIZE,
-    },
-    reboot_to_os::reboot_to_os,
-    register::register,
-    store::store,
-};
 use alloc::boxed::Box;
 use core::net::{Ipv4Addr, SocketAddrV4};
+
 use futures::future::{self, Either};
 use pixie_shared::{Action, TcpRequest, UdpRequest, ACTION_PORT, PING_PORT};
 use uefi::{entry, Status};
+
+use crate::flash::flash;
+use crate::os::error::{Error, Result};
+use crate::os::{TcpStream, UefiOS, PACKET_SIZE};
+use crate::reboot_to_os::reboot_to_os;
+use crate::register::register;
+use crate::store::store;
 
 mod flash;
 mod os;

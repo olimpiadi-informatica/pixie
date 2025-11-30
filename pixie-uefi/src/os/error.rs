@@ -1,5 +1,7 @@
-use alloc::{borrow::ToOwned, string::String};
+use alloc::borrow::ToOwned;
+use alloc::string::String;
 use core::fmt::{Display, Formatter};
+
 use gpt_disk_io::gpt_disk_types;
 
 pub type Result<T, E = Error> = core::result::Result<T, E>;

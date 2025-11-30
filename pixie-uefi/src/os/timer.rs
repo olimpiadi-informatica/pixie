@@ -1,8 +1,7 @@
-use core::{
-    arch::x86_64::_rdtsc,
-    sync::atomic::{AtomicBool, AtomicI64, Ordering},
-    time::Duration,
-};
+use core::arch::x86_64::_rdtsc;
+use core::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use core::time::Duration;
+
 use smoltcp::time::Instant;
 
 static TICKS_AT_START: AtomicI64 = AtomicI64::new(0);

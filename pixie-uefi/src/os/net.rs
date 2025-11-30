@@ -1,34 +1,25 @@
-use crate::os::timer::rdtsc;
-
-use super::{
-    error::{Error, Result},
-    timer::Timer,
-    UefiOS,
-};
 use alloc::boxed::Box;
-use core::{
-    future::poll_fn,
-    net::{IpAddr, Ipv4Addr, SocketAddrV4},
-    task::Poll,
-};
+use core::future::poll_fn;
+use core::net::{IpAddr, Ipv4Addr, SocketAddrV4};
+use core::task::Poll;
+
 use futures::future::select;
-use smoltcp::{
-    iface::{Config, Interface, PollResult, SocketHandle, SocketSet},
-    phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken},
-    socket::{
-        dhcpv4::{Event, Socket as Dhcpv4Socket},
-        tcp::{Socket as TcpSocket, State},
-        udp::{self, Socket as UdpSocket},
-    },
-    storage::RingBuffer,
-    time::{Duration, Instant},
-    wire::{DhcpOption, HardwareAddress, IpCidr, IpEndpoint},
-};
-use uefi::{
-    boot::ScopedProtocol,
-    proto::network::snp::{ReceiveFlags, SimpleNetwork},
-    Status,
-};
+use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet};
+use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
+use smoltcp::socket::tcp::{Socket as TcpSocket, State};
+use smoltcp::socket::udp::{self, Socket as UdpSocket};
+use smoltcp::storage::RingBuffer;
+use smoltcp::time::{Duration, Instant};
+use smoltcp::wire::{DhcpOption, HardwareAddress, IpCidr, IpEndpoint};
+use uefi::boot::ScopedProtocol;
+use uefi::proto::network::snp::{ReceiveFlags, SimpleNetwork};
+use uefi::Status;
+
+use super::error::{Error, Result};
+use super::timer::Timer;
+use super::UefiOS;
+use crate::os::timer::rdtsc;
 
 pub const PACKET_SIZE: usize = 1514;
 

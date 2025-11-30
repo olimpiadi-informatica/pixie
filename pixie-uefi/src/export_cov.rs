@@ -1,4 +1,5 @@
-use crate::os::{disk::Disk, UefiOS};
+use crate::os::disk::Disk;
+use crate::os::UefiOS;
 
 pub async fn export(os: UefiOS) {
     let mut disk = Disk::open_with_size(os, 500 << 20);

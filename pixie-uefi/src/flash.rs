@@ -1,20 +1,22 @@
-use crate::{
-    os::{
-        error::{Error, Result},
-        memory, TcpStream, UefiOS, PACKET_SIZE,
-    },
-    MIN_MEMORY,
-};
-use alloc::{boxed::Box, collections::BTreeMap, rc::Rc, vec::Vec};
-use core::{cell::RefCell, mem, net::SocketAddrV4};
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
+use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::mem;
+use core::net::SocketAddrV4;
+
 use futures::future::{select, Either};
 use log::info;
 use lz4_flex::decompress;
-use pixie_shared::{
-    chunk_codec::Decoder, util::BytesFmt, ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT,
-    MAX_CHUNK_SIZE,
-};
+use pixie_shared::chunk_codec::Decoder;
+use pixie_shared::util::BytesFmt;
+use pixie_shared::{ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT, MAX_CHUNK_SIZE};
 use uefi::proto::console::text::Color;
+
+use crate::os::error::{Error, Result};
+use crate::os::{memory, TcpStream, UefiOS, PACKET_SIZE};
+use crate::MIN_MEMORY;
 
 async fn fetch_image(stream: &TcpStream) -> Result<Image> {
     let req = TcpRequest::GetImage;
