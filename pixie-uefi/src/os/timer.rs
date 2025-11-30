@@ -1,6 +1,7 @@
 use core::{
     arch::x86_64::_rdtsc,
     sync::atomic::{AtomicBool, AtomicI64, Ordering},
+    time::Duration,
 };
 use smoltcp::time::Instant;
 
@@ -22,9 +23,9 @@ impl Timer {
         }
         // Read timer clock & wait to stabilize the counter.
         rdtsc();
-        uefi::boot::stall(20000);
+        uefi::boot::stall(Duration::from_micros(20000));
         let tsc_before = rdtsc();
-        uefi::boot::stall(20000);
+        uefi::boot::stall(Duration::from_micros(20000));
         let tsc_after = rdtsc();
 
         TICKS_AT_START.store(tsc_after, Ordering::Relaxed);

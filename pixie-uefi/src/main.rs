@@ -31,7 +31,8 @@ mod store;
 #[cfg(feature = "coverage")]
 mod export_cov;
 
-const MIN_MEMORY: u64 = 500 << 20;
+// Memory to keep free for non-chunk storage.
+const MIN_MEMORY: u64 = 32 << 20;
 
 async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
     let socket = os.udp_bind(None).await?;

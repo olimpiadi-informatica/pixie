@@ -1,7 +1,7 @@
 use crate::{
     os::{
         error::{Error, Result},
-        TcpStream, UefiOS, PACKET_SIZE,
+        memory, TcpStream, UefiOS, PACKET_SIZE,
     },
     MIN_MEMORY,
 };
@@ -167,11 +167,11 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     let task1 = async {
         let tx = tx;
         let mut last_seen = Vec::new();
-        let total_mem = os.get_total_mem();
-        let max_chunks = (total_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
+        let free_mem = memory::stats().free;
+        let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
         log::debug!(
-            "Total memory: {}. Max chunks in memory: {max_chunks}",
-            BytesFmt(total_mem)
+            "Free memory: {}. Max chunks in memory: {max_chunks}",
+            BytesFmt(free_mem)
         );
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv(&mut buf));
