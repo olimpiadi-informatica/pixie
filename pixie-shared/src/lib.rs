@@ -39,7 +39,7 @@ pub type ChunkHash = [u8; OUT_LEN];
 pub type Offset = usize;
 
 /// Describes one chunk from a disk.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Chunk {
     pub hash: ChunkHash,
     pub start: Offset,

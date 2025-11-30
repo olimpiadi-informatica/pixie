@@ -1,7 +1,7 @@
 use crate::{
     os::{
         error::{Error, Result},
-        mpsc, TcpStream, UefiOS, PACKET_SIZE,
+        TcpStream, UefiOS, PACKET_SIZE,
     },
     MIN_MEMORY,
 };
@@ -162,10 +162,10 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     let mut received = BTreeMap::new();
 
-    let (tx, mut rx) = mpsc::channel(128);
+    let (tx, rx) = thingbuf::mpsc::channel(128);
 
     let task1 = async {
-        let mut tx = tx;
+        let tx = tx;
         let mut last_seen = Vec::new();
         let total_mem = os.get_total_mem();
         let max_chunks = (total_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
@@ -184,7 +184,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                     let chunk =
                         handle_packet(buf, &mut chunks_info, &mut received, &mut last_seen)?;
                     if let Some((pos, data)) = chunk {
-                        tx.send((pos, data)).await;
+                        tx.send((pos, data)).await.expect("receiver was dropped");
                     }
 
                     assert_eq!(last_seen.len(), received.len());
