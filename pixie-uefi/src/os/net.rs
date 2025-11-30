@@ -1,3 +1,5 @@
+use crate::os::timer::rdtsc;
+
 use super::{
     error::{Error, Result},
     timer::Timer,
@@ -182,7 +184,7 @@ impl NetworkInterface {
         ));
 
         let mut interface_config = Config::new(hw_addr);
-        interface_config.random_seed = os.rng().rand_u64();
+        interface_config.random_seed = rdtsc() as u64;
         let now = Timer::instant();
         let interface = Interface::new(interface_config, &mut device, now);
         let mut dhcp_socket = Dhcpv4Socket::new();
@@ -198,7 +200,7 @@ impl NetworkInterface {
             dhcp_socket_handle,
             device,
             socket_set,
-            ephemeral_port_counter: os.rng().rand_u64(),
+            ephemeral_port_counter: 0,
             rx: 0,
             tx: 0,
             vrx: 0,

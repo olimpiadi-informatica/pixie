@@ -23,8 +23,6 @@ lz4_flex = { version = "0.11.5", default-features = false }
 managed = { version = "0.8.0", default-features = false, features = ["alloc"] }
 minicov = { version = "0.3.7", optional = true }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
-rand = { version = "0.8.5", default-features = false }
-rand_xoshiro = { version = "0.6.0", default-features = false }
 smoltcp = { version = "0.12.0", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async", "socket-tcp-cubic"] }
 thingbuf = { version = "0.1.6", default-features = false, features = ["alloc"] }
 uefi = { version = "0.33.0", features = ["alloc", "global_allocator", "panic_handler"] }

@@ -4,7 +4,6 @@ use self::{
     error::{Error, Result},
     executor::{Executor, Task},
     net::NetworkInterface,
-    rng::Rng,
     sync::SyncRefCell,
     timer::Timer,
 };
@@ -49,14 +48,12 @@ pub mod disk;
 pub mod error;
 mod executor;
 mod net;
-mod rng;
 mod sync;
 mod timer;
 
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
 struct UefiOSImpl {
-    rng: Rng,
     tasks: Vec<Arc<Task>>,
     input: ScopedProtocol<Input>,
     vga: ScopedProtocol<Output>,
@@ -162,7 +159,6 @@ impl UefiOS {
         }
 
         Timer::ensure_init();
-        let rng = Rng::new();
 
         let input_handles = uefi::boot::find_handles::<Input>().unwrap();
         let input = uefi::boot::open_protocol_exclusive::<Input>(input_handles[0]).unwrap();
@@ -177,7 +173,6 @@ impl UefiOS {
         vga.clear().unwrap();
 
         *OS.borrow_mut() = Some(UefiOSImpl {
-            rng,
             tasks: Vec::new(),
             input,
             vga,
@@ -268,10 +263,6 @@ impl UefiOS {
 
     fn borrow_mut(&self) -> RefMut<'static, UefiOSImpl> {
         RefMut::map(OS.borrow_mut(), |f| f.as_mut().unwrap())
-    }
-
-    pub fn rng(&self) -> RefMut<'static, Rng> {
-        RefMut::map(self.borrow_mut(), |f| &mut f.rng)
     }
 
     fn tasks(&self) -> RefMut<'static, Vec<Arc<Task>>> {

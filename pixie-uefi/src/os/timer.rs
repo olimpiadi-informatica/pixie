@@ -10,7 +10,7 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub struct Timer {}
 
-fn rdtsc() -> i64 {
+pub(super) fn rdtsc() -> i64 {
     // SAFETY: modern x86 CPUs have this instruction.
     unsafe { _rdtsc() as i64 }
 }
