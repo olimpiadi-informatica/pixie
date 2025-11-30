@@ -57,7 +57,6 @@ mod timer;
 pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
 struct UefiOSImpl {
-    timer: Timer,
     rng: Rng,
     tasks: Vec<Arc<Task>>,
     input: ScopedProtocol<Input>,
@@ -163,7 +162,7 @@ impl UefiOS {
             .unwrap();
         }
 
-        let timer = Timer::new();
+        Timer::ensure_init();
         let rng = Rng::new();
 
         let input_handles = uefi::boot::find_handles::<Input>().unwrap();
@@ -179,7 +178,6 @@ impl UefiOS {
         vga.clear().unwrap();
 
         *OS.borrow_mut() = Some(UefiOSImpl {
-            timer,
             rng,
             tasks: Vec::new(),
             input,
@@ -227,9 +225,8 @@ impl UefiOS {
         os.spawn(
             "[net_poll]",
             poll_fn(move |cx| {
-                let (mut net, timer) =
-                    RefMut::map_split(os.borrow_mut(), |os| (&mut os.net, &mut os.timer));
-                net.as_mut().unwrap().poll(&timer);
+                let mut os = os.borrow_mut();
+                os.net.as_mut().unwrap().poll();
                 // TODO(veluca): figure out whether we can suspend the task.
                 cx.waker().wake_by_ref();
                 Poll::Pending
@@ -239,10 +236,10 @@ impl UefiOS {
         os.spawn("[net_speed]", async move {
             let mut prx = 0;
             let mut ptx = 0;
-            let mut ptm = os.timer().instant();
+            let mut ptm = Timer::instant();
             loop {
                 {
-                    let now = os.timer().instant();
+                    let now = Timer::instant();
                     let dt = (now - ptm).total_micros() as f64 / 1_000_000.0;
                     ptm = now;
 
@@ -263,7 +260,7 @@ impl UefiOS {
             }
         });
 
-        Executor::run(os)
+        Executor::run()
     }
 
     fn borrow(&self) -> Ref<'static, UefiOSImpl> {
@@ -272,10 +269,6 @@ impl UefiOS {
 
     fn borrow_mut(&self) -> RefMut<'static, UefiOSImpl> {
         RefMut::map(OS.borrow_mut(), |f| f.as_mut().unwrap())
-    }
-
-    pub fn timer(&self) -> Ref<'static, Timer> {
-        Ref::map(self.borrow(), |f| &f.timer)
     }
 
     pub fn rng(&self) -> RefMut<'static, Rng> {
@@ -317,9 +310,9 @@ impl UefiOS {
     }
 
     pub fn sleep_us(self, us: u64) -> impl Future<Output = ()> {
-        let tgt = self.timer().micros() as u64 + us;
+        let tgt = Timer::micros() as u64 + us;
         poll_fn(move |cx| {
-            let now = self.timer().micros() as u64;
+            let now = Timer::micros() as u64;
             if now >= tgt {
                 Poll::Ready(())
             } else {
@@ -431,7 +424,7 @@ impl UefiOS {
     fn draw_ui(&self) {
         // Write the header.
         {
-            let time = self.timer().micros() as f32 * 0.000_001;
+            let time = Timer::micros() as f32 * 0.000_001;
             let ip = self.net().ip();
             let mut os = self.borrow_mut();
 
@@ -572,7 +565,7 @@ impl log::Log for UefiOS {
     }
 
     fn log(&self, record: &log::Record) {
-        let now = self.timer().micros() as f64 * 0.000_001;
+        let now = Timer::micros() as f64 * 0.000_001;
         self.append_message(
             now,
             record.level(),
