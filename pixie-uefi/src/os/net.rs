@@ -19,6 +19,7 @@ use uefi::Status;
 use super::error::{Error, Result};
 use super::timer::Timer;
 use super::UefiOS;
+use crate::os::boot_options::BootOptions;
 use crate::os::timer::rdtsc;
 
 pub const PACKET_SIZE: usize = 1514;
@@ -151,9 +152,8 @@ pub struct NetworkInterface {
 
 impl NetworkInterface {
     pub fn new(os: UefiOS) -> NetworkInterface {
-        let bo = os.boot_options();
-        let curopt = bo.get(bo.current());
-        let (descr, device) = bo.boot_entry_info(&curopt[..]);
+        let curopt = BootOptions::get(BootOptions::current());
+        let (descr, device) = BootOptions::boot_entry_info(&curopt[..]);
         log::info!(
             "Configuring network on interface used for booting ({} -- {})",
             descr,
