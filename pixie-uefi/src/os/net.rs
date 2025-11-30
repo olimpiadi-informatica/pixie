@@ -183,7 +183,7 @@ impl NetworkInterface {
 
         let mut interface_config = Config::new(hw_addr);
         interface_config.random_seed = os.rng().rand_u64();
-        let now = Instant::from_micros(os.timer().micros());
+        let now = Timer::instant();
         let interface = Interface::new(interface_config, &mut device, now);
         let mut dhcp_socket = Dhcpv4Socket::new();
         dhcp_socket.set_outgoing_options(&[DhcpOption {
@@ -220,8 +220,8 @@ impl NetworkInterface {
         self.interface.ipv4_addr()
     }
 
-    pub(super) fn poll(&mut self, timer: &Timer) -> bool {
-        let now = timer.instant();
+    pub(super) fn poll(&mut self) -> bool {
+        let now = Timer::instant();
         let status = self
             .interface
             .poll(now, &mut self.device, &mut self.socket_set);

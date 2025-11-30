@@ -1,4 +1,6 @@
-use super::{sync::SyncRefCell, UefiOS};
+use crate::os::timer::Timer;
+
+use super::sync::SyncRefCell;
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc, task::Wake};
 use core::{
     cell::RefCell,
@@ -63,7 +65,7 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn run(os: UefiOS) -> ! {
+    pub fn run() -> ! {
         loop {
             let task = EXECUTOR
                 .borrow_mut()
@@ -75,9 +77,9 @@ impl Executor {
             let waker = Waker::from(task.clone());
             let mut context = Context::from_waker(&waker);
             let mut fut = task.inner.borrow_mut().future.take().unwrap();
-            let begin = os.timer().micros();
+            let begin = Timer::micros();
             let status = fut.as_mut().poll(&mut context);
-            let end = os.timer().micros();
+            let end = Timer::micros();
             task.inner.borrow_mut().micros += end - begin;
             if status.is_pending() {
                 task.inner.borrow_mut().future = Some(fut);
