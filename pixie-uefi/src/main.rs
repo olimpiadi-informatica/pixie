@@ -14,16 +14,16 @@ use uefi::{entry, Status};
 
 use crate::flash::flash;
 use crate::os::error::{Error, Result};
+use crate::os::executor::Executor;
 use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
 use crate::os::UefiOS;
-use crate::reboot_to_os::reboot_to_os;
 use crate::register::register;
 use crate::store::store;
 
 mod flash;
 mod os;
 mod parse_disk;
-mod reboot_to_os;
+mod power_control;
 mod register;
 mod store;
 
@@ -33,7 +33,7 @@ mod export_cov;
 // Memory to keep free for non-chunk storage.
 const MIN_MEMORY: u64 = 32 << 20;
 
-async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
+async fn server_discover() -> Result<SocketAddrV4> {
     let socket = UdpSocket::bind(None).await?;
 
     let task1 = async {
@@ -43,7 +43,7 @@ async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
             socket
                 .send_to(SocketAddrV4::new(Ipv4Addr::BROADCAST, ACTION_PORT), &msg)
                 .await?;
-            os.sleep_us(1_000_000).await;
+            Executor::sleep_us(1_000_000).await;
         })
     };
 
@@ -65,13 +65,13 @@ async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
     Ok(server)
 }
 
-async fn shutdown(os: UefiOS) -> ! {
+async fn shutdown() -> ! {
     #[cfg(feature = "coverage")]
-    export_cov::export(os).await;
+    export_cov::export().await;
 
     log::info!("Shutting down...");
-    os.sleep_us(1_000_000).await;
-    os.shutdown()
+    Executor::sleep_us(1_000_000).await;
+    power_control::shutdown()
 }
 
 async fn get_action(stream: &TcpStream) -> Result<Action> {
@@ -97,18 +97,18 @@ async fn complete_action(stream: &TcpStream) -> Result<()> {
 }
 
 async fn run(os: UefiOS) -> Result<()> {
-    let server = server_discover(os).await?;
+    let server = server_discover().await?;
 
     let mut last_was_wait = false;
 
-    os.spawn("ping", async move {
+    Executor::spawn("ping", async move {
         let udp_socket = UdpSocket::bind(None).await.unwrap();
         loop {
             udp_socket
                 .send_to(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
                 .await
                 .unwrap();
-            os.sleep_us(10_000_000).await;
+            Executor::sleep_us(10_000_000).await;
         }
     });
 
@@ -136,17 +136,17 @@ async fn run(os: UefiOS) -> Result<()> {
                 last_was_wait = true;
                 const WAIT_10MSECS: u64 = 50;
                 for _ in 0..WAIT_10MSECS {
-                    os.deep_sleep_us(10_000);
-                    os.schedule().await;
+                    Executor::deep_sleep_us(10_000);
+                    Executor::sched_yield().await;
                 }
             } else {
                 last_was_wait = false;
                 log::info!("Command: {command:?}");
                 match command {
                     Action::Wait => unreachable!(),
-                    Action::Boot => reboot_to_os(os).await,
+                    Action::Boot => power_control::reboot_to_os().await,
                     Action::Restart => {}
-                    Action::Shutdown => shutdown(os).await,
+                    Action::Shutdown => shutdown().await,
                     Action::Register => register(os, server).await?,
                     Action::Store => store(os, server).await?,
                     Action::Flash => flash(os, server).await?,
@@ -158,7 +158,7 @@ async fn run(os: UefiOS) -> Result<()> {
                 tcp.force_close().await;
 
                 if command == Action::Restart {
-                    os.reset();
+                    power_control::reset()
                 }
             }
         }

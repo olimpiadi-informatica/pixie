@@ -16,8 +16,9 @@ use uefi::proto::console::text::Color;
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
+use crate::os::executor::Executor;
 use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
-use crate::os::{memory, UefiOS};
+use crate::os::{disk, memory, UefiOS};
 use crate::MIN_MEMORY;
 
 async fn fetch_image(stream: &TcpStream) -> Result<Image> {
@@ -135,7 +136,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         );
     });
 
-    let mut disk = os.open_first_disk();
+    let mut disk = disk::Disk::largest();
 
     for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
         let mut found = None;
@@ -179,7 +180,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         );
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv_from(&mut buf));
-            let sleep = Box::pin(os.sleep_us(100_000));
+            let sleep = Box::pin(Executor::sleep_us(100_000));
             match select(recv, sleep).await {
                 Either::Left(((buf, _addr), _)) => {
                     stats.borrow_mut().pack_recv += 1;

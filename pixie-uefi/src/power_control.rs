@@ -1,7 +1,9 @@
-use crate::os::boot_options::BootOptions;
-use crate::os::UefiOS;
+use uefi::Status;
 
-pub async fn reboot_to_os(os: UefiOS) -> ! {
+use crate::os::boot_options::BootOptions;
+use crate::os::executor::Executor;
+
+pub async fn reboot_to_os() -> ! {
     let next = BootOptions::reboot_target();
     if let Some(next) = next {
         // Reboot to next boot option.
@@ -12,7 +14,15 @@ pub async fn reboot_to_os(os: UefiOS) -> ! {
             BootOptions::current()
         );
         log::warn!("{:?}", BootOptions::order());
-        os.sleep_us(100_000_000).await;
+        Executor::sleep_us(100_000_000).await;
     }
-    os.reset();
+    reset();
+}
+
+pub fn reset() -> ! {
+    uefi::runtime::reset(uefi::runtime::ResetType::WARM, Status::SUCCESS, None)
+}
+
+pub fn shutdown() -> ! {
+    uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None)
 }
