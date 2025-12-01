@@ -16,17 +16,18 @@ use uefi::proto::console::text::Color;
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
-use crate::os::{memory, TcpStream, UefiOS, PACKET_SIZE};
+use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
+use crate::os::{memory, UefiOS};
 use crate::MIN_MEMORY;
 
 async fn fetch_image(stream: &TcpStream) -> Result<Image> {
     let req = TcpRequest::GetImage;
     let mut buf = postcard::to_allocvec(&req)?;
-    stream.send_u64_le(buf.len() as u64).await?;
-    stream.send(&buf).await?;
-    let len = stream.recv_u64_le().await?;
+    stream.write_u64_le(buf.len() as u64).await?;
+    stream.write_all(&buf).await?;
+    let len = stream.read_u64_le().await?;
     buf.resize(len as usize, 0);
-    stream.recv_exact(&mut buf).await?;
+    stream.read_exact(&mut buf).await?;
     Ok(postcard::from_bytes(&buf)?)
 }
 
@@ -74,9 +75,9 @@ fn handle_packet(
 }
 
 pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
-    let stream = os.connect(server_addr).await?;
+    let stream = TcpStream::connect(server_addr).await?;
     let image = fetch_image(&stream).await?;
-    stream.close_send().await;
+    stream.shutdown().await;
     // TODO(virv): this could be better
     stream.force_close().await;
 
@@ -160,8 +161,8 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
 
-    let socket = os.udp_bind(Some(CHUNKS_PORT)).await?;
-    let mut buf = [0; PACKET_SIZE];
+    let socket = UdpSocket::bind(Some(CHUNKS_PORT)).await?;
+    let mut buf = [0; ETH_PACKET_SIZE];
 
     let mut received = BTreeMap::new();
 
@@ -177,7 +178,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
             BytesFmt(free_mem)
         );
         while !chunks_info.is_empty() {
-            let recv = Box::pin(socket.recv(&mut buf));
+            let recv = Box::pin(socket.recv_from(&mut buf));
             let sleep = Box::pin(os.sleep_us(100_000));
             match select(recv, sleep).await {
                 Either::Left(((buf, _addr), _)) => {
@@ -204,7 +205,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                         chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
                     stats.borrow_mut().requested += chunks.len();
                     let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
-                    socket.send(server_addr, &msg).await?;
+                    socket.send_to(server_addr, &msg).await?;
                 }
             }
         }
@@ -221,7 +222,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
             let msg = UdpRequest::ActionProgress(stats.borrow().recv, stats.borrow().fetch);
             socket
-                .send(server_addr, &postcard::to_allocvec(&msg)?)
+                .send_to(server_addr, &postcard::to_allocvec(&msg)?)
                 .await?;
         }
         Ok(())
