@@ -1,5 +1,4 @@
 use alloc::boxed::Box;
-use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::cell::RefMut;
@@ -11,9 +10,10 @@ use core::task::Poll;
 
 use pixie_shared::util::BytesFmt;
 use uefi::boot::{EventType, ScopedProtocol, Tpl};
-use uefi::proto::console::serial::Serial;
 use uefi::proto::console::text::{Color, Input, Key, Output};
 use uefi::{Event, Status};
+
+use crate::os::logger::{for_each_log, LogEntry};
 
 use self::error::Result;
 use self::executor::Executor;
@@ -24,6 +24,7 @@ pub mod boot_options;
 pub mod disk;
 pub mod error;
 pub mod executor;
+mod logger;
 pub mod memory;
 pub mod net;
 pub mod sync;
@@ -32,8 +33,6 @@ mod timer;
 struct UefiOSImpl {
     input: ScopedProtocol<Input>,
     vga: ScopedProtocol<Output>,
-    serial: Option<ScopedProtocol<Serial>>,
-    messages: VecDeque<(f64, log::Level, String, String)>,
     ui_buf: Vec<(String, Color, Color)>,
     ui_pos: usize,
     ui_drawer: Option<Box<dyn Fn(UefiOS) + 'static>>,
@@ -137,10 +136,6 @@ impl UefiOS {
         let input_handles = uefi::boot::find_handles::<Input>().unwrap();
         let input = uefi::boot::open_protocol_exclusive::<Input>(input_handles[0]).unwrap();
 
-        let serial = uefi::boot::find_handles::<Serial>()
-            .ok()
-            .map(|handles| uefi::boot::open_protocol_exclusive::<Serial>(handles[0]).unwrap());
-
         let vga_handles = uefi::boot::find_handles::<Output>().unwrap();
         let mut vga = uefi::boot::open_protocol_exclusive::<Output>(vga_handles[0]).unwrap();
 
@@ -149,8 +144,6 @@ impl UefiOS {
         *OS.borrow_mut() = Some(UefiOSImpl {
             input,
             vga,
-            serial,
-            messages: VecDeque::new(),
             ui_buf: vec![],
             ui_pos: 0,
             ui_drawer: None,
@@ -158,9 +151,7 @@ impl UefiOS {
 
         let os = UefiOS { cant_build: () };
 
-        log::set_logger(&UefiOS { cant_build: () }).unwrap();
-        log::set_max_level(log::LevelFilter::Trace);
-
+        logger::init();
         net::init();
 
         Executor::spawn("init", async move {
@@ -261,20 +252,25 @@ impl UefiOS {
             os.maybe_advance_to_col(cols);
 
             // TODO(veluca): find a better solution.
-            let messages: Vec<_> = os.messages.iter().cloned().collect();
-
-            for (time, level, target, msg) in messages {
-                let fg_color = match level {
-                    log::Level::Trace => Color::Cyan,
-                    log::Level::Debug => Color::Blue,
-                    log::Level::Info => Color::Green,
-                    log::Level::Warn => Color::Yellow,
-                    log::Level::Error => Color::Red,
-                };
-                os.write_with_color(&format!("[{time:.1}s "), Color::White, Color::Black);
-                os.write_with_color(&format!("{level:5}"), fg_color, Color::Black);
-                os.write_with_color(&format!(" {target}] {msg}\n"), Color::White, Color::Black);
-            }
+            for_each_log(
+                |LogEntry {
+                     time,
+                     level,
+                     target,
+                     msg,
+                 }| {
+                    let fg_color = match level {
+                        log::Level::Trace => Color::Cyan,
+                        log::Level::Debug => Color::Blue,
+                        log::Level::Info => Color::Green,
+                        log::Level::Warn => Color::Yellow,
+                        log::Level::Error => Color::Red,
+                    };
+                    os.write_with_color(&format!("[{time:.1}s "), Color::White, Color::Black);
+                    os.write_with_color(&format!("{level:5}"), fg_color, Color::Black);
+                    os.write_with_color(&format!(" {target}] {msg}\n"), Color::White, Color::Black);
+                },
+            );
             os.write_with_color("\n", Color::Black, Color::Black);
         }
         {
@@ -294,53 +290,5 @@ impl UefiOS {
 
     pub fn set_ui_drawer<F: Fn(UefiOS) + 'static>(&self, f: F) {
         self.borrow_mut().ui_drawer = Some(Box::new(f));
-    }
-
-    fn append_message(&self, time: f64, level: log::Level, target: &str, msg: String) {
-        {
-            let mut os = self.borrow_mut();
-
-            if let Some(serial) = &mut os.serial {
-                let style = match level {
-                    log::Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
-                    log::Level::Debug => anstyle::AnsiColor::Blue.on_default(),
-                    log::Level::Info => anstyle::AnsiColor::Green.on_default(),
-                    log::Level::Warn => anstyle::AnsiColor::Yellow.on_default(),
-                    log::Level::Error => anstyle::AnsiColor::Red.on_default().bold(),
-                };
-                write!(
-                    serial,
-                    "[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\r\n"
-                )
-                .unwrap();
-            }
-
-            os.messages.push_back((time, level, target.into(), msg));
-            const MAX_MESSAGES: usize = 10;
-            if os.messages.len() > MAX_MESSAGES {
-                os.messages.pop_front();
-            }
-        }
-        self.force_ui_redraw();
-    }
-}
-
-impl log::Log for UefiOS {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        let now = Timer::micros() as f64 * 0.000_001;
-        self.append_message(
-            now,
-            record.level(),
-            record.target(),
-            format!("{}", record.args()),
-        );
-    }
-
-    fn flush(&self) {
-        // no-op
     }
 }
