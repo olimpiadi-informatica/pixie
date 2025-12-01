@@ -7,8 +7,9 @@ use uefi::boot::{OpenProtocolParams, ScopedProtocol};
 use uefi::proto::media::block::BlockIO;
 use uefi::Handle;
 
+use crate::os::executor::Executor;
+
 use super::error::Result;
-use super::UefiOS;
 
 fn open_disk(handle: Handle) -> Result<ScopedProtocol<BlockIO>> {
     let image_handle = uefi::boot::image_handle();
@@ -35,13 +36,12 @@ pub struct DiskPartition {
 
 pub struct Disk {
     block: ScopedProtocol<BlockIO>,
-    os: UefiOS,
 }
 
 // TODO(veluca): consider making parts of this actually async, i.e. by using DiskIo2/BlockIO2 if
 // available; support having more than one disk.
 impl Disk {
-    pub fn new(os: UefiOS) -> Disk {
+    pub fn largest() -> Disk {
         let (_size, handle) = uefi::boot::find_handles::<BlockIO>()
             .unwrap()
             .into_iter()
@@ -60,11 +60,11 @@ impl Disk {
             .expect("Disk not found");
 
         let block = open_disk(handle).unwrap();
-        Disk { block, os }
+        Disk { block }
     }
 
     #[cfg(feature = "coverage")]
-    pub fn open_with_size(os: UefiOS, base_size: i64) -> Disk {
+    pub fn open_with_size(base_size: i64) -> Disk {
         let (_size, handle) = uefi::boot::find_handles::<BlockIO>()
             .unwrap()
             .into_iter()
@@ -83,7 +83,7 @@ impl Disk {
             .expect("Disk not found");
 
         let block = open_disk(handle).unwrap();
-        Disk { block, os }
+        Disk { block }
     }
 
     pub fn size(&self) -> u64 {
@@ -124,7 +124,7 @@ impl Disk {
     }
 
     pub async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        self.os.schedule().await;
+        Executor::sched_yield().await;
         self.read_sync(offset, buf)
     }
 
@@ -158,7 +158,7 @@ impl Disk {
     }
 
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
-        self.os.schedule().await;
+        Executor::sched_yield().await;
         self.write_sync(offset, buf)
     }
 

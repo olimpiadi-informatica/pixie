@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crate::os::executor::Executor;
 use crate::os::timer::Timer;
-use crate::os::UefiOS;
 
 pub struct NetSpeed {
     total: AtomicU64,
@@ -44,12 +44,12 @@ impl NetSpeed {
 pub(super) static TX_SPEED: NetSpeed = NetSpeed::new();
 pub(super) static RX_SPEED: NetSpeed = NetSpeed::new();
 
-pub(super) fn spawn_update_network_speed_task(os: UefiOS) {
-    os.spawn("[net_speed]", async move {
+pub(super) fn spawn_update_network_speed_task() {
+    Executor::spawn("[net_speed]", async move {
         loop {
             TX_SPEED.update_speed();
             RX_SPEED.update_speed();
-            os.sleep_us(1_000_000).await;
+            Executor::sleep_us(1_000_000).await;
         }
     });
 }

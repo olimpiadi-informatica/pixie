@@ -1,7 +1,6 @@
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::RefMut;
 use core::ffi::c_void;
@@ -11,28 +10,26 @@ use core::ptr::NonNull;
 use core::task::Poll;
 
 use pixie_shared::util::BytesFmt;
-use uefi::boot::{EventType, ScopedProtocol, TimerTrigger, Tpl};
+use uefi::boot::{EventType, ScopedProtocol, Tpl};
 use uefi::proto::console::serial::Serial;
 use uefi::proto::console::text::{Color, Input, Key, Output};
 use uefi::{Event, Status};
 
-use self::disk::Disk;
 use self::error::Result;
-use self::executor::{Executor, Task};
+use self::executor::Executor;
 use self::sync::SyncRefCell;
 use self::timer::Timer;
 
 pub mod boot_options;
 pub mod disk;
 pub mod error;
-mod executor;
+pub mod executor;
 pub mod memory;
 pub mod net;
-mod sync;
+pub mod sync;
 mod timer;
 
 struct UefiOSImpl {
-    tasks: Vec<Arc<Task>>,
     input: ScopedProtocol<Input>,
     vga: ScopedProtocol<Output>,
     serial: Option<ScopedProtocol<Serial>>,
@@ -150,7 +147,6 @@ impl UefiOS {
         vga.clear().unwrap();
 
         *OS.borrow_mut() = Some(UefiOSImpl {
-            tasks: Vec::new(),
             input,
             vga,
             serial,
@@ -167,7 +163,7 @@ impl UefiOS {
 
         net::init();
 
-        os.spawn("init", async move {
+        Executor::spawn("init", async move {
             loop {
                 if let Err(err) = f(os).await {
                     log::error!("Error: {err:?}");
@@ -175,7 +171,7 @@ impl UefiOS {
             }
         });
 
-        os.spawn("[watchdog]", async move {
+        Executor::spawn("[watchdog]", async move {
             loop {
                 let err = uefi::boot::set_watchdog_timer(300, 0x10000, None);
 
@@ -187,14 +183,14 @@ impl UefiOS {
                     break;
                 }
 
-                os.sleep_us(30_000_000).await;
+                Executor::sleep_us(30_000_000).await;
             }
         });
 
-        os.spawn("[draw_ui]", async move {
+        Executor::spawn("[draw_ui]", async move {
             loop {
                 os.draw_ui();
-                os.sleep_us(1_000_000).await;
+                Executor::sleep_us(1_000_000).await;
             }
         });
 
@@ -203,52 +199,6 @@ impl UefiOS {
 
     fn borrow_mut(&self) -> RefMut<'static, UefiOSImpl> {
         RefMut::map(OS.borrow_mut(), |f| f.as_mut().unwrap())
-    }
-
-    fn tasks(&self) -> RefMut<'static, Vec<Arc<Task>>> {
-        RefMut::map(self.borrow_mut(), |f| &mut f.tasks)
-    }
-
-    /// Interrupt task execution.
-    /// This is useful to yield the CPU to other tasks.
-    pub fn schedule(&self) -> impl Future<Output = ()> {
-        let mut ready = false;
-        poll_fn(move |cx| {
-            if ready {
-                Poll::Ready(())
-            } else {
-                ready = true;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        })
-    }
-
-    pub fn sleep_us(self, us: u64) -> impl Future<Output = ()> {
-        let tgt = Timer::micros() as u64 + us;
-        poll_fn(move |cx| {
-            let now = Timer::micros() as u64;
-            if now >= tgt {
-                Poll::Ready(())
-            } else {
-                // TODO(veluca): actually suspend the task.
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        })
-    }
-
-    /// **WARNING**: this function halts all tasks
-    pub fn deep_sleep_us(&self, us: u64) {
-        // SAFETY: we are not using a callback
-        let e =
-            unsafe { uefi::boot::create_event(EventType::TIMER, Tpl::NOTIFY, None, None).unwrap() };
-        uefi::boot::set_timer(&e, TimerTrigger::Relative(10 * us)).unwrap();
-        uefi::boot::wait_for_event(&mut [e]).unwrap();
-    }
-
-    pub fn open_first_disk(&self) -> Disk {
-        Disk::new(*self)
     }
 
     pub fn read_key(&self) -> impl Future<Output = Result<Key>> + '_ {
@@ -298,13 +248,11 @@ impl UefiOS {
                 Color::Black,
             );
 
-            os.tasks.sort_by_key(|t| -t.micros());
-            let tasks: Vec<_> = os.tasks.iter().take(7).cloned().collect();
-            for task in tasks {
-                os.write_with_color(task.name, Color::White, Color::Black);
+            for (micros, name) in Executor::top_tasks(7) {
+                os.write_with_color(name, Color::White, Color::Black);
                 os.maybe_advance_to_col(cols / 4);
                 os.write_with_color(
-                    &format!("{:7.3}s\n", task.micros() as f64 * 0.000_001),
+                    &format!("{:7.3}s\n", micros as f64 * 0.000_001),
                     Color::White,
                     Color::Black,
                 );
@@ -374,24 +322,6 @@ impl UefiOS {
             }
         }
         self.force_ui_redraw();
-    }
-
-    /// Spawn a new task.
-    pub fn spawn<Fut>(&self, name: &'static str, f: Fut)
-    where
-        Fut: Future<Output = ()> + 'static,
-    {
-        let task = executor::Task::new(name, f);
-        self.tasks().push(task.clone());
-        Executor::spawn(task);
-    }
-
-    pub fn reset(&self) -> ! {
-        uefi::runtime::reset(uefi::runtime::ResetType::WARM, Status::SUCCESS, None)
-    }
-
-    pub fn shutdown(&self) -> ! {
-        uefi::runtime::reset(uefi::runtime::ResetType::SHUTDOWN, Status::SUCCESS, None)
     }
 }
 

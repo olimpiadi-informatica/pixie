@@ -12,7 +12,7 @@ use uefi::proto::console::text::Color;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::net::{TcpStream, UdpSocket};
-use crate::os::{memory, UefiOS};
+use crate::os::{disk, memory, UefiOS};
 use crate::{parse_disk, MIN_MEMORY};
 
 #[derive(Debug)]
@@ -70,7 +70,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let boid = BootOptions::reboot_target().expect("Could not find reboot target");
     let bo_command = BootOptions::get(boid);
 
-    let mut disk = os.open_first_disk();
+    let mut disk = disk::Disk::largest();
     let chunks = parse_disk::parse_disk(&mut disk).await?;
     info!(
         "Total size of chunks: {}",

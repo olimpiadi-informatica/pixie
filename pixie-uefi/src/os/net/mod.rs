@@ -17,12 +17,12 @@ use uefi::Handle;
 
 use super::timer::Timer;
 use crate::os::boot_options::BootOptions;
+use crate::os::executor::Executor;
 use crate::os::net::interface::SnpDevice;
 use crate::os::net::speed::{RX_SPEED, TX_SPEED};
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
 use crate::os::timer::rdtsc;
-use crate::os::UefiOS;
 
 mod interface;
 mod speed;
@@ -78,9 +78,6 @@ fn handle_on_device<P: Protocol>(device: &DevicePath) -> Option<Handle> {
 }
 
 pub(super) fn init() {
-    // TODO(veluca): remove the use of `os` once we move spawning to the scheduler.
-    let os = UefiOS { cant_build: () };
-
     let curopt = BootOptions::get(BootOptions::current());
     let (descr, device) = BootOptions::boot_entry_info(&curopt[..]);
     log::info!(
@@ -123,7 +120,7 @@ pub(super) fn init() {
         dhcp_socket_handle,
     });
 
-    os.spawn(
+    Executor::spawn(
         "[net_poll]",
         poll_fn(move |cx| {
             poll();
@@ -133,7 +130,7 @@ pub(super) fn init() {
         }),
     );
 
-    speed::spawn_update_network_speed_task(os);
+    speed::spawn_update_network_speed_task();
 }
 
 pub fn wait_for_ip() -> impl Future<Output = ()> {
