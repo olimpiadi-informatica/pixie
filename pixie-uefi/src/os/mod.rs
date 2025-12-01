@@ -3,11 +3,10 @@ use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::{Ref, RefMut};
+use core::cell::RefMut;
 use core::ffi::c_void;
 use core::fmt::Write;
 use core::future::{poll_fn, Future};
-use core::net::SocketAddrV4;
 use core::ptr::NonNull;
 use core::task::Poll;
 
@@ -15,16 +14,11 @@ use pixie_shared::util::BytesFmt;
 use uefi::boot::{EventType, ScopedProtocol, TimerTrigger, Tpl};
 use uefi::proto::console::serial::Serial;
 use uefi::proto::console::text::{Color, Input, Key, Output};
-use uefi::proto::device_path::build::DevicePathBuilder;
-use uefi::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly};
-use uefi::proto::device_path::DevicePath;
-use uefi::proto::Protocol;
-use uefi::{Event, Handle, Status};
+use uefi::{Event, Status};
 
 use self::disk::Disk;
 use self::error::Result;
 use self::executor::{Executor, Task};
-use self::net::NetworkInterface;
 use self::sync::SyncRefCell;
 use self::timer::Timer;
 
@@ -33,18 +27,15 @@ pub mod disk;
 pub mod error;
 mod executor;
 pub mod memory;
-mod net;
+pub mod net;
 mod sync;
 mod timer;
-
-pub use net::{TcpStream, UdpHandle, PACKET_SIZE};
 
 struct UefiOSImpl {
     tasks: Vec<Arc<Task>>,
     input: ScopedProtocol<Input>,
     vga: ScopedProtocol<Output>,
     serial: Option<ScopedProtocol<Serial>>,
-    net: Option<NetworkInterface>,
     messages: VecDeque<(f64, log::Level, String, String)>,
     ui_buf: Vec<(String, Color, Color)>,
     ui_pos: usize,
@@ -163,7 +154,6 @@ impl UefiOS {
             input,
             vga,
             serial,
-            net: None,
             messages: VecDeque::new(),
             ui_buf: vec![],
             ui_pos: 0,
@@ -175,8 +165,7 @@ impl UefiOS {
         log::set_logger(&UefiOS { cant_build: () }).unwrap();
         log::set_max_level(log::LevelFilter::Trace);
 
-        let net = NetworkInterface::new(os);
-        os.borrow_mut().net = Some(net);
+        net::init();
 
         os.spawn("init", async move {
             loop {
@@ -202,37 +191,6 @@ impl UefiOS {
             }
         });
 
-        os.spawn(
-            "[net_poll]",
-            poll_fn(move |cx| {
-                let mut os = os.borrow_mut();
-                os.net.as_mut().unwrap().poll();
-                // TODO(veluca): figure out whether we can suspend the task.
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }),
-        );
-
-        os.spawn("[net_speed]", async move {
-            let mut prx = 0;
-            let mut ptx = 0;
-            let mut ptm = Timer::instant();
-            loop {
-                {
-                    let now = Timer::instant();
-                    let dt = (now - ptm).total_micros() as f64 / 1_000_000.0;
-                    ptm = now;
-
-                    let mut net = os.net();
-                    net.vrx = ((net.rx - prx) as f64 / dt) as u64;
-                    prx = net.rx;
-                    net.vtx = ((net.tx - ptx) as f64 / dt) as u64;
-                    ptx = net.tx;
-                }
-                os.sleep_us(1_000_000).await;
-            }
-        });
-
         os.spawn("[draw_ui]", async move {
             loop {
                 os.draw_ui();
@@ -243,31 +201,12 @@ impl UefiOS {
         Executor::run()
     }
 
-    fn borrow(&self) -> Ref<'static, UefiOSImpl> {
-        Ref::map(OS.borrow(), |f| f.as_ref().unwrap())
-    }
-
     fn borrow_mut(&self) -> RefMut<'static, UefiOSImpl> {
         RefMut::map(OS.borrow_mut(), |f| f.as_mut().unwrap())
     }
 
     fn tasks(&self) -> RefMut<'static, Vec<Arc<Task>>> {
         RefMut::map(self.borrow_mut(), |f| &mut f.tasks)
-    }
-
-    pub fn net(&self) -> RefMut<'static, NetworkInterface> {
-        RefMut::map(self.borrow_mut(), |f| f.net.as_mut().unwrap())
-    }
-
-    pub fn wait_for_ip(self) -> impl Future<Output = ()> {
-        poll_fn(move |cx| {
-            if self.net().has_ip() {
-                Poll::Ready(())
-            } else {
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-        })
     }
 
     /// Interrupt task execution.
@@ -308,42 +247,8 @@ impl UefiOS {
         uefi::boot::wait_for_event(&mut [e]).unwrap();
     }
 
-    pub fn device_path_to_string(&self, device: &DevicePath) -> String {
-        let handle = uefi::boot::get_handle_for_protocol::<DevicePathToText>().unwrap();
-        let device_path_to_text =
-            uefi::boot::open_protocol_exclusive::<DevicePathToText>(handle).unwrap();
-        device_path_to_text
-            .convert_device_path_to_text(device, DisplayOnly(true), AllowShortcuts(true))
-            .unwrap()
-            .to_string()
-    }
-
-    /// Find the topmost device that implements this protocol.
-    fn handle_on_device<P: Protocol>(&self, device: &DevicePath) -> Option<Handle> {
-        for i in 0..device.node_iter().count() {
-            let mut buf = vec![];
-            let mut dev = DevicePathBuilder::with_vec(&mut buf);
-            for node in device.node_iter().take(i + 1) {
-                dev = dev.push(&node).unwrap();
-            }
-            let mut dev = dev.finalize().unwrap();
-            if let Ok(h) = uefi::boot::locate_device_path::<P>(&mut dev) {
-                return Some(h);
-            }
-        }
-        None
-    }
-
     pub fn open_first_disk(&self) -> Disk {
         Disk::new(*self)
-    }
-
-    pub async fn connect(&self, addr: SocketAddrV4) -> Result<TcpStream> {
-        TcpStream::new(*self, addr).await
-    }
-
-    pub async fn udp_bind(&self, port: Option<u16>) -> Result<UdpHandle> {
-        UdpHandle::new(*self, port).await
     }
 
     pub fn read_key(&self) -> impl Future<Output = Result<Key>> + '_ {
@@ -369,7 +274,7 @@ impl UefiOS {
         // Write the header.
         {
             let time = Timer::micros() as f32 * 0.000_001;
-            let ip = self.net().ip();
+            let ip = net::ip();
             let mut os = self.borrow_mut();
 
             let mode = os.vga.current_mode().unwrap().unwrap();
@@ -386,8 +291,7 @@ impl UefiOS {
 
             os.maybe_advance_to_col(3 * cols / 5);
 
-            let vrx = os.net.as_ref().unwrap().vrx;
-            let vtx = os.net.as_ref().unwrap().vtx;
+            let (vtx, vrx) = net::speed();
             os.write_with_color(
                 &format!("rx: {}/s tx: {}/s\n\n", BytesFmt(vrx), BytesFmt(vtx)),
                 Color::White,
@@ -437,10 +341,6 @@ impl UefiOS {
     }
 
     pub fn force_ui_redraw(&self) {
-        // TODO(virv): during network initialization we already start logging
-        if self.borrow().net.is_none() {
-            return;
-        }
         self.draw_ui()
     }
 

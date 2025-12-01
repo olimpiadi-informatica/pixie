@@ -14,7 +14,8 @@ use uefi::{entry, Status};
 
 use crate::flash::flash;
 use crate::os::error::{Error, Result};
-use crate::os::{TcpStream, UefiOS, PACKET_SIZE};
+use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
+use crate::os::UefiOS;
 use crate::reboot_to_os::reboot_to_os;
 use crate::register::register;
 use crate::store::store;
@@ -33,22 +34,22 @@ mod export_cov;
 const MIN_MEMORY: u64 = 32 << 20;
 
 async fn server_discover(os: UefiOS) -> Result<SocketAddrV4> {
-    let socket = os.udp_bind(None).await?;
+    let socket = UdpSocket::bind(None).await?;
 
     let task1 = async {
         let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
         #[allow(unreachable_code)]
         Ok::<_, Error>(loop {
             socket
-                .send(SocketAddrV4::new(Ipv4Addr::BROADCAST, ACTION_PORT), &msg)
+                .send_to(SocketAddrV4::new(Ipv4Addr::BROADCAST, ACTION_PORT), &msg)
                 .await?;
             os.sleep_us(1_000_000).await;
         })
     };
 
     let task2 = async {
-        let mut buf = [0; PACKET_SIZE];
-        let (data, server) = socket.recv(&mut buf).await;
+        let mut buf = [0; ETH_PACKET_SIZE];
+        let (data, server) = socket.recv_from(&mut buf).await;
         assert_eq!(data.len(), 0);
         Ok::<_, Error>(server)
     };
@@ -75,22 +76,22 @@ async fn shutdown(os: UefiOS) -> ! {
 
 async fn get_action(stream: &TcpStream) -> Result<Action> {
     let msg = postcard::to_allocvec(&TcpRequest::GetAction)?;
-    stream.send_u64_le(msg.len() as u64).await?;
-    stream.send(&msg).await?;
+    stream.write_u64_le(msg.len() as u64).await?;
+    stream.write_all(&msg).await?;
 
-    let len = stream.recv_u64_le().await? as usize;
+    let len = stream.read_u64_le().await? as usize;
     let mut buf = vec![0; len];
-    stream.recv_exact(&mut buf).await?;
+    stream.read_exact(&mut buf).await?;
     let cmd = postcard::from_bytes(&buf)?;
     Ok(cmd)
 }
 
 async fn complete_action(stream: &TcpStream) -> Result<()> {
     let msg = postcard::to_allocvec(&TcpRequest::ActionComplete)?;
-    stream.send_u64_le(msg.len() as u64).await?;
-    stream.send(&msg).await?;
+    stream.write_u64_le(msg.len() as u64).await?;
+    stream.write_all(&msg).await?;
 
-    let len = stream.recv_u64_le().await?;
+    let len = stream.read_u64_le().await?;
     assert_eq!(len, 0);
     Ok(())
 }
@@ -101,10 +102,10 @@ async fn run(os: UefiOS) -> Result<()> {
     let mut last_was_wait = false;
 
     os.spawn("ping", async move {
-        let udp_socket = os.udp_bind(None).await.unwrap();
+        let udp_socket = UdpSocket::bind(None).await.unwrap();
         loop {
             udp_socket
-                .send(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
+                .send_to(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
                 .await
                 .unwrap();
             os.sleep_us(10_000_000).await;
@@ -119,9 +120,9 @@ async fn run(os: UefiOS) -> Result<()> {
             log::debug!("Sending request for command");
         }
 
-        let tcp = os.connect(server).await?;
+        let tcp = TcpStream::connect(server).await?;
         let command = get_action(&tcp).await;
-        tcp.close_send().await;
+        tcp.shutdown().await;
         tcp.force_close().await;
 
         if let Err(e) = command {
@@ -151,9 +152,9 @@ async fn run(os: UefiOS) -> Result<()> {
                     Action::Flash => flash(os, server).await?,
                 }
 
-                let tcp = os.connect(server).await?;
+                let tcp = TcpStream::connect(server).await?;
                 complete_action(&tcp).await?;
-                tcp.close_send().await;
+                tcp.shutdown().await;
                 tcp.force_close().await;
 
                 if command == Action::Restart {

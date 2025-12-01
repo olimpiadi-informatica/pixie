@@ -9,7 +9,8 @@ use pixie_shared::{HintPacket, RegistrationInfo, TcpRequest, HINT_PORT};
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
 use crate::os::error::{Error, Result};
-use crate::os::{UefiOS, PACKET_SIZE};
+use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
+use crate::os::UefiOS;
 
 #[derive(Debug, Default)]
 struct Data {
@@ -61,8 +62,8 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         );
     });
 
-    let udp = os.udp_bind(Some(HINT_PORT)).await?;
-    let mut buf = [0; PACKET_SIZE];
+    let udp = UdpSocket::bind(Some(HINT_PORT)).await?;
+    let mut buf = [0; ETH_PACKET_SIZE];
 
     let mut hint = true;
     let mut images = Vec::new();
@@ -71,7 +72,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     loop {
         let key = if hint {
             loop {
-                let recv = Box::pin(udp.recv(&mut buf));
+                let recv = Box::pin(udp.recv_from(&mut buf));
                 let key = Box::pin(os.read_key());
                 match select(recv, key).await {
                     Either::Left(((buf, _), _)) => {
@@ -161,12 +162,12 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     let msg = TcpRequest::Register(data.borrow().station.clone());
     let buf = postcard::to_allocvec(&msg)?;
-    let stream = os.connect(server_addr).await?;
-    stream.send_u64_le(buf.len() as u64).await?;
-    stream.send(&buf).await?;
-    let len = stream.recv_u64_le().await?;
+    let stream = TcpStream::connect(server_addr).await?;
+    stream.write_u64_le(buf.len() as u64).await?;
+    stream.write_all(&buf).await?;
+    let len = stream.read_u64_le().await?;
     assert_eq!(len, 0);
-    stream.close_send().await;
+    stream.shutdown().await;
     // TODO(virv): this could be better
     stream.force_close().await;
 

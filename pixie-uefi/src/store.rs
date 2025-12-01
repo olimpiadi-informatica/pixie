@@ -11,7 +11,8 @@ use uefi::proto::console::text::Color;
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
-use crate::os::{memory, TcpStream, UefiOS};
+use crate::os::net::{TcpStream, UdpSocket};
+use crate::os::{memory, UefiOS};
 use crate::{parse_disk, MIN_MEMORY};
 
 #[derive(Debug)]
@@ -23,9 +24,9 @@ pub struct ChunkInfo {
 async fn save_image(stream: &TcpStream, image: Image) -> Result<()> {
     let req = TcpRequest::UploadImage(image);
     let buf = postcard::to_allocvec(&req)?;
-    stream.send_u64_le(buf.len() as u64).await?;
-    stream.send(&buf).await?;
-    let len = stream.recv_u64_le().await?;
+    stream.write_u64_le(buf.len() as u64).await?;
+    stream.write_all(&buf).await?;
+    let len = stream.read_u64_le().await?;
     assert_eq!(len, 0);
     Ok(())
 }
@@ -76,9 +77,9 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         BytesFmt(chunks.iter().map(|x| x.size as u64).sum::<u64>())
     );
 
-    let udp = os.udp_bind(None).await?;
-    let stream_get_csize = os.connect(server_address).await?;
-    let stream_upload_chunk = os.connect(server_address).await?;
+    let udp = UdpSocket::bind(None).await?;
+    let stream_get_csize = TcpStream::connect(server_address).await?;
+    let stream_upload_chunk = TcpStream::connect(server_address).await?;
 
     let total = chunks.len();
 
@@ -121,8 +122,8 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         while let Some((chunk, cdata)) = rx1.recv().await {
             let req = TcpRequest::HasChunk(chunk.hash);
             let buf = postcard::to_allocvec(&req)?;
-            stream_get_csize.send_u64_le(buf.len() as u64).await?;
-            stream_get_csize.send(&buf).await?;
+            stream_get_csize.write_u64_le(buf.len() as u64).await?;
+            stream_get_csize.write_all(&buf).await?;
             tx2.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok(())
@@ -131,9 +132,9 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     let task3 = async {
         let tx3 = tx3;
         while let Some((chunk, cdata)) = rx2.recv().await {
-            let len = stream_get_csize.recv_u64_le().await?;
+            let len = stream_get_csize.read_u64_le().await?;
             let mut buf = vec![0; len as usize];
-            stream_get_csize.recv(&mut buf).await?;
+            stream_get_csize.read_exact(&mut buf).await?;
             let has_chunk: bool = postcard::from_bytes(&buf)?;
             tx3.send((chunk, cdata, has_chunk))
                 .await
@@ -148,8 +149,8 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
             if !has_chunk {
                 let req = TcpRequest::UploadChunk(cdata);
                 let buf = postcard::to_allocvec(&req)?;
-                stream_upload_chunk.send_u64_le(buf.len() as u64).await?;
-                stream_upload_chunk.send(&buf).await?;
+                stream_upload_chunk.write_u64_le(buf.len() as u64).await?;
+                stream_upload_chunk.write_all(&buf).await?;
             }
             tx4.send((chunk, has_chunk))
                 .await
@@ -169,7 +170,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
         let mut chunks = Vec::new();
         while let Some((chunk, has_chunk)) = rx4.recv().await {
             if !has_chunk {
-                let len = stream_upload_chunk.recv_u64_le().await?;
+                let len = stream_upload_chunk.read_u64_le().await?;
                 assert_eq!(len, 0);
             }
             chunks.push(chunk);
@@ -183,7 +184,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
                 tsize: total_size,
                 tcsize: total_csize,
             });
-            udp.send(
+            udp.send_to(
                 server_address,
                 &postcard::to_allocvec(&UdpRequest::ActionProgress(chunks.len(), total))?,
             )
@@ -204,10 +205,10 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
     )
     .await?;
 
-    stream_get_csize.close_send().await;
+    stream_get_csize.shutdown().await;
     stream_get_csize.force_close().await;
 
-    stream_upload_chunk.close_send().await;
+    stream_upload_chunk.shutdown().await;
     // TODO(virv): this could be better
     stream_upload_chunk.force_close().await;
 

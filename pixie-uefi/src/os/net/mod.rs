@@ -1,0 +1,203 @@
+use alloc::string::{String, ToString};
+use core::future::{poll_fn, Future};
+use core::net::Ipv4Addr;
+use core::sync::atomic::{AtomicU64, Ordering};
+use core::task::Poll;
+
+use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet};
+use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
+use smoltcp::wire::{DhcpOption, HardwareAddress, IpCidr};
+use spin::Mutex;
+use uefi::proto::device_path::build::DevicePathBuilder;
+use uefi::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly};
+use uefi::proto::device_path::DevicePath;
+use uefi::proto::network::snp::SimpleNetwork;
+use uefi::proto::Protocol;
+use uefi::Handle;
+
+use super::timer::Timer;
+use crate::os::boot_options::BootOptions;
+use crate::os::net::interface::SnpDevice;
+use crate::os::net::speed::{RX_SPEED, TX_SPEED};
+pub use crate::os::net::tcp::TcpStream;
+pub use crate::os::net::udp::UdpSocket;
+use crate::os::timer::rdtsc;
+use crate::os::UefiOS;
+
+mod interface;
+mod speed;
+mod tcp;
+mod udp;
+
+pub const ETH_PACKET_SIZE: usize = 1514;
+
+static EPHEMERAL_PORT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct NetworkData {
+    interface: Interface,
+    device: SnpDevice,
+    socket_set: SocketSet<'static>,
+    dhcp_socket_handle: SocketHandle,
+}
+
+static NETWORK_DATA: Mutex<Option<NetworkData>> = Mutex::new(None);
+
+pub fn speed() -> (u64, u64) {
+    (TX_SPEED.bytes_per_second(), RX_SPEED.bytes_per_second())
+}
+
+fn with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> T {
+    let mut mg = NETWORK_DATA.try_lock().expect("Network is locked");
+    f(mg.as_mut().expect("Network is not initialized"))
+}
+
+fn device_path_to_string(device: &DevicePath) -> String {
+    let handle = uefi::boot::get_handle_for_protocol::<DevicePathToText>().unwrap();
+    let device_path_to_text =
+        uefi::boot::open_protocol_exclusive::<DevicePathToText>(handle).unwrap();
+    device_path_to_text
+        .convert_device_path_to_text(device, DisplayOnly(true), AllowShortcuts(true))
+        .unwrap()
+        .to_string()
+}
+
+/// Find the topmost device that implements this protocol.
+fn handle_on_device<P: Protocol>(device: &DevicePath) -> Option<Handle> {
+    for i in 0..device.node_iter().count() {
+        let mut buf = vec![];
+        let mut dev = DevicePathBuilder::with_vec(&mut buf);
+        for node in device.node_iter().take(i + 1) {
+            dev = dev.push(&node).unwrap();
+        }
+        let mut dev = dev.finalize().unwrap();
+        if let Ok(h) = uefi::boot::locate_device_path::<P>(&mut dev) {
+            return Some(h);
+        }
+    }
+    None
+}
+
+pub(super) fn init() {
+    // TODO(veluca): remove the use of `os` once we move spawning to the scheduler.
+    let os = UefiOS { cant_build: () };
+
+    let curopt = BootOptions::get(BootOptions::current());
+    let (descr, device) = BootOptions::boot_entry_info(&curopt[..]);
+    log::info!(
+        "Configuring network on interface used for booting ({} -- {})",
+        descr,
+        device_path_to_string(device)
+    );
+
+    let snp_handle = if let Some(handle) = handle_on_device::<SimpleNetwork>(device) {
+        handle
+    } else {
+        log::info!("SNP handle not found on device, falling back to first SNP handle");
+        uefi::boot::find_handles::<SimpleNetwork>().unwrap()[0]
+    };
+
+    let snp = uefi::boot::open_protocol_exclusive::<SimpleNetwork>(snp_handle).unwrap();
+
+    let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
+        &snp.mode().current_address.0[..6],
+    ));
+
+    let mut device = SnpDevice::new(snp);
+
+    let mut interface_config = Config::new(hw_addr);
+    interface_config.random_seed = rdtsc() as u64;
+    let now = Timer::instant();
+    let interface = Interface::new(interface_config, &mut device, now);
+    let mut dhcp_socket = Dhcpv4Socket::new();
+    dhcp_socket.set_outgoing_options(&[DhcpOption {
+        kind: 60,
+        data: b"pixie",
+    }]);
+    let mut socket_set = SocketSet::new(vec![]);
+    let dhcp_socket_handle = socket_set.add(dhcp_socket);
+
+    *NETWORK_DATA.lock() = Some(NetworkData {
+        interface,
+        device,
+        socket_set,
+        dhcp_socket_handle,
+    });
+
+    os.spawn(
+        "[net_poll]",
+        poll_fn(move |cx| {
+            poll();
+            // TODO(veluca): figure out whether we can suspend the task.
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }),
+    );
+
+    speed::spawn_update_network_speed_task(os);
+}
+
+pub fn wait_for_ip() -> impl Future<Output = ()> {
+    poll_fn(move |cx| {
+        if ip().is_some() {
+            Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+}
+
+pub fn ip() -> Option<Ipv4Addr> {
+    let mg = NETWORK_DATA.try_lock().unwrap();
+    mg.as_ref().and_then(|n| n.interface.ipv4_addr())
+}
+
+fn get_ephemeral_port() -> u16 {
+    let ans = EPHEMERAL_PORT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    ((ans % (60999 - 49152)) + 49152) as u16
+}
+
+fn poll() {
+    let now = Timer::instant();
+
+    let mut data = NETWORK_DATA.lock();
+
+    let Some(NetworkData {
+        interface,
+        device,
+        socket_set,
+        dhcp_socket_handle,
+    }) = data.as_mut()
+    else {
+        return;
+    };
+
+    let status = interface.poll(now, device, socket_set);
+
+    if status == PollResult::None {
+        return;
+    }
+
+    let dhcp_status = socket_set
+        .get_mut::<Dhcpv4Socket>(*dhcp_socket_handle)
+        .poll();
+
+    if let Some(dhcp_status) = dhcp_status {
+        if let Event::Configured(config) = dhcp_status {
+            interface.update_ip_addrs(|a| {
+                a.push(IpCidr::Ipv4(config.address)).unwrap();
+            });
+            if let Some(router) = config.router {
+                interface
+                    .routes_mut()
+                    .add_default_ipv4_route(router)
+                    .unwrap();
+            }
+        } else {
+            interface.update_ip_addrs(|a| {
+                a.clear();
+            });
+            interface.routes_mut().remove_default_ipv4_route();
+        }
+    }
+}
