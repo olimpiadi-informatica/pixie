@@ -6,12 +6,12 @@ version = "0.1.0"
 [dependencies]
 anyhow = "1.0.100"
 blake3 = "1.8.2"
-clap = { version = "4.5.51", features = ["derive"] }
+clap = { version = "4.5.53", features = ["derive"] }
 env_logger = { version = "0.11.6", default-features = false, features = ["auto-color", "humantime"] }
 interfaces = "0.0.9"
 ipnet = { version = "2.11.0", features = ["serde"] }
-libc = "0.2.177"
-log = "0.4.28"
+libc = "0.2.178"
+log = "0.4.29"
 macaddr = { version = "1.0.1", features = ["serde"] }
 postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 serde = "1.0.228"
@@ -28,7 +28,7 @@ http-body-util = "0.1.3"
 futures = "0.3.30"
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 chrono = "0.4.42"
-tokio-util = "0.7.16"
+tokio-util = "0.7.17"
 lz4_flex = "0.11.5"
 
 [dependencies.pixie-shared]
