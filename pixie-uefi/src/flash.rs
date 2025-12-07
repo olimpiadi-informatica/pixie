@@ -1,8 +1,8 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::rc::Rc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
+use core::fmt::Write;
 use core::mem;
 use core::net::SocketAddrV4;
 
@@ -12,13 +12,13 @@ use lz4_flex::decompress;
 use pixie_shared::chunk_codec::Decoder;
 use pixie_shared::util::BytesFmt;
 use pixie_shared::{ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT, MAX_CHUNK_SIZE};
-use uefi::proto::console::text::Color;
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
 use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
-use crate::os::{disk, memory, UefiOS};
+use crate::os::ui::{update_content, DrawArea};
+use crate::os::{disk, memory};
 use crate::MIN_MEMORY;
 
 async fn fetch_image(stream: &TcpStream) -> Result<Image> {
@@ -32,6 +32,7 @@ async fn fetch_image(stream: &TcpStream) -> Result<Image> {
     Ok(postcard::from_bytes(&buf)?)
 }
 
+#[derive(Clone, PartialEq, Eq)]
 struct Stats {
     chunks: usize,
     unique: usize,
@@ -75,7 +76,7 @@ fn handle_packet(
     Ok(Some((pos, data)))
 }
 
-pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
+pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let stream = TcpStream::connect(server_addr).await?;
     let image = fetch_image(&stream).await?;
     stream.shutdown().await;
@@ -93,48 +94,42 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
 
     info!("Obtained chunks; {} distinct chunks", chunks_info.len());
 
-    let stats = Rc::new(RefCell::new(Stats {
+    let stats = RefCell::new(Stats {
         chunks: image.disk.len(),
         unique: chunks_info.len(),
         fetch: 0,
         recv: 0,
         pack_recv: 0,
         requested: 0,
-    }));
-
-    let stats2 = stats.clone();
-    os.set_ui_drawer(move |os| {
-        os.write_with_color(
-            &format!("{} total chunks\n", stats2.borrow().chunks),
-            Color::White,
-            Color::Black,
-        );
-        os.write_with_color(
-            &format!("{} unique chunks\n", stats2.borrow().unique),
-            Color::White,
-            Color::Black,
-        );
-        os.write_with_color(
-            &format!("{} chunks to fetch\n", stats2.borrow().fetch),
-            Color::White,
-            Color::Black,
-        );
-        os.write_with_color(
-            &format!("{} chunks received\n", stats2.borrow().recv),
-            Color::White,
-            Color::Black,
-        );
-        os.write_with_color(
-            &format!("{} packets received\n", stats2.borrow().pack_recv),
-            Color::White,
-            Color::Black,
-        );
-        os.write_with_color(
-            &format!("{} chunks requested\n", stats2.borrow().requested),
-            Color::White,
-            Color::Black,
-        );
     });
+
+    let draw = |draw_area: &mut DrawArea| {
+        draw_area.clear();
+        writeln!(draw_area, "{} total chunks", stats.borrow().chunks).unwrap();
+        writeln!(draw_area, "{} unique chunks", stats.borrow().unique).unwrap();
+        writeln!(draw_area, "{} chunks to fetch", stats.borrow().fetch).unwrap();
+        writeln!(draw_area, "{} chunks received", stats.borrow().recv).unwrap();
+        writeln!(draw_area, "{} packets received", stats.borrow().pack_recv).unwrap();
+        writeln!(draw_area, "{} chunks requested", stats.borrow().requested).unwrap();
+    };
+
+    update_content(draw);
+
+    let done = Cell::new(false);
+
+    let draw_task = async {
+        let mut last_stats = stats.borrow().clone();
+        while !done.get() {
+            Executor::sleep_us(100_000).await;
+            let stats = stats.borrow().clone();
+            if stats == last_stats {
+                continue;
+            }
+            update_content(draw);
+            last_stats = stats;
+        }
+        Ok(())
+    };
 
     let mut disk = disk::Disk::largest();
 
@@ -158,6 +153,7 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
             chunks_info.insert(hash, (size, csize, pos));
             stats.borrow_mut().fetch = chunks_info.len();
         }
+        update_content(draw);
     }
 
     info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
@@ -226,10 +222,11 @@ pub async fn flash(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                 .send_to(server_addr, &postcard::to_allocvec(&msg)?)
                 .await?;
         }
+        done.set(true);
         Ok(())
     };
 
-    let ((), ()) = futures::try_join!(task1, task2)?;
+    let ((), (), ()) = futures::try_join!(task1, task2, draw_task)?;
 
     info!("Fetch complete, updating boot options");
 

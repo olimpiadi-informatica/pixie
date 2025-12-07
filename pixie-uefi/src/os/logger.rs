@@ -1,25 +1,18 @@
-use alloc::{collections::vec_deque::VecDeque, string::String};
+use alloc::string::String;
 use core::fmt::Write;
+
 use log::Level;
 use spin::Mutex;
-use uefi::{boot::ScopedProtocol, proto::console::serial::Serial};
+use uefi::boot::ScopedProtocol;
+use uefi::proto::console::serial::Serial;
+use uefi::proto::console::text::Color;
 
-use crate::os::{timer::Timer, UefiOS};
+use crate::os::send_wrapper::SendWrapper;
+use crate::os::timer::Timer;
+use crate::os::ui::{self, DrawArea};
 
-static MESSAGES: Mutex<VecDeque<LogEntry>> = Mutex::new(VecDeque::new());
-static SERIAL: Mutex<Option<SerialWrapper>> = Mutex::new(None);
-
-pub(super) struct LogEntry {
-    pub time: f64,
-    pub level: Level,
-    pub target: String,
-    pub msg: String,
-}
-
-struct SerialWrapper(ScopedProtocol<Serial>);
-
-// SAFETY: There are no threads.
-unsafe impl Send for SerialWrapper {}
+static SERIAL: Mutex<Option<SendWrapper<ScopedProtocol<Serial>>>> = Mutex::new(None);
+static DRAW_AREA: Mutex<DrawArea> = Mutex::new(DrawArea::invalid());
 
 struct Logger {}
 
@@ -28,10 +21,13 @@ pub(super) fn init() {
         .ok()
         .map(|handles| uefi::boot::open_protocol_exclusive::<Serial>(handles[0]).unwrap());
 
-    *SERIAL.lock() = serial.map(SerialWrapper);
+    *SERIAL.lock() = serial.map(SendWrapper);
 
     log::set_logger(&Logger {}).unwrap();
     log::set_max_level(log::LevelFilter::Trace);
+
+    *DRAW_AREA.lock() = DrawArea::logs();
+    DRAW_AREA.lock().clear();
 }
 
 fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
@@ -51,30 +47,22 @@ fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
     }
 
     {
-        let mut logs = MESSAGES.try_lock().expect("messages are locked");
-        logs.push_back(LogEntry {
-            time,
-            level,
-            target: target.into(),
-            msg,
-        });
-        const MAX_MESSAGES: usize = 10;
-        if logs.len() > MAX_MESSAGES {
-            logs.pop_front();
-        }
+        let col = match level {
+            Level::Trace => Color::Cyan,
+            Level::Debug => Color::Blue,
+            Level::Info => Color::Green,
+            Level::Warn => Color::Yellow,
+            Level::Error => Color::Red,
+        };
+        let mut draw_area = DRAW_AREA.lock();
+        write!(draw_area, "[{time:.1}s ").unwrap();
+        draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
+        writeln!(draw_area, "{target}] {msg}").unwrap();
     }
 
     if level <= Level::Warn {
-        UefiOS { cant_build: () }.force_ui_redraw()
+        ui::flush();
     }
-}
-
-pub(super) fn for_each_log<F: FnMut(&LogEntry)>(f: F) {
-    MESSAGES
-        .try_lock()
-        .expect("messages are locked")
-        .iter()
-        .for_each(f);
 }
 
 impl log::Log for Logger {

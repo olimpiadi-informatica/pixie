@@ -7,9 +7,8 @@ use uefi::boot::{OpenProtocolParams, ScopedProtocol};
 use uefi::proto::media::block::BlockIO;
 use uefi::Handle;
 
-use crate::os::executor::Executor;
-
 use super::error::Result;
+use crate::os::executor::Executor;
 
 fn open_disk(handle: Handle) -> Result<ScopedProtocol<BlockIO>> {
     let image_handle = uefi::boot::image_handle();

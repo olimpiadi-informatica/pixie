@@ -1,4 +1,5 @@
 use alloc::string::{String, ToString};
+use core::fmt::Write;
 use core::future::{poll_fn, Future};
 use core::net::Ipv4Addr;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -8,6 +9,7 @@ use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet};
 use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
 use smoltcp::wire::{DhcpOption, HardwareAddress, IpCidr};
 use spin::Mutex;
+use uefi::proto::console::text::Color;
 use uefi::proto::device_path::build::DevicePathBuilder;
 use uefi::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly};
 use uefi::proto::device_path::DevicePath;
@@ -19,10 +21,10 @@ use super::timer::Timer;
 use crate::os::boot_options::BootOptions;
 use crate::os::executor::Executor;
 use crate::os::net::interface::SnpDevice;
-use crate::os::net::speed::{RX_SPEED, TX_SPEED};
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
 use crate::os::timer::rdtsc;
+use crate::os::ui;
 
 mod interface;
 mod speed;
@@ -41,10 +43,6 @@ struct NetworkData {
 }
 
 static NETWORK_DATA: Mutex<Option<NetworkData>> = Mutex::new(None);
-
-pub fn speed() -> (u64, u64) {
-    (TX_SPEED.bytes_per_second(), RX_SPEED.bytes_per_second())
-}
 
 fn with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> T {
     let mut mg = NETWORK_DATA.try_lock().expect("Network is locked");
@@ -130,7 +128,23 @@ pub(super) fn init() {
         }),
     );
 
-    speed::spawn_update_network_speed_task();
+    Executor::spawn("[show_ip]", async {
+        let mut draw_area = ui::DrawArea::ip();
+        loop {
+            draw_area.clear();
+            let ip = ip();
+            let w = draw_area.size().0;
+            if let Some(ip) = ip {
+                write!(draw_area, "IP: {ip:>0$}", w - 4).unwrap();
+                Executor::sleep_us(10_000_000).await
+            } else {
+                draw_area.write_with_color("DHCP...", Color::Yellow, Color::Black);
+                Executor::sleep_us(100_000).await
+            }
+        }
+    });
+
+    speed::spawn_network_speed_task();
 }
 
 pub fn wait_for_ip() -> impl Future<Output = ()> {
@@ -144,9 +158,8 @@ pub fn wait_for_ip() -> impl Future<Output = ()> {
     })
 }
 
-pub fn ip() -> Option<Ipv4Addr> {
-    let mg = NETWORK_DATA.try_lock().unwrap();
-    mg.as_ref().and_then(|n| n.interface.ipv4_addr())
+fn ip() -> Option<Ipv4Addr> {
+    with_net(|n| n.interface.ipv4_addr())
 }
 
 fn get_ephemeral_port() -> u16 {

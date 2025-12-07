@@ -1,7 +1,12 @@
+use core::fmt::Write;
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use pixie_shared::util::BytesFmt;
+use uefi::proto::console::text::Color;
 
 use crate::os::executor::Executor;
 use crate::os::timer::Timer;
+use crate::os::ui;
 
 pub struct NetSpeed {
     total: AtomicU64,
@@ -44,11 +49,28 @@ impl NetSpeed {
 pub(super) static TX_SPEED: NetSpeed = NetSpeed::new();
 pub(super) static RX_SPEED: NetSpeed = NetSpeed::new();
 
-pub(super) fn spawn_update_network_speed_task() {
+pub(super) fn spawn_network_speed_task() {
     Executor::spawn("[net_speed]", async move {
+        let mut draw_area = ui::DrawArea::net_speed();
         loop {
             TX_SPEED.update_speed();
             RX_SPEED.update_speed();
+            draw_area.clear();
+            let w = draw_area.size().0;
+            let vtx = TX_SPEED.bytes_per_second();
+            let vrx = RX_SPEED.bytes_per_second();
+            draw_area.write_with_color(
+                &format!("Network \u{2193}:{0:1$}", "", w - 22),
+                Color::Green,
+                Color::Black,
+            );
+            writeln!(draw_area, "{:10.1}/s", BytesFmt(vrx)).unwrap();
+            draw_area.write_with_color(
+                &format!("Network \u{2191}:{0:1$}", "", w - 22),
+                Color::Cyan,
+                Color::Black,
+            );
+            writeln!(draw_area, "{:10.1}/s", BytesFmt(vtx)).unwrap();
             Executor::sleep_us(1_000_000).await;
         }
     });
