@@ -8,6 +8,7 @@ use core::future::{poll_fn, Future};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::task::{Context, Poll, Waker};
+use futures::channel::oneshot;
 
 use spin::Mutex;
 use uefi::boot::{EventType, TimerTrigger, Tpl};
@@ -25,6 +26,7 @@ struct Task {
     future: Mutex<BoxFuture>,
     micros: AtomicU64,
     last_micros: AtomicU64,
+    done: AtomicBool,
 }
 
 impl Task {
@@ -38,13 +40,14 @@ impl Task {
             micros: AtomicU64::new(0),
             last_micros: AtomicU64::new(0),
             in_queue: AtomicBool::new(false),
+            done: AtomicBool::new(false),
         })
     }
 }
 
 impl Wake for Task {
     fn wake(self: Arc<Self>) {
-        if !self.in_queue.swap(true, Ordering::Relaxed) {
+        if !self.in_queue.swap(true, Ordering::Relaxed) && !self.done.load(Ordering::Relaxed) {
             EXECUTOR.lock().ready_tasks.push_back(self);
         }
     }
@@ -54,6 +57,14 @@ static EXECUTOR: Mutex<Executor> = Mutex::new(Executor {
     ready_tasks: VecDeque::new(),
     tasks: vec![],
 });
+
+pub struct JoinHandle<T>(oneshot::Receiver<T>);
+
+impl<T> JoinHandle<T> {
+    pub async fn join(self) -> T {
+        self.0.await.expect("tasks should never be cancelled")
+    }
+}
 
 pub struct Executor {
     // TODO(veluca): scheduling.
@@ -145,6 +156,9 @@ impl Executor {
                     t.last_micros
                         .store(t.micros.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
+
+                // Clear completed tasks.
+                tasks.retain(|t| !t.done.load(Ordering::Relaxed));
             }
             last = Timer::micros() as u64;
             Self::sleep_us(1_000_000).await;
@@ -165,10 +179,13 @@ impl Executor {
             let mut context = Context::from_waker(&waker);
             let mut fut = task.future.try_lock().unwrap();
             let begin = Timer::micros();
-            let _ = fut.0.as_mut().poll(&mut context);
+            let done = fut.0.as_mut().poll(&mut context);
             let end = Timer::micros();
             task.micros
                 .fetch_add((end - begin) as u64, Ordering::Relaxed);
+            if done.is_ready() {
+                task.done.swap(true, Ordering::Relaxed);
+            }
         }
     }
 
@@ -211,13 +228,18 @@ impl Executor {
     }
 
     /// Spawn a new task.
-    pub fn spawn<Fut>(name: &'static str, f: Fut)
+    pub fn spawn<Fut, T: 'static>(name: &'static str, f: Fut) -> JoinHandle<T>
     where
-        Fut: Future<Output = ()> + 'static,
+        Fut: Future<Output = T> + 'static,
     {
-        let task = Task::new(name, f);
+        let (send, recv) = oneshot::channel();
+        let task = Task::new(name, async move {
+            let t = f.await;
+            let _ = send.send(t);
+        });
         let mut executor = EXECUTOR.lock();
         executor.tasks.push(task.clone());
         executor.ready_tasks.push_back(task);
+        JoinHandle(recv)
     }
 }

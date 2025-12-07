@@ -124,7 +124,7 @@ pub(super) fn init() {
             poll();
             // TODO(veluca): figure out whether we can suspend the task.
             cx.waker().wake_by_ref();
-            Poll::Pending
+            Poll::<()>::Pending
         }),
     );
 
