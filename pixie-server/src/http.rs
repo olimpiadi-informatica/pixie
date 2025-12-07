@@ -205,7 +205,12 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             ServeDir::new(&admin_path).append_index_html_on_directories(true),
         );
     if let Some(password) = password {
-        router = router.layer(ValidateRequestHeaderLayer::basic("admin", password));
+        router = router.layer(
+            #[allow(deprecated)]
+            // `ValidateRequestHeaderLayer::basic` is deprecated because it's "too simple for an
+            // actual use case", well... here's a use case
+            ValidateRequestHeaderLayer::basic("admin", password),
+        );
     }
     router = router.layer(TraceLayer::new_for_http());
 
