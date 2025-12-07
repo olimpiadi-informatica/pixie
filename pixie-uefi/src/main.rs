@@ -145,9 +145,11 @@ async fn run() -> Result<()> {
                     Action::Boot => power_control::reboot_to_os().await,
                     Action::Restart => {}
                     Action::Shutdown => shutdown().await,
-                    Action::Register => register(server).await?,
-                    Action::Store => store(server).await?,
-                    Action::Flash => flash(server).await?,
+                    Action::Register => {
+                        Executor::spawn("register", register(server)).join().await?
+                    }
+                    Action::Store => Executor::spawn("store", store(server)).join().await?,
+                    Action::Flash => Executor::spawn("flash", flash(server)).join().await?,
                 }
 
                 let tcp = TcpStream::connect(server).await?;
