@@ -10,7 +10,8 @@ use uefi::proto::console::text::{Color, Key, ScanCode};
 
 use crate::os::error::{Error, Result};
 use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
-use crate::os::UefiOS;
+use crate::os::ui::DrawArea;
+use crate::os::{input, ui};
 
 #[derive(Debug, Default)]
 struct Data {
@@ -18,49 +19,41 @@ struct Data {
     selected: usize,
 }
 
-pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
+pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
     let data2 = data.clone();
 
-    os.set_ui_drawer(move |os| {
+    let draw_content = move |draw_area: &mut DrawArea| {
+        draw_area.clear();
         let data2 = data2.borrow();
-        os.write_with_color(
+        let fg = |i| {
+            if data2.selected == i {
+                Color::Yellow
+            } else {
+                Color::White
+            }
+        };
+        draw_area.write_with_color(
             &format!("Group:  {}\n", data2.station.group),
-            if data2.selected == 0 {
-                Color::Yellow
-            } else {
-                Color::White
-            },
+            fg(0),
             Color::Black,
         );
-        os.write_with_color(
+        draw_area.write_with_color(
             &format!("Row:    {}\n", data2.station.row),
-            if data2.selected == 1 {
-                Color::Yellow
-            } else {
-                Color::White
-            },
+            fg(1),
             Color::Black,
         );
-        os.write_with_color(
+        draw_area.write_with_color(
             &format!("Column: {}\n", data2.station.col),
-            if data2.selected == 2 {
-                Color::Yellow
-            } else {
-                Color::White
-            },
+            fg(2),
             Color::Black,
         );
-        os.write_with_color(
+        draw_area.write_with_color(
             &format!("Image:  {}\n", data2.station.image),
-            if data2.selected == 3 {
-                Color::Yellow
-            } else {
-                Color::White
-            },
+            fg(3),
             Color::Black,
         );
-    });
+    };
 
     let udp = UdpSocket::bind(Some(HINT_PORT)).await?;
     let mut buf = [0; ETH_PACKET_SIZE];
@@ -69,18 +62,22 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
     let mut images = Vec::new();
     let mut groups = Vec::new();
 
+    ui::update_content(&draw_content);
+    ui::flush();
+
     loop {
         let key = if hint {
             loop {
                 let recv = Box::pin(udp.recv_from(&mut buf));
-                let key = Box::pin(os.read_key());
+                let key = Box::pin(input::read_key());
                 match select(recv, key).await {
                     Either::Left(((buf, _), _)) => {
                         let hint: HintPacket = postcard::from_bytes(buf)?;
                         data.borrow_mut().station = hint.station;
                         images = hint.images;
                         groups = hint.groups.into_iter().map(|(k, _)| k).collect();
-                        os.force_ui_redraw();
+                        ui::update_content(&draw_content);
+                        ui::flush();
                     }
                     Either::Right((key, _)) => {
                         hint = false;
@@ -89,7 +86,7 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
                 }
             }
         } else {
-            os.read_key().await?
+            input::read_key().await?
         };
 
         if key == Key::Special(ScanCode::DOWN) {
@@ -157,7 +154,8 @@ pub async fn register(os: UefiOS, server_addr: SocketAddrV4) -> Result<()> {
         if key == Key::Printable('\r'.try_into().unwrap()) {
             break;
         }
-        os.force_ui_redraw();
+        ui::update_content(&draw_content);
+        ui::flush();
     }
 
     let msg = TcpRequest::Register(data.borrow().station.clone());

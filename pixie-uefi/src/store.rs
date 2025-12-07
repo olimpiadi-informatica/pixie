@@ -1,18 +1,18 @@
-use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
+use core::fmt::Write;
 use core::net::SocketAddrV4;
 
 use log::info;
 use lz4_flex::compress;
 use pixie_shared::util::BytesFmt;
 use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
-use uefi::proto::console::text::Color;
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::net::{TcpStream, UdpSocket};
-use crate::os::{disk, memory, UefiOS};
+use crate::os::ui::DrawArea;
+use crate::os::{disk, memory, ui};
 use crate::{parse_disk, MIN_MEMORY};
 
 #[derive(Debug)]
@@ -41,31 +41,28 @@ enum State {
     },
 }
 
-pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
-    let stats = Rc::new(RefCell::new(State::ReadingPartitions));
-    let stats2 = stats.clone();
-    os.set_ui_drawer(move |os| match &*stats2.borrow() {
-        State::ReadingPartitions => {
-            os.write_with_color("Reading partitions...", Color::White, Color::Black)
+pub async fn store(server_address: SocketAddrV4) -> Result<()> {
+    let stats = RefCell::new(State::ReadingPartitions);
+
+    let draw = |draw_area: &mut DrawArea| {
+        draw_area.clear();
+        match &*stats.borrow() {
+            State::ReadingPartitions => {
+                writeln!(draw_area, "Reading partitions...").unwrap();
+            }
+            State::PushingChunks {
+                cur,
+                total,
+                tsize,
+                tcsize,
+            } => {
+                writeln!(draw_area, "Pushed {cur} out of {total} chunks").unwrap();
+                writeln!(draw_area, "total size {tsize}, compressed {tcsize}").unwrap();
+            }
         }
-        State::PushingChunks {
-            cur,
-            total,
-            tsize,
-            tcsize,
-        } => {
-            os.write_with_color(
-                &format!("Pushed {cur} out of {total} chunks\n"),
-                Color::White,
-                Color::Black,
-            );
-            os.write_with_color(
-                &format!("total size {tsize}, compressed {tcsize}\n"),
-                Color::White,
-                Color::Black,
-            );
-        }
-    });
+    };
+
+    ui::update_content(draw);
 
     let boid = BootOptions::reboot_target().expect("Could not find reboot target");
     let bo_command = BootOptions::get(boid);
@@ -189,6 +186,7 @@ pub async fn store(os: UefiOS, server_address: SocketAddrV4) -> Result<()> {
                 &postcard::to_allocvec(&UdpRequest::ActionProgress(chunks.len(), total))?,
             )
             .await?;
+            ui::update_content(draw);
         }
         Ok(chunks)
     };

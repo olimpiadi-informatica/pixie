@@ -16,7 +16,7 @@ use crate::flash::flash;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
 use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
-use crate::os::UefiOS;
+use crate::os::ui::update_content;
 use crate::register::register;
 use crate::store::store;
 
@@ -96,7 +96,7 @@ async fn complete_action(stream: &TcpStream) -> Result<()> {
     Ok(())
 }
 
-async fn run(os: UefiOS) -> Result<()> {
+async fn run() -> Result<()> {
     let server = server_discover().await?;
 
     let mut last_was_wait = false;
@@ -113,9 +113,7 @@ async fn run(os: UefiOS) -> Result<()> {
     });
 
     loop {
-        // Clear any UI drawer.
-        os.set_ui_drawer(|_| {});
-
+        update_content(|d| d.clear());
         if !last_was_wait {
             log::debug!("Sending request for command");
         }
@@ -147,9 +145,9 @@ async fn run(os: UefiOS) -> Result<()> {
                     Action::Boot => power_control::reboot_to_os().await,
                     Action::Restart => {}
                     Action::Shutdown => shutdown().await,
-                    Action::Register => register(os, server).await?,
-                    Action::Store => store(os, server).await?,
-                    Action::Flash => flash(os, server).await?,
+                    Action::Register => register(server).await?,
+                    Action::Store => store(server).await?,
+                    Action::Flash => flash(server).await?,
                 }
 
                 let tcp = TcpStream::connect(server).await?;
@@ -167,5 +165,5 @@ async fn run(os: UefiOS) -> Result<()> {
 
 #[entry]
 fn main() -> Status {
-    UefiOS::start(run)
+    os::start(run)
 }
