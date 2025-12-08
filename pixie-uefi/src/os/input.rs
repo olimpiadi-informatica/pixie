@@ -7,6 +7,7 @@ use uefi::boot::ScopedProtocol;
 use uefi::proto::console::text::{Input, Key};
 
 use crate::os::error::Result;
+use crate::os::executor::Executor;
 use crate::os::send_wrapper::SendWrapper;
 
 static INPUT: Lazy<Mutex<SendWrapper<ScopedProtocol<Input>>>> = Lazy::new(|| {
@@ -22,7 +23,7 @@ pub fn read_key() -> impl Future<Output = Result<Key>> {
             Err(e) => Poll::Ready(Err(e.into())),
             Ok(Some(key)) => Poll::Ready(Ok(key)),
             Ok(None) => {
-                cx.waker().wake_by_ref();
+                Executor::wake_on_interrupt(cx.waker());
                 Poll::Pending
             }
         }
