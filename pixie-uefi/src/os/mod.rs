@@ -2,6 +2,7 @@ use core::ffi::c_void;
 use core::future::Future;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::time::Duration;
 
 use uefi::boot::{EventType, Tpl};
 use uefi::{Event, Status};
@@ -72,7 +73,7 @@ where
                 break;
             }
 
-            Executor::sleep_us(30_000_000).await;
+            Executor::sleep(Duration::from_secs(30)).await;
         }
     });
 

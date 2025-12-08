@@ -1,5 +1,6 @@
 use core::fmt::Write;
 use core::sync::atomic::{AtomicU64, Ordering};
+use core::time::Duration;
 
 use pixie_shared::util::BytesFmt;
 use uefi::proto::console::text::Color;
@@ -71,7 +72,7 @@ pub(super) fn spawn_network_speed_task() {
                 Color::Black,
             );
             writeln!(draw_area, "{:10.1}/s", BytesFmt(vtx)).unwrap();
-            Executor::sleep_us(1_000_000).await;
+            Executor::sleep(Duration::from_secs(1)).await;
         }
     });
 }
