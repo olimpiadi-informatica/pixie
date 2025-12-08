@@ -1,11 +1,17 @@
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::fmt::Write;
 use core::future::{poll_fn, Future};
 use core::net::Ipv4Addr;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::task::Poll;
+use core::time::Duration;
 
-use smoltcp::iface::{Config, Interface, PollResult, SocketHandle, SocketSet};
+use futures::task::AtomicWaker;
+use smoltcp::iface::{
+    Config, Interface, PollIngressSingleResult, PollResult, SocketHandle, SocketSet,
+};
 use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
 use smoltcp::wire::{DhcpOption, HardwareAddress, IpCidr};
 use spin::Mutex;
@@ -19,10 +25,11 @@ use uefi::Handle;
 
 use super::timer::Timer;
 use crate::os::boot_options::BootOptions;
-use crate::os::executor::Executor;
+use crate::os::executor::{Executor, WrappedWaker};
 use crate::os::net::interface::SnpDevice;
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
+use crate::os::send_wrapper::SendWrapper;
 use crate::os::timer::rdtsc;
 use crate::os::ui;
 
@@ -43,6 +50,8 @@ struct NetworkData {
 }
 
 static NETWORK_DATA: Mutex<Option<NetworkData>> = Mutex::new(None);
+
+static WAITING_FOR_IP: Mutex<Vec<WrappedWaker>> = Mutex::new(vec![]);
 
 fn with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> T {
     let mut mg = NETWORK_DATA.try_lock().expect("Network is locked");
@@ -97,7 +106,7 @@ pub(super) fn init() {
         &snp.mode().current_address.0[..6],
     ));
 
-    let mut device = SnpDevice::new(snp);
+    let mut device = SnpDevice::new(SendWrapper(snp));
 
     let mut interface_config = Config::new(hw_addr);
     interface_config.random_seed = rdtsc() as u64;
@@ -118,15 +127,28 @@ pub(super) fn init() {
         dhcp_socket_handle,
     });
 
-    Executor::spawn(
-        "[net_poll]",
+    Executor::spawn("[net_poll]", {
         poll_fn(move |cx| {
-            poll();
-            // TODO(veluca): figure out whether we can suspend the task.
-            cx.waker().wake_by_ref();
+            let wait = poll();
+            match wait {
+                None => {
+                    Executor::wake_on_interrupt(cx.waker());
+                }
+                Some(x) if x < 200 => {
+                    // Immediately wake if we want call poll() again in a very short time.
+                    cx.waker().wake_by_ref();
+                }
+                Some(wait) => {
+                    // Halve the waiting time, to try to ensure that we don't exceed the suggested
+                    // waiting time.
+                    let deadline = Timer::micros() + wait as i64 / 2;
+                    Executor::wake_on_interrupt(cx.waker());
+                    Executor::wake_at_micros(deadline, cx.waker(), &mut None);
+                }
+            }
             Poll::<()>::Pending
-        }),
-    );
+        })
+    });
 
     Executor::spawn("[show_ip]", async {
         let mut draw_area = ui::DrawArea::ip();
@@ -136,10 +158,10 @@ pub(super) fn init() {
             let w = draw_area.size().0;
             if let Some(ip) = ip {
                 write!(draw_area, "IP: {ip:>0$}", w - 4).unwrap();
-                Executor::sleep_us(10_000_000).await
+                Executor::sleep(Duration::from_secs(10)).await
             } else {
                 draw_area.write_with_color("DHCP...", Color::Yellow, Color::Black);
-                Executor::sleep_us(100_000).await
+                Executor::sleep(Duration::from_millis(100)).await
             }
         }
     });
@@ -148,11 +170,17 @@ pub(super) fn init() {
 }
 
 pub fn wait_for_ip() -> impl Future<Output = ()> {
+    let mut last_waker = None;
     poll_fn(move |cx| {
         if ip().is_some() {
             Poll::Ready(())
         } else {
-            cx.waker().wake_by_ref();
+            if last_waker.is_none() {
+                let waker = Arc::new(AtomicWaker::new());
+                WAITING_FOR_IP.lock().push(waker.clone());
+                last_waker = Some(waker);
+            }
+            last_waker.as_ref().unwrap().register(cx.waker());
             Poll::Pending
         }
     })
@@ -167,25 +195,25 @@ fn get_ephemeral_port() -> u16 {
     ((ans % (60999 - 49152)) + 49152) as u16
 }
 
-fn poll() {
+/// Returns # of microseconds to wait until we should call poll() again (possibly 0), or
+/// None if we can wait until the next interrupt.
+fn poll() -> Option<u64> {
     let now = Timer::instant();
 
     let mut data = NETWORK_DATA.lock();
 
-    let Some(NetworkData {
+    let NetworkData {
         interface,
         device,
         socket_set,
         dhcp_socket_handle,
-    }) = data.as_mut()
-    else {
-        return;
-    };
+    } = data.as_mut().unwrap();
 
-    let status = interface.poll(now, device, socket_set);
+    let status_out = interface.poll_egress(now, device, socket_set);
+    let status_in = interface.poll_ingress_single(now, device, socket_set);
 
-    if status == PollResult::None {
-        return;
+    if status_in == PollIngressSingleResult::None && status_out == PollResult::None {
+        return interface.poll_delay(now, socket_set).map(|x| x.micros());
     }
 
     let dhcp_status = socket_set
@@ -203,6 +231,10 @@ fn poll() {
                     .add_default_ipv4_route(router)
                     .unwrap();
             }
+            let to_wake = core::mem::take(&mut *WAITING_FOR_IP.lock());
+            for w in to_wake {
+                w.wake();
+            }
         } else {
             interface.update_ip_addrs(|a| {
                 a.clear();
@@ -210,4 +242,5 @@ fn poll() {
             interface.routes_mut().remove_default_ipv4_route();
         }
     }
+    Some(0)
 }

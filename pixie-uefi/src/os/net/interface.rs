@@ -5,8 +5,9 @@ use uefi::proto::network::snp::{ReceiveFlags, SimpleNetwork};
 use uefi::Status;
 
 use super::ETH_PACKET_SIZE;
+use crate::os::send_wrapper::SendWrapper;
 
-type Snp = ScopedProtocol<SimpleNetwork>;
+type Snp = SendWrapper<ScopedProtocol<SimpleNetwork>>;
 
 pub struct SnpDevice {
     snp: Snp,
@@ -14,9 +15,6 @@ pub struct SnpDevice {
     // Received packets might contain Ethernet-related padding (up to 4 bytes).
     rx_buf: [u8; ETH_PACKET_SIZE + 4],
 }
-
-// SAFETY: we never create threads anyway.
-unsafe impl Send for SnpDevice {}
 
 impl SnpDevice {
     pub fn new(snp: Snp) -> SnpDevice {
