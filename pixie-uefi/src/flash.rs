@@ -5,6 +5,7 @@ use core::cell::{Cell, RefCell};
 use core::fmt::Write;
 use core::mem;
 use core::net::SocketAddrV4;
+use core::time::Duration;
 
 use futures::future::{select, Either};
 use log::info;
@@ -120,7 +121,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let draw_task = async {
         let mut last_stats = stats.borrow().clone();
         while !done.get() {
-            Executor::sleep_us(100_000).await;
+            Executor::sleep(Duration::from_millis(100)).await;
             let stats = stats.borrow().clone();
             if stats == last_stats {
                 continue;
@@ -176,7 +177,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         );
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv_from(&mut buf));
-            let sleep = Box::pin(Executor::sleep_us(100_000));
+            let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
             match select(recv, sleep).await {
                 Either::Left(((buf, _addr), _)) => {
                     stats.borrow_mut().pack_recv += 1;

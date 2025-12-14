@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use core::time::Duration;
 
 use pixie_shared::util::BytesFmt;
 use spin::lazy::Lazy;
@@ -81,7 +82,7 @@ pub(super) fn init() {
     Executor::spawn("[flush_ui]", async move {
         loop {
             SCREEN.lock().flush();
-            Executor::sleep_us(100_000).await;
+            Executor::sleep(Duration::from_millis(100)).await;
         }
     });
 
@@ -94,7 +95,7 @@ pub(super) fn init() {
             let time = Timer::micros() as f32 * 0.000_001;
             let w = draw_area.size().0;
             write!(draw_area, "uptime:{0:1$}{time:12.1}s", "", w - 20).unwrap();
-            Executor::sleep_us(50_000).await;
+            Executor::sleep(Duration::from_millis(50)).await;
         }
     });
 
@@ -113,7 +114,7 @@ pub(super) fn init() {
                 w - 27,
             )
             .unwrap();
-            Executor::sleep_us(1_000_000).await;
+            Executor::sleep(Duration::from_secs(1)).await;
         }
     });
 

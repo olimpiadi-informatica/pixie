@@ -7,6 +7,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::net::{Ipv4Addr, SocketAddrV4};
+use core::time::Duration;
 
 use futures::future::{self, Either};
 use pixie_shared::{Action, TcpRequest, UdpRequest, ACTION_PORT, PING_PORT};
@@ -43,7 +44,7 @@ async fn server_discover() -> Result<SocketAddrV4> {
             socket
                 .send_to(SocketAddrV4::new(Ipv4Addr::BROADCAST, ACTION_PORT), &msg)
                 .await?;
-            Executor::sleep_us(1_000_000).await;
+            Executor::sleep(Duration::from_secs(1)).await;
         })
     };
 
@@ -70,7 +71,7 @@ async fn shutdown() -> ! {
     export_cov::export().await;
 
     log::info!("Shutting down...");
-    Executor::sleep_us(1_000_000).await;
+    Executor::sleep(Duration::from_secs(1)).await;
     power_control::shutdown()
 }
 
@@ -108,7 +109,7 @@ async fn run() -> Result<()> {
                 .send_to(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
                 .await
                 .unwrap();
-            Executor::sleep_us(10_000_000).await;
+            Executor::sleep(Duration::from_secs(10)).await;
         }
     });
 
@@ -132,11 +133,7 @@ async fn run() -> Result<()> {
                     log::warn!("Started waiting for another command...");
                 }
                 last_was_wait = true;
-                const WAIT_10MSECS: u64 = 50;
-                for _ in 0..WAIT_10MSECS {
-                    Executor::deep_sleep_us(10_000);
-                    Executor::sched_yield().await;
-                }
+                Executor::sleep(Duration::from_millis(500)).await;
             } else {
                 last_was_wait = false;
                 log::info!("Command: {command:?}");

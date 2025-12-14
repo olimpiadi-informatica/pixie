@@ -1,3 +1,5 @@
+use core::time::Duration;
+
 use uefi::Status;
 
 use crate::os::boot_options::BootOptions;
@@ -14,7 +16,7 @@ pub async fn reboot_to_os() -> ! {
             BootOptions::current()
         );
         log::warn!("{:?}", BootOptions::order());
-        Executor::sleep_us(100_000_000).await;
+        Executor::sleep(Duration::from_secs(100)).await;
     }
     reset();
 }

@@ -65,7 +65,12 @@ impl TcpStream {
             let state = with_net(|n| n.socket_set.get_mut::<TcpSocket>(self.handle).state());
             let res = f(state);
             if matches!(res, Poll::Pending) {
-                cx.waker().wake_by_ref();
+                with_net(|n| {
+                    let socket = n.socket_set.get_mut::<TcpSocket>(self.handle);
+                    // Every meaningful state change causes either send or recv to become possible (possibly erroring).
+                    socket.register_send_waker(cx.waker());
+                    socket.register_recv_waker(cx.waker());
+                });
             }
             res
         })
