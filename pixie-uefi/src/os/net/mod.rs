@@ -1,14 +1,10 @@
 use alloc::string::{String, ToString};
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt::Write;
-use core::future::{poll_fn, Future};
 use core::net::Ipv4Addr;
 use core::sync::atomic::{AtomicU64, Ordering};
-use core::task::Poll;
 use core::time::Duration;
 
-use futures::task::AtomicWaker;
 use smoltcp::iface::{
     Config, Interface, PollIngressSingleResult, PollResult, SocketHandle, SocketSet,
 };
@@ -25,7 +21,8 @@ use uefi::Handle;
 
 use super::timer::Timer;
 use crate::os::boot_options::BootOptions;
-use crate::os::executor::{Executor, WrappedWaker};
+use crate::os::executor::event::{Event as ExecutorEvent, EventTrigger};
+use crate::os::executor::Executor;
 use crate::os::net::interface::SnpDevice;
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
@@ -51,7 +48,7 @@ struct NetworkData {
 
 static NETWORK_DATA: Mutex<Option<NetworkData>> = Mutex::new(None);
 
-static WAITING_FOR_IP: Mutex<Vec<WrappedWaker>> = Mutex::new(vec![]);
+static WAITING_FOR_IP: Mutex<Vec<EventTrigger>> = Mutex::new(vec![]);
 
 fn with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> T {
     let mut mg = NETWORK_DATA.try_lock().expect("Network is locked");
@@ -127,27 +124,28 @@ pub(super) fn init() {
         dhcp_socket_handle,
     });
 
-    Executor::spawn("[net_poll]", {
-        poll_fn(move |cx| {
+    Executor::spawn("[net_poll]", async {
+        loop {
             let wait = poll();
             match wait {
                 None => {
-                    Executor::wake_on_interrupt(cx.waker());
+                    Executor::wait_for_interrupt().await;
                 }
-                Some(x) if x < 200 => {
+                Some(wait) if wait < 200 => {
                     // Immediately wake if we want call poll() again in a very short time.
-                    cx.waker().wake_by_ref();
+                    Executor::sched_yield().await;
                 }
                 Some(wait) => {
-                    // Halve the waiting time, to try to ensure that we don't exceed the suggested
-                    // waiting time.
-                    let deadline = Timer::micros() + wait as i64 / 2;
-                    Executor::wake_on_interrupt(cx.waker());
-                    Executor::wake_at_micros(deadline, cx.waker(), &mut None);
+                    futures::future::select(
+                        Executor::wait_for_interrupt(),
+                        // Halve the waiting time, to try to ensure that we don't exceed the suggested
+                        // waiting time.
+                        Executor::sleep(Duration::from_micros(wait / 2)),
+                    )
+                    .await;
                 }
             }
-            Poll::<()>::Pending
-        })
+        }
     });
 
     Executor::spawn("[show_ip]", async {
@@ -169,21 +167,13 @@ pub(super) fn init() {
     speed::spawn_network_speed_task();
 }
 
-pub fn wait_for_ip() -> impl Future<Output = ()> {
-    let mut last_waker = None;
-    poll_fn(move |cx| {
-        if ip().is_some() {
-            Poll::Ready(())
-        } else {
-            if last_waker.is_none() {
-                let waker = Arc::new(AtomicWaker::new());
-                WAITING_FOR_IP.lock().push(waker.clone());
-                last_waker = Some(waker);
-            }
-            last_waker.as_ref().unwrap().register(cx.waker());
-            Poll::Pending
-        }
-    })
+pub async fn wait_for_ip() {
+    if ip().is_some() {
+        return;
+    }
+    let event = ExecutorEvent::new();
+    WAITING_FOR_IP.lock().push(event.trigger());
+    event.await;
 }
 
 fn ip() -> Option<Ipv4Addr> {
@@ -232,8 +222,8 @@ fn poll() -> Option<u64> {
                     .unwrap();
             }
             let to_wake = core::mem::take(&mut *WAITING_FOR_IP.lock());
-            for w in to_wake {
-                w.wake();
+            for e in to_wake {
+                e.trigger();
             }
         } else {
             interface.update_ip_addrs(|a| {

@@ -1,6 +1,3 @@
-use core::future::{poll_fn, Future};
-use core::task::Poll;
-
 use spin::lazy::Lazy;
 use spin::Mutex;
 use uefi::boot::ScopedProtocol;
@@ -16,16 +13,11 @@ static INPUT: Lazy<Mutex<SendWrapper<ScopedProtocol<Input>>>> = Lazy::new(|| {
     Mutex::new(SendWrapper(input))
 });
 
-pub fn read_key() -> impl Future<Output = Result<Key>> {
-    poll_fn(move |cx| {
-        let key = INPUT.lock().read_key();
-        match key {
-            Err(e) => Poll::Ready(Err(e.into())),
-            Ok(Some(key)) => Poll::Ready(Ok(key)),
-            Ok(None) => {
-                Executor::wake_on_interrupt(cx.waker());
-                Poll::Pending
-            }
+pub async fn read_key() -> Result<Key> {
+    loop {
+        if let Some(key) = INPUT.lock().read_key()? {
+            break Ok(key);
         }
-    })
+        Executor::wait_for_interrupt().await;
+    }
 }
