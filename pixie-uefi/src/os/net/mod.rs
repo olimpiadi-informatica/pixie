@@ -126,21 +126,22 @@ pub(super) fn init() {
 
     Executor::spawn("[net_poll]", async {
         loop {
+            const MIN_WAIT_US: u64 = 1000;
             let wait = poll();
             match wait {
                 None => {
                     Executor::wait_for_interrupt().await;
                 }
-                Some(wait) if wait < 200 => {
+                Some(wait) if wait < MIN_WAIT_US => {
                     // Immediately wake if we want call poll() again in a very short time.
                     Executor::sched_yield().await;
                 }
                 Some(wait) => {
                     futures::future::select(
                         Executor::wait_for_interrupt(),
-                        // Halve the waiting time, to try to ensure that we don't exceed the suggested
-                        // waiting time.
-                        Executor::sleep(Duration::from_micros(wait / 2)),
+                        // Reduce the waiting time, to try to ensure that we don't exceed the
+                        // suggested waiting time.
+                        Executor::sleep(Duration::from_micros(wait - MIN_WAIT_US)),
                     )
                     .await;
                 }
