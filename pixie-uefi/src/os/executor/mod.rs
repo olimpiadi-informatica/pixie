@@ -12,13 +12,15 @@ use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 
 use futures::channel::oneshot;
-use futures::task::AtomicWaker;
 use spin::Mutex;
 use uefi::proto::console::text::Color;
 
+use crate::os::executor::event::{Event, EventTrigger};
 use crate::os::send_wrapper::SendWrapper;
 use crate::os::timer::Timer;
 use crate::os::ui::DrawArea;
+
+pub mod event;
 
 type BoxFuture = SendWrapper<Pin<Box<dyn Future<Output = ()> + 'static>>>;
 
@@ -55,11 +57,9 @@ impl Wake for Task {
     }
 }
 
-pub(super) type WrappedWaker = Arc<AtomicWaker>;
-
 struct TimedWait {
     wake_at: i64,
-    waker: WrappedWaker,
+    event: EventTrigger,
 }
 
 impl PartialEq for TimedWait {
@@ -99,7 +99,7 @@ static EXECUTOR: Mutex<Executor> = Mutex::new(Executor {
 });
 
 pub struct Executor {
-    wake_on_interrupt: Vec<Waker>,
+    wake_on_interrupt: Vec<EventTrigger>,
     timed_wait: BinaryHeap<TimedWait>,
     ready_tasks: VecDeque<Arc<Task>>,
     tasks: Vec<Arc<Task>>,
@@ -209,7 +209,7 @@ impl Executor {
         let mut do_wake = |force_interrupt_wake| {
             // Wake timed-waiting tasks.
             loop {
-                let waker = {
+                let event = {
                     let mut ex = EXECUTOR.lock();
                     let Some(w) = ex.timed_wait.peek() else {
                         break;
@@ -218,9 +218,9 @@ impl Executor {
                         break;
                     }
                     let w = ex.timed_wait.pop().unwrap();
-                    w.waker
+                    w.event
                 };
-                waker.wake();
+                event.trigger();
             }
             // Since we don't notice interrupts that happened while we are not hlt-ing,
             // make sure that we wake up all the interrupt-based waiting tasks every at
@@ -228,8 +228,8 @@ impl Executor {
             if last_interrupt_wakeup + INTERRUPT_MICROS <= Timer::micros() || force_interrupt_wake {
                 last_interrupt_wakeup = Timer::micros();
                 let to_wake = core::mem::take(&mut EXECUTOR.lock().wake_on_interrupt);
-                for w in to_wake {
-                    w.wake();
+                for e in to_wake {
+                    e.trigger();
                 }
             }
         };
@@ -237,26 +237,7 @@ impl Executor {
         loop {
             do_wake(false);
             let task = EXECUTOR.lock().ready_tasks.pop_front();
-            if let Some(task) = task {
-                // It is possible for a done task to end up in the queue (if it wakes
-                // itself during execution). If that happens, we just remove it from
-                // the queue here.
-                if task.done.load(Ordering::Relaxed) {
-                    continue;
-                }
-                task.in_queue.store(false, Ordering::Relaxed);
-                let waker = Waker::from(task.clone());
-                let mut context = Context::from_waker(&waker);
-                let mut fut = task.future.try_lock().unwrap();
-                let begin = Timer::micros();
-                let done = fut.0.as_mut().poll(&mut context);
-                let end = Timer::micros();
-                task.micros
-                    .fetch_add((end - begin) as u64, Ordering::Relaxed);
-                if done.is_ready() {
-                    task.done.swap(true, Ordering::Relaxed);
-                }
-            } else {
+            let Some(task) = task else {
                 // If we don't have anything ready, sleep until the next interrupt.
                 // SAFETY: hlt is available on all reasonable x86 processors and has no safety
                 // requirements.
@@ -264,6 +245,26 @@ impl Executor {
                     core::arch::asm!("hlt");
                 }
                 do_wake(true);
+                continue;
+            };
+
+            // It is possible for a done task to end up in the queue (if it wakes
+            // itself during execution). If that happens, we just remove it from
+            // the queue here.
+            if task.done.load(Ordering::Relaxed) {
+                continue;
+            }
+            task.in_queue.store(false, Ordering::Relaxed);
+            let waker = Waker::from(task.clone());
+            let mut context = Context::from_waker(&waker);
+            let mut fut = task.future.try_lock().unwrap();
+            let begin = Timer::micros();
+            let done = fut.0.as_mut().poll(&mut context);
+            let end = Timer::micros();
+            task.micros
+                .fetch_add((end - begin) as u64, Ordering::Relaxed);
+            if done.is_ready() {
+                task.done.swap(true, Ordering::Relaxed);
             }
         }
     }
@@ -283,41 +284,23 @@ impl Executor {
         })
     }
 
+    // Wakes a task as soon as *any* interrupt is received.
+    pub fn wait_for_interrupt() -> impl Future<Output = ()> {
+        let event = Event::new();
+        EXECUTOR.lock().wake_on_interrupt.push(event.trigger());
+        event
+    }
+
     // Note: there are no guarantees on whether the amount of time we will sleep for
     // will be exceeded.
     pub fn sleep(time: Duration) -> impl Future<Output = ()> {
         let tgt = Timer::micros() + time.as_micros() as i64;
-        let mut ww = None;
-        poll_fn(move |cx| {
-            let now = Timer::micros();
-            if now >= tgt {
-                Poll::Ready(())
-            } else {
-                Self::wake_at_micros(tgt, cx.waker(), &mut ww);
-                Poll::Pending
-            }
-        })
-    }
-
-    // Wakes a task as soon as *any* interrupt is received.
-    pub(super) fn wake_on_interrupt(waker: &Waker) {
-        EXECUTOR.lock().wake_on_interrupt.push(waker.clone());
-    }
-
-    pub(super) fn wake_at_micros(
-        micros: i64,
-        waker: &Waker,
-        previous_waker: &mut Option<WrappedWaker>,
-    ) {
-        if !previous_waker.is_some() {
-            let w = Arc::new(AtomicWaker::new());
-            EXECUTOR.lock().timed_wait.push(TimedWait {
-                wake_at: micros,
-                waker: w.clone(),
-            });
-            *previous_waker = Some(w);
-        }
-        previous_waker.as_ref().unwrap().register(waker);
+        let event = Event::new();
+        EXECUTOR.lock().timed_wait.push(TimedWait {
+            wake_at: tgt,
+            event: event.trigger(),
+        });
+        event
     }
 
     /// Spawn a new task.
