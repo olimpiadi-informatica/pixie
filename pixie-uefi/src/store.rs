@@ -31,14 +31,29 @@ async fn save_image(stream: &TcpStream, image: Image) -> Result<()> {
     Ok(())
 }
 
+struct PushingChunks {
+    total: usize,
+    step1: usize,
+    step2: usize,
+    step3: usize,
+    step4: usize,
+    step5: usize,
+    tsize: usize,
+    tcsize: usize,
+}
+
 enum State {
     ReadingPartitions,
-    PushingChunks {
-        cur: usize,
-        total: usize,
-        tsize: usize,
-        tcsize: usize,
-    },
+    PushingChunks(PushingChunks),
+}
+
+impl State {
+    fn as_pushing_chunks_mut(&mut self) -> &mut PushingChunks {
+        match self {
+            State::PushingChunks(pc) => pc,
+            _ => panic!("Not in pushing chunks state"),
+        }
+    }
 }
 
 pub async fn store(server_address: SocketAddrV4) -> Result<()> {
@@ -50,13 +65,21 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             State::ReadingPartitions => {
                 writeln!(draw_area, "Reading partitions...").unwrap();
             }
-            State::PushingChunks {
-                cur,
+            State::PushingChunks(PushingChunks {
                 total,
+                step1,
+                step2,
+                step3,
+                step4,
+                step5,
                 tsize,
                 tcsize,
-            } => {
-                writeln!(draw_area, "Pushed {cur} out of {total} chunks").unwrap();
+            }) => {
+                writeln!(
+                    draw_area,
+                    "Pushed {step5} / {step4} / {step3} / {step2} / {step1} / {total} chunks"
+                )
+                .unwrap();
                 writeln!(draw_area, "total size {tsize}, compressed {tcsize}").unwrap();
             }
         }
@@ -91,6 +114,18 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
         BytesFmt(free_mem)
     );
 
+    stats.replace(State::PushingChunks(PushingChunks {
+        total,
+        step1: 0,
+        step2: 0,
+        step3: 0,
+        step4: 0,
+        step5: 0,
+        tsize: 0,
+        tcsize: 0,
+    }));
+    ui::update_content(draw);
+
     let (tx1, rx1) = thingbuf::mpsc::channel(channel_size);
     let (tx2, rx2) = thingbuf::mpsc::channel(channel_size);
     let (tx3, rx3) = thingbuf::mpsc::channel(channel_size);
@@ -109,6 +144,8 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 size: chunk_info.size,
                 csize: cdata.len(),
             };
+            stats.borrow_mut().as_pushing_chunks_mut().step1 += 1;
+            ui::update_content(draw);
             tx1.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok::<_, Error>(())
@@ -121,6 +158,8 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             let buf = postcard::to_allocvec(&req)?;
             stream_get_csize.write_u64_le(buf.len() as u64).await?;
             stream_get_csize.write_all(&buf).await?;
+            stats.borrow_mut().as_pushing_chunks_mut().step2 += 1;
+            ui::update_content(draw);
             tx2.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok(())
@@ -133,6 +172,8 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             let mut buf = vec![0; len as usize];
             stream_get_csize.read_exact(&mut buf).await?;
             let has_chunk: bool = postcard::from_bytes(&buf)?;
+            stats.borrow_mut().as_pushing_chunks_mut().step3 += 1;
+            ui::update_content(draw);
             tx3.send((chunk, cdata, has_chunk))
                 .await
                 .expect("receiver dropped");
@@ -149,6 +190,8 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 stream_upload_chunk.write_u64_le(buf.len() as u64).await?;
                 stream_upload_chunk.write_all(&buf).await?;
             }
+            stats.borrow_mut().as_pushing_chunks_mut().step4 += 1;
+            ui::update_content(draw);
             tx4.send((chunk, has_chunk))
                 .await
                 .expect("receiver dropped");
@@ -157,13 +200,6 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     };
 
     let task5 = async {
-        stats.replace(State::PushingChunks {
-            cur: 0,
-            total,
-            tsize: 0,
-            tcsize: 0,
-        });
-
         let mut chunks = Vec::new();
         while let Some((chunk, has_chunk)) = rx4.recv().await {
             if !has_chunk {
@@ -175,18 +211,13 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             total_size += chunk.size;
             total_csize += chunk.csize;
 
-            stats.replace(State::PushingChunks {
-                cur: chunks.len(),
-                total,
-                tsize: total_size,
-                tcsize: total_csize,
-            });
+            stats.borrow_mut().as_pushing_chunks_mut().step5 += 1;
+            ui::update_content(draw);
             udp.send_to(
                 server_address,
                 &postcard::to_allocvec(&UdpRequest::ActionProgress(chunks.len(), total))?,
             )
             .await?;
-            ui::update_content(draw);
         }
         Ok(chunks)
     };

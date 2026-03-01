@@ -30,8 +30,8 @@ impl TcpStream {
             RingBuffer::new(vec![0; TCP_BUF_SIZE]),
         );
         tcp_socket.set_congestion_control(smoltcp::socket::tcp::CongestionControl::Cubic);
-        tcp_socket.set_timeout(Some(Duration::from_secs(5)));
-        tcp_socket.set_keep_alive(Some(Duration::from_secs(1)));
+        tcp_socket.set_timeout(Some(Duration::from_secs(30)));
+        tcp_socket.set_keep_alive(Some(Duration::from_secs(5)));
         let sport = super::get_ephemeral_port();
         let handle = with_net(|net| {
             tcp_socket.connect(
