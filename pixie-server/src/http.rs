@@ -182,7 +182,7 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
 
 pub async fn main(state: Arc<State>) -> Result<()> {
     let HttpConfig {
-        listen_on,
+        ref listen_on,
         ref password,
     } = state.config.http;
 

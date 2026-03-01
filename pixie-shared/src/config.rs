@@ -3,10 +3,7 @@ use alloc::{string::String, vec::Vec};
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use serde::{Deserialize, Serialize};
-use std::{
-    net::{Ipv4Addr, SocketAddrV4},
-    path::PathBuf,
-};
+use std::{net::Ipv4Addr, path::PathBuf};
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -43,7 +40,7 @@ pub struct HostsConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpConfig {
-    pub listen_on: SocketAddrV4,
+    pub listen_on: String,
     pub password: Option<String>,
 }
 

@@ -208,7 +208,8 @@ impl State {
         };
 
         let run_dir = PathBuf::from(format!("/run/pixie-{}", std::process::id()));
-        std::fs::create_dir(&run_dir)?;
+        std::fs::create_dir(&run_dir)
+            .with_context(|| format!("failed to create directory {}", run_dir.display()))?;
 
         let cancel_token = CancellationToken::new();
 
