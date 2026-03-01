@@ -25,7 +25,7 @@ fn send_req(url: String) {
 fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
     let image_row = move |(full_name, image): (String, (u64, u64))| {
         let url_flash = format!("admin/action/{full_name}/flash");
-        let url_boot = format!("admin/action/{full_name}/reboot");
+        let url_boot = format!("admin/action/{full_name}/boot");
         let url_cancel = format!("admin/action/{full_name}/wait");
         let url_rollback = format!("admin/rollback/{full_name}");
         let url_delete = format!("admin/delete/{full_name}");
