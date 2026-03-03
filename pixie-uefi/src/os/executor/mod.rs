@@ -15,6 +15,7 @@ use futures::channel::oneshot;
 use spin::Mutex;
 use uefi::proto::console::text::Color;
 
+use crate::os;
 use crate::os::executor::event::{Event, EventTrigger};
 use crate::os::send_wrapper::SendWrapper;
 use crate::os::timer::Timer;
@@ -239,11 +240,7 @@ impl Executor {
             let task = EXECUTOR.lock().ready_tasks.pop_front();
             let Some(task) = task else {
                 // If we don't have anything ready, sleep until the next interrupt.
-                // SAFETY: hlt is available on all reasonable x86 processors and has no safety
-                // requirements.
-                unsafe {
-                    core::arch::asm!("hlt");
-                }
+                os::util::hlt();
                 do_wake(true);
                 continue;
             };

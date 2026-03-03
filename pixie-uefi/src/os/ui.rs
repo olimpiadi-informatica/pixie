@@ -307,3 +307,13 @@ pub fn update_content<F: Fn(&mut DrawArea)>(f: F) {
         .try_lock()
         .expect("content draw area is locked"));
 }
+
+pub fn red_screen() {
+    let mut s = SCREEN.lock();
+    s.back_buffer.fill(ScreenChar {
+        c: ' '.try_into().unwrap(),
+        fg: Color::Red,
+        bg: Color::Red,
+    });
+    s.flush();
+}
