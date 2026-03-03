@@ -4,12 +4,12 @@ use crate::{
     find_mac,
     state::{State, UnitSelector},
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use futures::FutureExt;
 use ipnet::Ipv4Net;
 use pixie_shared::{
-    chunk_codec::Encoder, ChunkHash, HintPacket, InterfaceConfig, RegistrationInfo, UdpRequest,
-    ACTION_PORT, CHUNKS_PORT, HINT_PORT, UDP_BODY_LEN,
+    ACTION_PORT, CHUNKS_PORT, ChunkHash, HINT_PORT, HintPacket, InterfaceConfig, RegistrationInfo,
+    UDP_BODY_LEN, UdpRequest, chunk_codec::Encoder,
 };
 use std::{
     collections::BTreeSet,
@@ -123,11 +123,11 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
         .map(|unit| (unit.row, unit.col))
         .collect::<Vec<_>>();
 
-    if last.row == 0 {
-        if let Some(&(r, c)) = positions.iter().max() {
-            last.row = r;
-            last.col = c;
-        }
+    if last.row == 0
+        && let Some(&(r, c)) = positions.iter().max()
+    {
+        last.row = r;
+        last.col = c;
     }
 
     let (mrow, mcol) = positions

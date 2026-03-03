@@ -4,12 +4,12 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::net::SocketAddrV4;
 
-use futures::future::{select, Either};
-use pixie_shared::{HintPacket, RegistrationInfo, TcpRequest, HINT_PORT};
+use futures::future::{Either, select};
+use pixie_shared::{HINT_PORT, HintPacket, RegistrationInfo, TcpRequest};
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
 use crate::os::error::{Error, Result};
-use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
+use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
 use crate::os::ui::DrawArea;
 use crate::os::{input, ui};
 

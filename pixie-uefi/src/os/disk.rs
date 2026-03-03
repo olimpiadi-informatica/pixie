@@ -1,11 +1,11 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use gpt_disk_io::gpt_disk_types::{BlockSize, Lba};
 use gpt_disk_io::BlockIo;
+use gpt_disk_io::gpt_disk_types::{BlockSize, Lba};
+use uefi::Handle;
 use uefi::boot::{OpenProtocolParams, ScopedProtocol};
 use uefi::proto::media::block::BlockIO;
-use uefi::Handle;
 
 use super::error::Result;
 use crate::os::executor::Executor;

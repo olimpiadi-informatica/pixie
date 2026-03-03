@@ -3,12 +3,12 @@
 use crate::state::{State, UnitSelector};
 use anyhow::Result;
 use axum::{
+    Router,
     body::Body,
     extract::{self, Path},
     http::{Response, StatusCode},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use futures::StreamExt;
 use pixie_shared::{Action, HttpConfig, StatusUpdate};

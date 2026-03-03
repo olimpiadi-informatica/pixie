@@ -1,11 +1,11 @@
 use alloc::boxed::Box;
-use alloc::collections::binary_heap::BinaryHeap;
 use alloc::collections::VecDeque;
+use alloc::collections::binary_heap::BinaryHeap;
 use alloc::sync::Arc;
 use alloc::task::Wake;
 use alloc::vec::Vec;
 use core::fmt::Write;
-use core::future::{poll_fn, Future};
+use core::future::{Future, poll_fn};
 use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::task::{Context, Poll, Waker};

@@ -6,7 +6,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use macaddr::MacAddr6;
-use pixie_shared::{TcpRequest, ACTION_PORT};
+use pixie_shared::{ACTION_PORT, TcpRequest};
 use std::{
     io::ErrorKind,
     net::{Ipv4Addr, SocketAddr},

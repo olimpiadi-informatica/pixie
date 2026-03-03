@@ -10,13 +10,13 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use core::time::Duration;
 
 use futures::future::{self, Either};
-use pixie_shared::{Action, TcpRequest, UdpRequest, ACTION_PORT, PING_PORT};
-use uefi::{entry, Status};
+use pixie_shared::{ACTION_PORT, Action, PING_PORT, TcpRequest, UdpRequest};
+use uefi::{Status, entry};
 
 use crate::flash::flash;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
+use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
 use crate::os::ui::update_content;
 use crate::register::register;
 use crate::store::store;

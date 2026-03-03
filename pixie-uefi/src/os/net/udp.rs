@@ -1,4 +1,4 @@
-use core::future::{poll_fn, Future};
+use core::future::{Future, poll_fn};
 use core::net::{IpAddr, SocketAddrV4};
 use core::task::Poll;
 
@@ -8,7 +8,7 @@ use smoltcp::wire::IpEndpoint;
 
 use crate::os::error::Result;
 use crate::os::net::speed::{RX_SPEED, TX_SPEED};
-use crate::os::net::{with_net, ETH_PACKET_SIZE};
+use crate::os::net::{ETH_PACKET_SIZE, with_net};
 
 pub struct UdpSocket {
     handle: SocketHandle,

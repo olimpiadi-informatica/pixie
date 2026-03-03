@@ -11,18 +11,18 @@ use smoltcp::iface::{
 use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
 use smoltcp::wire::{DhcpOption, HardwareAddress, IpCidr};
 use spin::Mutex;
+use uefi::Handle;
+use uefi::proto::Protocol;
 use uefi::proto::console::text::Color;
+use uefi::proto::device_path::DevicePath;
 use uefi::proto::device_path::build::DevicePathBuilder;
 use uefi::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly};
-use uefi::proto::device_path::DevicePath;
 use uefi::proto::network::snp::SimpleNetwork;
-use uefi::proto::Protocol;
-use uefi::Handle;
 
 use super::timer::Timer;
 use crate::os::boot_options::BootOptions;
-use crate::os::executor::event::{Event as ExecutorEvent, EventTrigger};
 use crate::os::executor::Executor;
+use crate::os::executor::event::{Event as ExecutorEvent, EventTrigger};
 use crate::os::net::interface::SnpDevice;
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;

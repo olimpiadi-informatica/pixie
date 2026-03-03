@@ -5,7 +5,7 @@ use gloo_net::http::Request;
 use js_sys::Uint8Array;
 use leptos::*;
 use leptos_use::{use_preferred_dark, use_timestamp};
-use pixie_shared::{util::BytesFmt, Config, ImagesStats, StatusUpdate, Unit};
+use pixie_shared::{Config, ImagesStats, StatusUpdate, Unit, util::BytesFmt};
 use thaw::{
     Button, ButtonColor, ButtonGroup, ButtonVariant, GlobalStyle, Popover, PopoverPlacement,
     PopoverTrigger, Space, Table, Theme, ThemeProvider,

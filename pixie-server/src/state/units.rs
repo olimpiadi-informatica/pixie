@@ -1,5 +1,5 @@
 use crate::state::State;
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 use macaddr::MacAddr6;
 use pixie_shared::{Action, RegistrationInfo, Unit};
 use std::net::Ipv4Addr;

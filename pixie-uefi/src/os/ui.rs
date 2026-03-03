@@ -4,8 +4,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 
 use pixie_shared::util::BytesFmt;
-use spin::lazy::Lazy;
 use spin::Mutex;
+use spin::lazy::Lazy;
 use uefi::boot::ScopedProtocol;
 use uefi::proto::console::text::{Color, Output};
 use uefi::{CStr16, Char16};

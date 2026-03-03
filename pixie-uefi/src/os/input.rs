@@ -1,5 +1,5 @@
-use spin::lazy::Lazy;
 use spin::Mutex;
+use spin::lazy::Lazy;
 use uefi::boot::ScopedProtocol;
 use uefi::proto::console::text::{Input, Key};
 

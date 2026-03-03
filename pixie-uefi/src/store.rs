@@ -6,14 +6,14 @@ use core::net::SocketAddrV4;
 use log::info;
 use lz4_flex::compress;
 use pixie_shared::util::BytesFmt;
-use pixie_shared::{Chunk, Image, Offset, TcpRequest, UdpRequest, MAX_CHUNK_SIZE};
+use pixie_shared::{Chunk, Image, MAX_CHUNK_SIZE, Offset, TcpRequest, UdpRequest};
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::net::{TcpStream, UdpSocket};
 use crate::os::ui::DrawArea;
 use crate::os::{disk, memory, ui};
-use crate::{parse_disk, MIN_MEMORY};
+use crate::{MIN_MEMORY, parse_disk};
 
 #[derive(Debug)]
 pub struct ChunkInfo {

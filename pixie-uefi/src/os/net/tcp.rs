@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use core::future::{poll_fn, Future};
+use core::future::{Future, poll_fn};
 use core::net::SocketAddrV4;
 use core::task::Poll;
 

@@ -7,20 +7,20 @@ use core::mem;
 use core::net::SocketAddrV4;
 use core::time::Duration;
 
-use futures::future::{select, Either};
+use futures::future::{Either, select};
 use log::info;
 use lz4_flex::decompress;
 use pixie_shared::chunk_codec::Decoder;
 use pixie_shared::util::BytesFmt;
-use pixie_shared::{ChunkHash, Image, TcpRequest, UdpRequest, CHUNKS_PORT, MAX_CHUNK_SIZE};
+use pixie_shared::{CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, TcpRequest, UdpRequest};
 
+use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{TcpStream, UdpSocket, ETH_PACKET_SIZE};
-use crate::os::ui::{update_content, DrawArea};
+use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
-use crate::MIN_MEMORY;
 
 async fn fetch_image(stream: &TcpStream) -> Result<Image> {
     let req = TcpRequest::GetImage;

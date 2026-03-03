@@ -1,8 +1,8 @@
 use alloc::vec::Vec;
 
 use log::info;
-use pixie_shared::util::BytesFmt;
 use pixie_shared::MAX_CHUNK_SIZE;
+use pixie_shared::util::BytesFmt;
 
 use crate::os::disk::Disk;
 use crate::os::error::Result;

@@ -1,5 +1,5 @@
-use crate::state::{atomic_write, State, CHUNKS_DIR, IMAGES_DIR};
-use anyhow::{ensure, Context, Result};
+use crate::state::{CHUNKS_DIR, IMAGES_DIR, State, atomic_write};
+use anyhow::{Context, Result, ensure};
 use pixie_shared::{ChunkHash, ChunkStats, ChunksStats, Image, ImagesStats, MAX_CHUNK_SIZE};
 use tokio::sync::watch;
 
