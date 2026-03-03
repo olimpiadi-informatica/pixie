@@ -6,6 +6,8 @@ use uefi::Status;
 
 use super::ETH_PACKET_SIZE;
 use crate::os::send_wrapper::SendWrapper;
+use crate::os::{input, ui};
+use crate::power_control;
 
 type Snp = SendWrapper<ScopedProtocol<SimpleNetwork>>;
 
@@ -68,7 +70,19 @@ impl TxToken for SnpTxToken<'_> {
         snp.transmit(0, payload, None, None, None)
             .expect("Failed to transmit frame");
         // Wait until sending is complete.
-        while snp.get_recycled_transmit_buffer_status().unwrap().is_none() {}
+        while snp.get_recycled_transmit_buffer_status().unwrap().is_none() {
+            if snp.mode().media_present.0 == 0 {
+                let err = uefi::boot::set_watchdog_timer(0, 0x10000, None);
+                if let Err(err) = err {
+                    if err.status() != Status::UNSUPPORTED {
+                        log::error!("Error disabling watchdog: {err:?}");
+                    }
+                }
+                ui::red_screen();
+                input::wait_for_key().expect("Failed to wait for input");
+                power_control::reset();
+            }
+        }
         ret
     }
 }

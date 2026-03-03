@@ -22,6 +22,7 @@ pub mod net;
 mod send_wrapper;
 mod timer;
 pub mod ui;
+pub mod util;
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 

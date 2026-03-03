@@ -3,6 +3,7 @@ use spin::Mutex;
 use uefi::boot::ScopedProtocol;
 use uefi::proto::console::text::{Input, Key};
 
+use crate::os;
 use crate::os::error::Result;
 use crate::os::executor::Executor;
 use crate::os::send_wrapper::SendWrapper;
@@ -19,5 +20,14 @@ pub async fn read_key() -> Result<Key> {
             break Ok(key);
         }
         Executor::wait_for_interrupt().await;
+    }
+}
+
+pub fn wait_for_key() -> Result<()> {
+    loop {
+        os::util::hlt();
+        if INPUT.lock().read_key()?.is_some() {
+            return Ok(());
+        }
     }
 }
