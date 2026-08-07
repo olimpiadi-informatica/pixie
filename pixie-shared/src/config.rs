@@ -36,6 +36,8 @@ pub struct HostsConfig {
     pub interfaces: Vec<InterfaceConfig>,
     /// Hosts file to use for DHCP hostnames.
     pub hostsfile: Option<PathBuf>,
+    /// Whether to forward DNS queries to the upstream DNS server.
+    pub dns_upstream: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

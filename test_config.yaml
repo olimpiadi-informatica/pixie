@@ -7,6 +7,7 @@ hosts:
     dhcp: !static [10.10.100.1, 10.10.200.200]
     broadcast_speed: 52428800
   hostsfile: /etc/hosts
+  dns_upstream: false
 http:
   listen_on: 0.0.0.0:8080
 groups:
