@@ -82,7 +82,7 @@ pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<
     );
 
     let first_data_sector = first_fat_sector + fat_size * table_count + root_dir_sectors;
-    let data_sector_count = (total_sectors - first_data_sector) as u64;
+    let data_sector_count = total_sectors - first_data_sector;
     let data_cluster_count = data_sector_count / sectors_per_cluster;
 
     let mut fat = vec![0; (fat_size * sector_size) as usize];
