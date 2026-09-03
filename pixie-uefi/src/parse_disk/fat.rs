@@ -33,7 +33,11 @@ impl Type {
     }
 }
 
-pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+pub async fn get_fat_chunks(
+    disk: &mut Disk,
+    start: u64,
+    end: u64,
+) -> Result<Option<Vec<ChunkInfo>>> {
     if end - start < 512 {
         return Ok(None);
     }

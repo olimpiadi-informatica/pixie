@@ -26,10 +26,16 @@ postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.12.0", default-features = false, features = ["alloc", "proto-ipv4", "medium-ethernet", "socket-udp", "socket-tcp", "socket-dhcpv4", "async", "socket-tcp-cubic"] }
 spin = "0.10.0"
 thingbuf = { version = "0.1.6", default-features = false, features = ["alloc"] }
-uefi = { version = "0.36.1", features = ["alloc", "global_allocator", "panic_handler"] }
+uefi = { version = "0.40.0", features = ["alloc", "global_allocator", "panic_handler"] }
+uefi-raw = "0.16.0"
 
 [dependencies.pixie-shared]
 path = "../pixie-shared"
+
+[patch.crates-io]
+uefi = { git = "https://github.com/Virv12/uefi-rs.git", branch = "pci-protocol" }
+uefi-macros = { git = "https://github.com/Virv12/uefi-rs.git", branch = "pci-protocol" }
+uefi-raw = { git = "https://github.com/Virv12/uefi-rs.git", branch = "pci-protocol" }
 
 [profile.release]
 panic = "abort"

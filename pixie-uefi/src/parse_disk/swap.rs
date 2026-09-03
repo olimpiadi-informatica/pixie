@@ -4,7 +4,11 @@ use crate::os::disk::Disk;
 use crate::os::error::Result;
 use crate::store::ChunkInfo;
 
-pub async fn get_swap_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+pub async fn get_swap_chunks(
+    disk: &mut Disk,
+    start: u64,
+    end: u64,
+) -> Result<Option<Vec<ChunkInfo>>> {
     if end - start < 4096 {
         return Ok(None);
     }
