@@ -28,8 +28,8 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
             state.get_image_serialized(&unit.image)?.unwrap()
         }
         TcpRequest::Register(station) => {
-            state.set_registration_hint(station.clone());
-            state.register_unit(peer_mac, station)?;
+            state.register_unit(peer_mac, station.clone())?;
+            state.set_registration_hint(station);
             Vec::new()
         }
         TcpRequest::UploadChunk(data) => {
