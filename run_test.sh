@@ -74,7 +74,7 @@ run_qemu() {
     -chardev stdio,id=char0,logfile=$1,signal=off \
     -serial chardev:char0 \
     -monitor none \
-    -enable-kvm \
+    -accel tcg \
     -cpu qemu64 -smp cores=2 \
     -m 1G \
     -drive if=pflash,format=raw,file=$OVMF \
@@ -96,7 +96,7 @@ run_qemu1() {
     -chardev stdio,id=char0,logfile=$1,signal=off \
     -serial chardev:char0 \
     -monitor none \
-    -enable-kvm \
+    -accel tcg \
     -cpu qemu64 -smp cores=2 \
     -m 1G \
     -drive if=pflash,format=raw,file=$OVMF \
