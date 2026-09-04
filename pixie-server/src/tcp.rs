@@ -17,6 +17,20 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+/// Largest request body we're willing to allocate a buffer for.
+///
+/// The length prefix read in `handle_connection` is otherwise fully attacker-controlled, so
+/// without this a single connection could ask for an allocation far past addressable memory,
+/// which aborts the whole process rather than just failing that connection.
+///
+/// The largest legitimate requests are `UploadChunk` (a compressed chunk, capped at
+/// [`pixie_shared::MAX_CHUNK_SIZE`], 4 MiB) and `UploadImage` (a disk's chunk list, at roughly
+/// 40-50 bytes per [`Chunk`](pixie_shared::Chunk) entry — 16 MiB covers several hundred thousand
+/// chunks, i.e. a multi-terabyte disk at the default chunk size). 16 MiB leaves comfortable
+/// headroom over both without coming anywhere near what an attacker would need to hurt the
+/// allocator.
+const MAX_MESSAGE_LEN: u64 = 16 * 1024 * 1024;
+
 async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> Result<Vec<u8>> {
     Ok(match req {
         TcpRequest::HasChunk(hash) => {
@@ -69,11 +83,15 @@ async fn handle_connection(
 
     loop {
         let len = match stream.read_u64_le().await {
-            Ok(len) => len as usize,
+            Ok(len) => len,
             Err(e) if e.kind() == ErrorKind::ConnectionReset => return Ok(()),
             Err(e) => Err(e)?,
         };
-        let mut buf = vec![0; len];
+        if len > MAX_MESSAGE_LEN {
+            log::warn!("Rejecting oversized message ({len} bytes) from {peer_addr}");
+            return Ok(());
+        }
+        let mut buf = vec![0; len as usize];
         stream.read_exact(&mut buf).await?;
         let req = postcard::from_bytes(&buf)?;
         let resp = handle_request(&state, req, peer_mac).await?;
