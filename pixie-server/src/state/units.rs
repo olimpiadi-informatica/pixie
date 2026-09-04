@@ -21,17 +21,31 @@ pub enum UnitSelector {
 
 impl UnitSelector {
     /// Parse a [`UnitSelector`] from a [`String`].
+    ///
+    /// Every selector other than `all` is required to carry an explicit
+    /// `mac:`, `ip:`, `group:` or `image:` prefix. Without such a tag, a
+    /// group or image whose name happens to parse as a mac/ip address, or
+    /// whose name is `all`, or whose name collides with another group or
+    /// image, would be unreachable or would resolve to the wrong unit(s).
     pub fn parse(state: &State, selector: String) -> Option<UnitSelector> {
-        if let Ok(mac) = selector.parse::<MacAddr6>() {
-            Some(UnitSelector::MacAddr(mac))
-        } else if let Ok(ip) = selector.parse::<Ipv4Addr>() {
-            Some(UnitSelector::IpAddr(ip))
-        } else if selector == "all" {
+        if selector == "all" {
             Some(UnitSelector::All)
-        } else if let Some(&group) = state.config.groups.get_by_first(&selector) {
-            Some(UnitSelector::Group(group))
-        } else if state.config.images.contains(&selector) {
-            Some(UnitSelector::Image(selector))
+        } else if let Some(mac) = selector.strip_prefix("mac:") {
+            mac.parse::<MacAddr6>().ok().map(UnitSelector::MacAddr)
+        } else if let Some(ip) = selector.strip_prefix("ip:") {
+            ip.parse::<Ipv4Addr>().ok().map(UnitSelector::IpAddr)
+        } else if let Some(group) = selector.strip_prefix("group:") {
+            state
+                .config
+                .groups
+                .get_by_first(&group.to_owned())
+                .map(|&group| UnitSelector::Group(group))
+        } else if let Some(image) = selector.strip_prefix("image:") {
+            state
+                .config
+                .images
+                .contains(&image.to_owned())
+                .then(|| UnitSelector::Image(image.to_owned()))
         } else {
             None
         }

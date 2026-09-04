@@ -24,9 +24,9 @@ fn send_req(url: String) {
 #[component]
 fn Images(#[prop(into)] images: Signal<Option<ImagesStats>>) -> impl IntoView {
     let image_row = move |(full_name, image): (String, (u64, u64))| {
-        let url_flash = format!("admin/action/{full_name}/flash");
-        let url_boot = format!("admin/action/{full_name}/boot");
-        let url_cancel = format!("admin/action/{full_name}/wait");
+        let url_flash = format!("admin/action/image:{full_name}/flash");
+        let url_boot = format!("admin/action/image:{full_name}/boot");
+        let url_cancel = format!("admin/action/image:{full_name}/wait");
         let url_rollback = format!("admin/rollback/{full_name}");
         let url_delete = format!("admin/delete/{full_name}");
 
@@ -146,14 +146,14 @@ fn Group(
         let ping_ago = move || time.get() - unit.get().last_ping_timestamp as i64;
 
         let mac = move || unit.get().mac.to_string();
-        let url_flash = move || format!("admin/action/{}/flash", mac());
-        let url_store = move || format!("admin/action/{}/store", mac());
-        let url_boot = move || format!("admin/action/{}/boot", mac());
-        let url_restart = move || format!("admin/action/{}/restart", mac());
-        let url_cancel = move || format!("admin/action/{}/wait", mac());
-        let url_register = move || format!("admin/action/{}/register", mac());
-        let url_shutdown = move || format!("admin/action/{}/shutdown", mac());
-        let url_forget = move || format!("admin/forget/{}", mac());
+        let url_flash = move || format!("admin/action/mac:{}/flash", mac());
+        let url_store = move || format!("admin/action/mac:{}/store", mac());
+        let url_boot = move || format!("admin/action/mac:{}/boot", mac());
+        let url_restart = move || format!("admin/action/mac:{}/restart", mac());
+        let url_cancel = move || format!("admin/action/mac:{}/wait", mac());
+        let url_register = move || format!("admin/action/mac:{}/register", mac());
+        let url_shutdown = move || format!("admin/action/mac:{}/shutdown", mac());
+        let url_forget = move || format!("admin/forget/mac:{}", mac());
 
         let fmt_ca = move || {
             let unit = unit.get();
@@ -240,14 +240,14 @@ fn Group(
         .into_view()
     };
 
-    let url_flash = move || format!("admin/action/{}/flash", group_name.get());
-    let url_boot = move || format!("admin/action/{}/boot", group_name.get());
-    let url_restart = move || format!("admin/action/{}/restart", group_name.get());
-    let url_cancel = move || format!("admin/action/{}/wait", group_name.get());
+    let url_flash = move || format!("admin/action/group:{}/flash", group_name.get());
+    let url_boot = move || format!("admin/action/group:{}/boot", group_name.get());
+    let url_restart = move || format!("admin/action/group:{}/restart", group_name.get());
+    let url_cancel = move || format!("admin/action/group:{}/wait", group_name.get());
 
     let image_button = move |image: String| {
         let text = format!("Set image to {image:?}");
-        let url = move || format!("admin/image/{}/{}", group_name.get(), image);
+        let url = move || format!("admin/image/group:{}/{}", group_name.get(), image);
         view! {
             <Button color=ButtonColor::Error on_click=move |_| send_req(url())>
                 {text}

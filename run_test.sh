@@ -120,7 +120,7 @@ for PART in ${DEV}p{2..3}; do
 done
 losetup -d $DEV
 
-curl 'http://localhost:8080/admin/curr_action/52:54:00:12:34:56/store'
+curl 'http://localhost:8080/admin/curr_action/mac:52:54:00:12:34:56/store'
 run_qemu $TEMPDIR/store.log
 
 # Check that we restore the original disk image.
