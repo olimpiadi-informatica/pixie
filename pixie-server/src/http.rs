@@ -15,9 +15,7 @@ use pixie_shared::{Action, HttpConfig, StatusUpdate};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
-use tower_http::{
-    services::ServeDir, trace::TraceLayer, validate_request::ValidateRequestHeaderLayer,
-};
+use tower_http::{services::ServeDir, trace::TraceLayer};
 
 /// `GET /admin/action/{unit_selector}/{action}`
 ///
@@ -181,14 +179,11 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let HttpConfig {
-        ref listen_on,
-        ref password,
-    } = state.config.http;
+    let HttpConfig { ref listen_on } = state.config.http;
 
     let admin_path = state.storage_dir.join("admin");
 
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/admin/status", get(status))
         .route("/admin/gc", get(gc))
         .route("/admin/action/:unit_selector/:action", get(action))
@@ -203,16 +198,8 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .nest_service(
             "/",
             ServeDir::new(&admin_path).append_index_html_on_directories(true),
-        );
-    if let Some(password) = password {
-        router = router.layer(
-            #[allow(deprecated)]
-            // `ValidateRequestHeaderLayer::basic` is deprecated because it's "too simple for an
-            // actual use case", well... here's a use case
-            ValidateRequestHeaderLayer::basic("admin", password),
-        );
-    }
-    router = router.layer(TraceLayer::new_for_http());
+        )
+        .layer(TraceLayer::new_for_http());
 
     let shutdown_token = state.cancel_token.clone().cancelled_owned();
     let listener = TcpListener::bind(listen_on).await?;

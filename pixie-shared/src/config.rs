@@ -43,7 +43,6 @@ pub struct HostsConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HttpConfig {
     pub listen_on: String,
-    pub password: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

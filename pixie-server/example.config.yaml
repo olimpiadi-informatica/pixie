@@ -8,7 +8,6 @@ hosts:
   dns_upstream: true
 http:
   listen_on: 0.0.0.0:8080
-  #password: secret
 groups:
   - [room0, 0]
   - [room1, 1]
