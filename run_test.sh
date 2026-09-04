@@ -75,7 +75,7 @@ run_qemu() {
     -serial chardev:char0 \
     -monitor none \
     -enable-kvm \
-    -cpu host -smp cores=2 \
+    -cpu qemu64 -smp cores=2 \
     -m 1G \
     -drive if=pflash,format=raw,file=$OVMF \
     -drive file=$TEMPDIR/disk.img,if=none,id=nvm,format=raw \
@@ -97,7 +97,7 @@ run_qemu1() {
     -serial chardev:char0 \
     -monitor none \
     -enable-kvm \
-    -cpu host -smp cores=2 \
+    -cpu qemu64 -smp cores=2 \
     -m 1G \
     -drive if=pflash,format=raw,file=$OVMF \
     -drive file=$TEMPDIR/disk1.img,if=none,id=nvm,format=raw \
