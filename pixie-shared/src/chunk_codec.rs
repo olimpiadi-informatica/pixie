@@ -17,6 +17,14 @@ pub enum DecoderError {
     PacketTooBig(usize),
     #[error("Invalid index: 0x{0:04x}")]
     InvalidIndex(u16),
+    #[error(
+        "Wrong packet size for index 0x{index:04x}: got {got} bytes, expected {expected} bytes"
+    )]
+    WrongSize {
+        index: u16,
+        expected: usize,
+        got: usize,
+    },
 }
 
 pub struct Decoder {
@@ -48,6 +56,23 @@ impl Decoder {
         }
     }
 
+    /// The exact body length (excluding the 2-byte index header) a well-formed packet at
+    /// `rot_index` must have, given the total decoded `size` this decoder was built for.
+    ///
+    /// Both parity slots (`rot_index < 32`) and real data slots (`rot_index >= 32`) share the
+    /// same formula: a slot's body is a full [`BODY_LEN`], except when it lands on the chunk's
+    /// final, partial block, in which case it is only the remaining bytes. This mirrors
+    /// [`Encoder::next_packet`], which is what actually decides the length of every packet.
+    fn expected_body_len(&self, rot_index: usize) -> usize {
+        let size = self.data.len() - 32 * BODY_LEN;
+        let pos = if rot_index < 32 {
+            rot_index
+        } else {
+            rot_index - 32
+        };
+        BODY_LEN.min(size.saturating_sub(pos * BODY_LEN))
+    }
+
     pub fn add_packet(&mut self, buf: &[u8]) -> Result<(), DecoderError> {
         if buf.len() < MIN_SIZE {
             return Err(DecoderError::PacketTooSmall(buf.len()));
@@ -59,10 +84,21 @@ impl Decoder {
         let index = u16::from_le_bytes(buf[..2].try_into().unwrap());
 
         let rot_index = index.wrapping_add(32) as usize;
-        let missing = self
-            .missing_packet
-            .get_mut(rot_index)
-            .ok_or(DecoderError::InvalidIndex(index))?;
+        if rot_index >= self.missing_packet.len() {
+            return Err(DecoderError::InvalidIndex(index));
+        }
+
+        let expected = self.expected_body_len(rot_index);
+        let got = buf.len() - 2;
+        if got != expected {
+            return Err(DecoderError::WrongSize {
+                index,
+                expected,
+                got,
+            });
+        }
+
+        let missing = &mut self.missing_packet[rot_index];
         match missing {
             false => return Ok(()),
             x @ true => *x = false,
@@ -223,5 +259,96 @@ mod tests {
             *x = val.to_be_bytes()[0];
         }
         test_chunk_skip_packet(&chunk);
+    }
+
+    fn packet_for(index: u16, body_len: usize) -> Vec<u8> {
+        let mut packet = vec![0xAB; 2 + body_len];
+        packet[..2].copy_from_slice(&index.to_le_bytes());
+        packet
+    }
+
+    /// A malicious peer claiming to be the chunk's final (and thus short) data block, but
+    /// sending a full-size body, used to make `add_packet` write past the end of `data` and
+    /// panic. It must now be rejected instead.
+    #[test]
+    fn test_oversized_final_block_is_rejected_not_panicking() {
+        let size = 2 * BODY_LEN + 124;
+        let mut decoder = Decoder::new(size);
+        let last_index = (size.div_ceil(BODY_LEN) - 1) as u16;
+
+        let oversized = packet_for(last_index, BODY_LEN);
+        let err = decoder
+            .add_packet(&oversized)
+            .expect_err("an oversized packet for the final block must be rejected, not accepted");
+        assert!(matches!(err, DecoderError::WrongSize { .. }));
+
+        // The slot must still be genuinely missing: a correctly-sized packet is accepted after.
+        let correct = packet_for(last_index, 124);
+        decoder
+            .add_packet(&correct)
+            .expect("correctly-sized packet must still be accepted");
+    }
+
+    /// A malicious/corrupt peer sending fewer bytes than a slot actually needs used to be
+    /// accepted silently, leaving the remainder of that block as stale zero bytes in the
+    /// reconstructed chunk. It must now be rejected instead.
+    #[test]
+    fn test_undersized_packet_is_rejected_not_silently_corrupting() {
+        let size = 3 * BODY_LEN;
+        let mut decoder = Decoder::new(size);
+
+        let undersized = packet_for(0, 10);
+        let err = decoder
+            .add_packet(&undersized)
+            .expect_err("an undersized packet must be rejected, not silently accepted");
+        assert!(matches!(err, DecoderError::WrongSize { .. }));
+
+        // The slot must still be genuinely missing: a correctly-sized packet is accepted after.
+        let correct = packet_for(0, BODY_LEN);
+        decoder
+            .add_packet(&correct)
+            .expect("correctly-sized packet must still be accepted");
+    }
+
+    /// For every kind of slot a decoder can have (full data blocks, the chunk's one short final
+    /// block, and parity blocks - including a short parity block, which happens whenever the
+    /// chunk fits in fewer than 32 blocks) any body length other than the exact expected one
+    /// must be rejected, never silently accepted and never panic.
+    #[test]
+    fn test_every_slot_rejects_every_wrong_size() {
+        for size in [
+            124,
+            BODY_LEN,
+            BODY_LEN + 1,
+            2 * BODY_LEN + 124,
+            40 * BODY_LEN + 7,
+        ] {
+            let num_packets = size.div_ceil(BODY_LEN);
+            for rot_index in 0..32 + num_packets {
+                let probe = Decoder::new(size);
+                let expected = probe.expected_body_len(rot_index);
+                let index = (rot_index as u16).wrapping_sub(32);
+
+                for wrong_len in [0, expected.saturating_sub(1), expected + 1, BODY_LEN] {
+                    if wrong_len == expected {
+                        continue;
+                    }
+                    let mut decoder = Decoder::new(size);
+                    let packet = packet_for(index, wrong_len);
+                    assert!(
+                        decoder.add_packet(&packet).is_err(),
+                        "size {size}, rot_index {rot_index}: wrong length {wrong_len} \
+                         (expected {expected}) was accepted"
+                    );
+                }
+
+                // The exact expected length is always accepted.
+                let mut decoder = Decoder::new(size);
+                let packet = packet_for(index, expected);
+                decoder
+                    .add_packet(&packet)
+                    .unwrap_or_else(|e| panic!("size {size}, rot_index {rot_index}: {e}"));
+            }
+        }
     }
 }
