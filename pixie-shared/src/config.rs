@@ -27,7 +27,7 @@ pub struct InterfaceConfig {
 }
 
 /// Registered clients will always be assigned an IP in the form
-/// 10.{group_id}.{column_id}.{row_id}.
+/// 10.{group_id}.{row_id}.{column_id}.
 /// Note that for this to work, the specified network interface must have an IP on the 10.0.0.0/8
 /// subnet; BEWARE that dnsmasq can be picky about the order of IP addresses.
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
