@@ -25,7 +25,9 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
         }
         TcpRequest::GetImage => {
             let unit = state.get_unit(peer_mac).context("Unit not found")?;
-            state.get_image_serialized(&unit.image)?.unwrap()
+            state
+                .get_image_serialized(&unit.image)?
+                .context("Image not yet stored")?
         }
         TcpRequest::Register(station) => {
             state.register_unit(peer_mac, station.clone())?;
