@@ -132,7 +132,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         Ok(())
     };
 
-    let mut disk = disk::Disk::largest();
+    let mut disk = disk::Disk::largest().await;
 
     for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
         let mut found = None;

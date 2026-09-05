@@ -153,7 +153,7 @@ impl NvmeDisk {
         Ok(pci.memory(PCI_BAR0).write_one::<u32>(offset, value)?)
     }
 
-    fn open(controller: Handle) -> Result<Self> {
+    async fn open(controller: Handle) -> Result<Self> {
         let mut pci = Self::open_pci(controller)?;
         Self::enable_dma(&mut pci)?;
         let admin_sq = DmaPage::new()?;
@@ -180,11 +180,31 @@ impl NvmeDisk {
             io_cq_head: 0,
             io_cq_phase: true,
         };
-        disk.initialize()?;
+        disk.initialize().await?;
         Ok(disk)
     }
 
-    fn wait_ready(&mut self, wanted: bool) -> Result<()> {
+    /// Waits for the controller ready bit to reach `wanted`, cooperatively
+    /// yielding to the executor between polls instead of blocking it. Used
+    /// during controller bring-up, which happens off the hot I/O path.
+    async fn wait_ready(&mut self, wanted: bool) -> Result<()> {
+        for _ in 0..1_000_000 {
+            if (Self::read32(&mut self.pci, NVME_REG_CSTS)? & 1 != 0) == wanted {
+                return Ok(());
+            }
+            futures::future::select(
+                Executor::wait_for_interrupt(),
+                Executor::sleep(Duration::from_micros(10)),
+            )
+            .await;
+        }
+        Err(Error::msg("NVMe controller did not change ready state"))
+    }
+
+    /// Synchronous counterpart of [`Self::wait_ready`]. `Drop::drop` cannot
+    /// be async, so controller teardown busy-waits here instead; this only
+    /// runs once, off the executor, when the disk itself is going away.
+    fn wait_ready_sync(&mut self, wanted: bool) -> Result<()> {
         for _ in 0..1_000_000 {
             if (Self::read32(&mut self.pci, NVME_REG_CSTS)? & 1 != 0) == wanted {
                 return Ok(());
@@ -194,7 +214,7 @@ impl NvmeDisk {
         Err(Error::msg("NVMe controller did not change ready state"))
     }
 
-    fn initialize(&mut self) -> Result<()> {
+    async fn initialize(&mut self) -> Result<()> {
         let cap_lo = Self::read32(&mut self.pci, NVME_REG_CAP)?;
         let cap_hi = Self::read32(&mut self.pci, NVME_REG_CAP + 4)?;
         if (cap_lo as usize & 0xffff) + 1 < QUEUE_ENTRIES {
@@ -204,7 +224,7 @@ impl NvmeDisk {
         self.doorbell_stride = 4_u64 << (cap_hi & 0xf);
 
         Self::write32(&mut self.pci, NVME_REG_CC, 0)?;
-        self.wait_ready(false)?;
+        self.wait_ready(false).await?;
         Self::write32(
             &mut self.pci,
             NVME_REG_AQA,
@@ -226,7 +246,7 @@ impl NvmeDisk {
         )?;
         // EN | CSS=NVM | MPS=0 | IOSQES=64 bytes | IOCQES=16 bytes.
         Self::write32(&mut self.pci, NVME_REG_CC, 1 | (6 << 16) | (4 << 20))?;
-        self.wait_ready(true)?;
+        self.wait_ready(true).await?;
 
         self.submit_admin(NvmeCommand {
             cdw0: 0x05, // Create I/O completion queue
@@ -234,19 +254,80 @@ impl NvmeDisk {
             cdw10: 1 | ((QUEUE_ENTRIES as u32 - 1) << 16),
             cdw11: 1, // physically contiguous
             ..Default::default()
-        })?;
+        })
+        .await?;
         self.submit_admin(NvmeCommand {
             cdw0: 0x01, // Create I/O submission queue
             prp1: self.io_sq.device_addr(),
             cdw10: 1 | ((QUEUE_ENTRIES as u32 - 1) << 16),
             cdw11: 1 | (1 << 16), // physically contiguous, completion queue 1
             ..Default::default()
-        })?;
+        })
+        .await?;
         Ok(())
     }
 
+    /// Writes `command` into `sq`, rings the doorbell, and cooperatively
+    /// waits for its completion on `cq`, yielding to the executor between
+    /// polls instead of blocking it. Used on the async read/write/admin
+    /// path; see [`Self::submit_sync`] for the blocking counterpart kept for
+    /// the synchronous GPT-parsing path and controller teardown.
     #[allow(clippy::too_many_arguments)]
-    fn submit(
+    async fn submit(
+        pci: &mut PciIo,
+        sq: &DmaPage,
+        cq: &DmaPage,
+        doorbell_stride: u64,
+        queue: u16,
+        sq_tail: &mut u16,
+        cq_head: &mut u16,
+        cq_phase: &mut bool,
+        mut command: NvmeCommand,
+    ) -> Result<()> {
+        let cid = *sq_tail;
+        command.cdw0 |= (cid as u32) << 16;
+        unsafe { ptr::write_volatile(sq.as_ptr::<NvmeCommand>().add(cid as usize), command) };
+        fence(Ordering::Release);
+        *sq_tail = (cid + 1) % QUEUE_ENTRIES as u16;
+        Self::write32(
+            pci,
+            NVME_REG_DOORBELL + 2 * queue as u64 * doorbell_stride,
+            *sq_tail as u32,
+        )?;
+
+        for _ in 0..1_000_000 {
+            let completion =
+                unsafe { ptr::read_volatile(cq.as_ptr::<NvmeCompletion>().add(*cq_head as usize)) };
+            if (completion.status & 1 != 0) == *cq_phase {
+                fence(Ordering::Acquire);
+                if completion.status & 0xfffe != 0 {
+                    return Err(Error::msg("NVMe command completed with an error"));
+                }
+                *cq_head += 1;
+                if *cq_head == QUEUE_ENTRIES as u16 {
+                    *cq_head = 0;
+                    *cq_phase = !*cq_phase;
+                }
+                Self::write32(
+                    pci,
+                    NVME_REG_DOORBELL + (2 * queue as u64 + 1) * doorbell_stride,
+                    *cq_head as u32,
+                )?;
+                return Ok(());
+            }
+            futures::future::select(
+                Executor::wait_for_interrupt(),
+                Executor::sleep(Duration::from_micros(10)),
+            )
+            .await;
+        }
+        Err(Error::msg("NVMe command timed out"))
+    }
+
+    /// Synchronous counterpart of [`Self::submit`], used only by the sync
+    /// GPT-parsing path ([`Self::transfer_sync`]).
+    #[allow(clippy::too_many_arguments)]
+    fn submit_sync(
         pci: &mut PciIo,
         sq: &DmaPage,
         cq: &DmaPage,
@@ -293,7 +374,7 @@ impl NvmeDisk {
         Err(Error::msg("NVMe command timed out"))
     }
 
-    fn submit_admin(&mut self, command: NvmeCommand) -> Result<()> {
+    async fn submit_admin(&mut self, command: NvmeCommand) -> Result<()> {
         Self::submit(
             &mut self.pci,
             &self.admin_sq,
@@ -305,10 +386,26 @@ impl NvmeDisk {
             &mut self.admin_cq_phase,
             command,
         )
+        .await
     }
 
-    fn submit_io(&mut self, command: NvmeCommand) -> Result<()> {
+    async fn submit_io(&mut self, command: NvmeCommand) -> Result<()> {
         Self::submit(
+            &mut self.pci,
+            &self.io_sq,
+            &self.io_cq,
+            self.doorbell_stride,
+            1,
+            &mut self.io_sq_tail,
+            &mut self.io_cq_head,
+            &mut self.io_cq_phase,
+            command,
+        )
+        .await
+    }
+
+    fn submit_io_sync(&mut self, command: NvmeCommand) -> Result<()> {
+        Self::submit_sync(
             &mut self.pci,
             &self.io_sq,
             &self.io_cq,
@@ -321,13 +418,14 @@ impl NvmeDisk {
         )
     }
 
-    fn identify_namespace(&mut self, namespace: u32) -> Result<(u64, u64)> {
+    async fn identify_namespace(&mut self, namespace: u32) -> Result<(u64, u64)> {
         self.submit_admin(NvmeCommand {
             cdw0: 0x06, // Identify
             nsid: namespace,
             prp1: self.data.device_addr(),
             ..Default::default()
-        })?;
+        })
+        .await?;
         let identify = self.data.as_bytes();
         let blocks = u64::from_le_bytes(identify[0..8].try_into().unwrap());
         let format = identify[26] & 0x0f;
@@ -347,8 +445,21 @@ impl NvmeDisk {
         self.block_size = block_size;
     }
 
-    fn transfer(&mut self, write: bool, lba: u64, blocks: u16) -> Result<()> {
+    async fn transfer(&mut self, write: bool, lba: u64, blocks: u16) -> Result<()> {
         self.submit_io(NvmeCommand {
+            cdw0: if write { 0x01 } else { 0x02 }, // Write / Read
+            nsid: self.namespace,
+            prp1: self.data.device_addr(),
+            cdw10: lba as u32,
+            cdw11: (lba >> 32) as u32,
+            cdw12: blocks as u32 - 1,
+            ..Default::default()
+        })
+        .await
+    }
+
+    fn transfer_sync(&mut self, write: bool, lba: u64, blocks: u16) -> Result<()> {
+        self.submit_io_sync(NvmeCommand {
             cdw0: if write { 0x01 } else { 0x02 }, // Write / Read
             nsid: self.namespace,
             prp1: self.data.device_addr(),
@@ -403,13 +514,14 @@ impl NvmeDisk {
 
     /// Lists active namespace IDs directly from the controller (Identify,
     /// CNS=Active Namespace ID List), in one round trip.
-    fn active_namespaces(&mut self) -> Result<Vec<u32>> {
+    async fn active_namespaces(&mut self) -> Result<Vec<u32>> {
         self.submit_admin(NvmeCommand {
             cdw0: 0x06,  // Identify
             cdw10: 0x02, // CNS: active namespace ID list
             prp1: self.data.device_addr(),
             ..Default::default()
-        })?;
+        })
+        .await?;
         Ok(self
             .data
             .as_bytes()
@@ -426,7 +538,7 @@ impl NvmeDisk {
     /// namespace. Returns the winning score alongside the disk so callers
     /// can compare it against candidates from other backends; the selected
     /// controller remains disconnected from its firmware driver until drop.
-    pub(super) fn choose(score: impl Fn(u64) -> u128) -> Option<(u128, NvmeDisk)> {
+    pub(super) async fn choose(score: impl Fn(u64) -> u128) -> Option<(u128, NvmeDisk)> {
         let mut selected: Option<(u128, NvmeDisk)> = None;
         for controller in Self::probe_controllers() {
             // A failed disconnect can mean that no firmware driver was bound;
@@ -434,7 +546,7 @@ impl NvmeDisk {
             if let Err(error) = uefi::boot::disconnect_controller(controller, None, None) {
                 log::debug!("NVMe {controller:?}: disconnect: {error}");
             }
-            let mut disk = match Self::open(controller) {
+            let mut disk = match Self::open(controller).await {
                 Ok(disk) => disk,
                 Err(error) => {
                     log::debug!("NVMe {controller:?}: {error}");
@@ -442,7 +554,7 @@ impl NvmeDisk {
                     continue;
                 }
             };
-            let namespaces = match disk.active_namespaces() {
+            let namespaces = match disk.active_namespaces().await {
                 Ok(namespaces) => namespaces,
                 Err(error) => {
                     // `disk` is dropped here, which reconnects the firmware driver.
@@ -450,19 +562,27 @@ impl NvmeDisk {
                     continue;
                 }
             };
-            let best_for_ctrl = namespaces
-                .into_iter()
-                .filter_map(|namespace| match disk.identify_namespace(namespace) {
+            // Same semantics as `.filter_map(..).min_by_key(..)` (first
+            // minimum wins on a tie), rewritten as an explicit loop since the
+            // per-namespace identify is now async.
+            let mut best_for_ctrl: Option<(u128, u32, u64, u64)> = None;
+            for namespace in namespaces {
+                match disk.identify_namespace(namespace).await {
                     Ok((blocks, block_size)) => {
                         let size = block_size.saturating_mul(blocks);
-                        Some((score(size), namespace, blocks, block_size))
+                        let ns_score = score(size);
+                        if best_for_ctrl
+                            .as_ref()
+                            .is_none_or(|(best, ..)| ns_score < *best)
+                        {
+                            best_for_ctrl = Some((ns_score, namespace, blocks, block_size));
+                        }
                     }
                     Err(error) => {
                         log::debug!("NVMe {controller:?} namespace {namespace}: {error}");
-                        None
                     }
-                })
-                .min_by_key(|(score, ..)| *score);
+                }
+            }
             if let Some((ctrl_score, ns, blocks, block_size)) = best_for_ctrl
                 && selected
                     .as_ref()
@@ -496,8 +616,11 @@ impl NvmeDisk {
             nsid: self.namespace,
             ..Default::default()
         })
+        .await
     }
 
+    /// Synchronous read, used only for GPT parsing (via the sync
+    /// `gpt_disk_io::BlockIo` trait) before the async disk API is available.
     pub(super) fn read_sync(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
         self.check_range(offset, buf.len())?;
         let mut offset = offset;
@@ -507,7 +630,7 @@ impl NvmeDisk {
             let in_block = (offset % self.block_size) as usize;
             let blocks = ((in_block + buf.len()).div_ceil(self.block_size as usize))
                 .min(PAGE_SIZE / self.block_size as usize);
-            self.transfer(false, lba, blocks as u16)?;
+            self.transfer_sync(false, lba, blocks as u16)?;
             let bytes = blocks * self.block_size as usize;
             let copied = (bytes - in_block).min(buf.len());
             unsafe {
@@ -525,9 +648,32 @@ impl NvmeDisk {
 
     pub(super) async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
         Executor::sched_yield().await;
-        self.read_sync(offset, buf)
+        self.check_range(offset, buf.len())?;
+        let mut offset = offset;
+        let mut buf = buf;
+        while !buf.is_empty() {
+            let lba = offset / self.block_size;
+            let in_block = (offset % self.block_size) as usize;
+            let blocks = ((in_block + buf.len()).div_ceil(self.block_size as usize))
+                .min(PAGE_SIZE / self.block_size as usize);
+            self.transfer(false, lba, blocks as u16).await?;
+            let bytes = blocks * self.block_size as usize;
+            let copied = (bytes - in_block).min(buf.len());
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    self.data.as_ptr::<u8>().add(in_block),
+                    buf.as_mut_ptr(),
+                    copied,
+                )
+            };
+            offset += copied as u64;
+            buf = &mut buf[copied..];
+        }
+        Ok(())
     }
 
+    /// Synchronous write, used only for GPT parsing (via the sync
+    /// `gpt_disk_io::BlockIo` trait) before the async disk API is available.
     pub(super) fn write_sync(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         self.check_range(offset, buf.len())?;
         let mut offset = offset;
@@ -538,7 +684,7 @@ impl NvmeDisk {
             let blocks = ((in_block + buf.len()).div_ceil(self.block_size as usize))
                 .min(PAGE_SIZE / self.block_size as usize);
             // Read-modify-write keeps the public byte-granular API correct.
-            self.transfer(false, lba, blocks as u16)?;
+            self.transfer_sync(false, lba, blocks as u16)?;
             let bytes = blocks * self.block_size as usize;
             let copied = (bytes - in_block).min(buf.len());
             unsafe {
@@ -548,7 +694,7 @@ impl NvmeDisk {
                     copied,
                 )
             };
-            self.transfer(true, lba, blocks as u16)?;
+            self.transfer_sync(true, lba, blocks as u16)?;
             offset += copied as u64;
             buf = &buf[copied..];
         }
@@ -557,14 +703,37 @@ impl NvmeDisk {
 
     pub(super) async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         Executor::sched_yield().await;
-        self.write_sync(offset, buf)
+        self.check_range(offset, buf.len())?;
+        let mut offset = offset;
+        let mut buf = buf;
+        while !buf.is_empty() {
+            let lba = offset / self.block_size;
+            let in_block = (offset % self.block_size) as usize;
+            let blocks = ((in_block + buf.len()).div_ceil(self.block_size as usize))
+                .min(PAGE_SIZE / self.block_size as usize);
+            // Read-modify-write keeps the public byte-granular API correct.
+            self.transfer(false, lba, blocks as u16).await?;
+            let bytes = blocks * self.block_size as usize;
+            let copied = (bytes - in_block).min(buf.len());
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    buf.as_ptr(),
+                    self.data.as_ptr::<u8>().add(in_block),
+                    copied,
+                )
+            };
+            self.transfer(true, lba, blocks as u16).await?;
+            offset += copied as u64;
+            buf = &buf[copied..];
+        }
+        Ok(())
     }
 }
 
 impl Drop for NvmeDisk {
     fn drop(&mut self) {
         let _ = Self::write32(&mut self.pci, NVME_REG_CC, 0);
-        let _ = self.wait_ready(false);
+        let _ = self.wait_ready_sync(false);
         let _ = uefi::boot::connect_controller(self.controller, &[], None, true);
     }
 }

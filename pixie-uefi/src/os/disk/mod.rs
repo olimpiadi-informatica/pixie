@@ -33,8 +33,8 @@ impl Disk {
     /// namespaces and `EFI_BLOCK_IO_PROTOCOL` media, so a good NVMe match
     /// doesn't shadow a better-matching disk only reachable via BlockIO (or
     /// vice versa).
-    fn choose(score: impl Fn(u64) -> u128 + Copy) -> Disk {
-        let nvme = NvmeDisk::choose(score);
+    async fn choose(score: impl Fn(u64) -> u128 + Copy) -> Disk {
+        let nvme = NvmeDisk::choose(score).await;
         let block = BlockDisk::choose(score);
         match (nvme, block) {
             (Some((nvme_score, nvme)), Some((block_score, _))) if nvme_score <= block_score => {
@@ -46,13 +46,13 @@ impl Disk {
         }
     }
 
-    pub fn largest() -> Disk {
-        Self::choose(|size| u128::MAX - size as u128)
+    pub async fn largest() -> Disk {
+        Self::choose(|size| u128::MAX - size as u128).await
     }
 
     #[cfg(feature = "coverage")]
-    pub fn open_with_size(base_size: i64) -> Disk {
-        Self::choose(move |size| (size as i128 - base_size as i128).unsigned_abs())
+    pub async fn open_with_size(base_size: i64) -> Disk {
+        Self::choose(move |size| (size as i128 - base_size as i128).unsigned_abs()).await
     }
 
     pub fn size(&self) -> u64 {
