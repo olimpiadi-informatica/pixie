@@ -26,6 +26,7 @@ use uefi_raw::protocol::nvme::NvmExpressPassThruAttributes;
 
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
+use crate::os::timer::Timer;
 
 const PAGE_SIZE: usize = 4096;
 const QUEUE_ENTRIES: usize = 64;
@@ -37,6 +38,11 @@ const NVME_REG_ASQ: u64 = 0x0028;
 const NVME_REG_ACQ: u64 = 0x0030;
 const NVME_REG_DOORBELL: u64 = 0x1000;
 const PCI_BAR0: u8 = 0;
+/// Wall-clock budget for a cooperative wait loop, matching the original
+/// 1,000,000-iteration * 10us busy-wait budget. Bounded by real elapsed time
+/// (via [`Timer::micros`], a plain TSC read) rather than an iteration count,
+/// since a `sched_yield`-based loop's iteration cost isn't a fixed duration.
+const COMMAND_TIMEOUT_MICROS: i64 = 10_000_000;
 
 /// A single page allocated as `BOOT_SERVICES_DATA`, used for NVMe queues and
 /// I/O data. Freed automatically on drop.
@@ -187,18 +193,25 @@ impl NvmeDisk {
     /// Waits for the controller ready bit to reach `wanted`, cooperatively
     /// yielding to the executor between polls instead of blocking it. Used
     /// during controller bring-up, which happens off the hot I/O path.
+    ///
+    /// Yields via `sched_yield` rather than sleeping/waiting for an
+    /// interrupt: nothing wires up a real interrupt for this controller, and
+    /// `Executor::sleep` only re-checks its deadline when the executor wakes
+    /// from `hlt` for some unrelated interrupt, so it gives no real latency
+    /// bound. `sched_yield` re-polls on the very next executor pass, keeping
+    /// this about as fast as a busy-wait while still letting other ready
+    /// tasks run in between.
     async fn wait_ready(&mut self, wanted: bool) -> Result<()> {
-        for _ in 0..1_000_000 {
+        let deadline = Timer::micros() + COMMAND_TIMEOUT_MICROS;
+        loop {
             if (Self::read32(&mut self.pci, NVME_REG_CSTS)? & 1 != 0) == wanted {
                 return Ok(());
             }
-            futures::future::select(
-                Executor::wait_for_interrupt(),
-                Executor::sleep(Duration::from_micros(10)),
-            )
-            .await;
+            if Timer::micros() > deadline {
+                return Err(Error::msg("NVMe controller did not change ready state"));
+            }
+            Executor::sched_yield().await;
         }
-        Err(Error::msg("NVMe controller did not change ready state"))
     }
 
     /// Synchronous counterpart of [`Self::wait_ready`]. `Drop::drop` cannot
@@ -295,7 +308,13 @@ impl NvmeDisk {
             *sq_tail as u32,
         )?;
 
-        for _ in 0..1_000_000 {
+        // Yield via `sched_yield` rather than sleeping/waiting for an
+        // interrupt: see the comment on `wait_ready` for why. The deadline
+        // is checked via `Timer::micros` (a plain TSC read, no interrupt
+        // needed) rather than an iteration count, since each `sched_yield`
+        // round-trip isn't a fixed duration.
+        let deadline = Timer::micros() + COMMAND_TIMEOUT_MICROS;
+        loop {
             let completion =
                 unsafe { ptr::read_volatile(cq.as_ptr::<NvmeCompletion>().add(*cq_head as usize)) };
             if (completion.status & 1 != 0) == *cq_phase {
@@ -315,13 +334,11 @@ impl NvmeDisk {
                 )?;
                 return Ok(());
             }
-            futures::future::select(
-                Executor::wait_for_interrupt(),
-                Executor::sleep(Duration::from_micros(10)),
-            )
-            .await;
+            if Timer::micros() > deadline {
+                return Err(Error::msg("NVMe command timed out"));
+            }
+            Executor::sched_yield().await;
         }
-        Err(Error::msg("NVMe command timed out"))
     }
 
     /// Synchronous counterpart of [`Self::submit`], used only by the sync
