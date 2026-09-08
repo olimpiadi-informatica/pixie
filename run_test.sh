@@ -72,6 +72,13 @@ run_qemu() {
   # A guest CPU exception leaves QEMU running forever (OVMF dead-loops after
   # dumping the register state), so bound this instead of relying on the
   # much coarser CI job timeout to eventually kill it.
+  #
+  # stdin is explicitly /dev/null: -chardev stdio only needs stdout to log the
+  # guest's serial console. If this runs as a background job of an
+  # interactive shell (e.g. a watch-and-rerun loop), inheriting the real
+  # controlling terminal on stdin makes QEMU's raw-mode tcsetattr() draw a
+  # SIGTTOU the instant it starts, which silently stops the process (not a
+  # crash, no output) until the 90s timeout kills it.
   timeout -k 10 90 qemu-system-x86_64 \
     -nographic \
     -chardev stdio,id=char0,logfile=$1,signal=off \
@@ -85,7 +92,8 @@ run_qemu() {
     -drive file=$FILE,if=none,id=cov,format=raw \
     -device nvme,serial=deadbeef,drive=nvm \
     -device nvme,serial=covdrive,drive=cov \
-    -nic bridge,mac=52:54:00:12:34:56,br=br-pixie,model=e1000
+    -nic bridge,mac=52:54:00:12:34:56,br=br-pixie,model=e1000 \
+    </dev/null
 }
 
 run_qemu1() {
@@ -109,7 +117,8 @@ run_qemu1() {
     -drive file=$FILE,if=none,id=cov,format=raw \
     -device nvme,serial=deadbeef,drive=nvm \
     -device nvme,serial=covdrive,drive=cov \
-    -nic bridge,mac=52:54:00:12:34:57,br=br-pixie1,model=e1000
+    -nic bridge,mac=52:54:00:12:34:57,br=br-pixie1,model=e1000 \
+    </dev/null
 }
 
 truncate -s 8G $TEMPDIR/disk.img
