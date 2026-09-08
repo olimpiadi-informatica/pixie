@@ -43,7 +43,7 @@ cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 [ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-server/example.config.yaml "${STORAGE_DIR}/config.yaml"
 
 trap '' SIGTERM
-sudo ./run_test.sh ${SELFDIR}/storage
+sudo ./run_test.sh "${SELFDIR}/storage" "${BENCH_JSON:-}"
 
 TEST_OBJECTS=$(
   for file in \

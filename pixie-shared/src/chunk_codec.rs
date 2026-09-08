@@ -352,3 +352,58 @@ mod tests {
         }
     }
 }
+
+/// Micro-benchmark for the codec itself, not a stand-in for a real flash: it loops
+/// [`Encoder::next_packet`] straight into [`Decoder::add_packet`] over an in-memory buffer,
+/// skipping the real UEFI/tokio UDP sockets and the rest of the flash pipeline entirely. Run and
+/// tracked in CI (`cargo +nightly bench --features std`, see `.github/workflows/rust.yml`) to
+/// catch regressions in this hot, security-sensitive path in isolation; see `run_test.sh` for the
+/// actual end-to-end store/flash benchmark, which drives the real `pixie-uefi.efi` client in QEMU
+/// against a real `pixie-server`.
+#[cfg(test)]
+mod benches {
+    use super::*;
+    use crate::UDP_BODY_LEN;
+    use std::hint::black_box;
+    use test::Bencher;
+
+    fn make_chunk(size: usize) -> Vec<u8> {
+        let mut chunk = vec![0u8; size];
+        let mut val = u64::MAX / 5;
+        for x in &mut chunk {
+            val = val.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
+            *x = val.to_be_bytes()[0];
+        }
+        chunk
+    }
+
+    fn bench_roundtrip(b: &mut Bencher, size: usize) {
+        let chunk = make_chunk(size);
+        let mut buf = [0u8; UDP_BODY_LEN];
+        b.iter(|| {
+            let mut encoder = Encoder::new(chunk.clone());
+            let mut decoder = Decoder::new(chunk.len());
+            while let Some(len) = encoder.next_packet(&mut buf) {
+                decoder
+                    .add_packet(&buf[..len])
+                    .expect("failed to add packet");
+            }
+            black_box(decoder.finish().expect("failed to decode chunk"))
+        });
+    }
+
+    #[bench]
+    fn bench_flash_roundtrip_20b(b: &mut Bencher) {
+        bench_roundtrip(b, 20);
+    }
+
+    #[bench]
+    fn bench_flash_roundtrip_200kib(b: &mut Bencher) {
+        bench_roundtrip(b, 200 << 10);
+    }
+
+    #[bench]
+    fn bench_flash_roundtrip_4mib(b: &mut Bencher) {
+        bench_roundtrip(b, crate::MAX_CHUNK_SIZE);
+    }
+}
