@@ -69,7 +69,10 @@ run_qemu() {
   fi
   FILE=prof-out/pixie-uefi-$RANDOM.profraw
   truncate -s 500M $FILE
-  qemu-system-x86_64 \
+  # A guest CPU exception leaves QEMU running forever (OVMF dead-loops after
+  # dumping the register state), so bound this instead of relying on the
+  # much coarser CI job timeout to eventually kill it.
+  timeout -k 10 90 qemu-system-x86_64 \
     -nographic \
     -chardev stdio,id=char0,logfile=$1,signal=off \
     -serial chardev:char0 \
@@ -79,8 +82,9 @@ run_qemu() {
     -m 1G \
     -drive if=pflash,format=raw,file=$OVMF \
     -drive file=$TEMPDIR/disk.img,if=none,id=nvm,format=raw \
-    -drive file=$FILE,format=raw \
+    -drive file=$FILE,if=none,id=cov,format=raw \
     -device nvme,serial=deadbeef,drive=nvm \
+    -device nvme,serial=covdrive,drive=cov \
     -nic bridge,mac=52:54:00:12:34:56,br=br-pixie,model=e1000
 }
 
@@ -91,7 +95,8 @@ run_qemu1() {
   fi
   FILE=prof-out/pixie-uefi-$RANDOM.profraw
   truncate -s 500M $FILE
-  qemu-system-x86_64 \
+  # See run_qemu() above for why this is bounded with a timeout.
+  timeout -k 10 90 qemu-system-x86_64 \
     -nographic \
     -chardev stdio,id=char0,logfile=$1,signal=off \
     -serial chardev:char0 \
@@ -101,8 +106,9 @@ run_qemu1() {
     -m 1G \
     -drive if=pflash,format=raw,file=$OVMF \
     -drive file=$TEMPDIR/disk1.img,if=none,id=nvm,format=raw \
-    -drive file=$FILE,format=raw \
+    -drive file=$FILE,if=none,id=cov,format=raw \
     -device nvme,serial=deadbeef,drive=nvm \
+    -device nvme,serial=covdrive,drive=cov \
     -nic bridge,mac=52:54:00:12:34:57,br=br-pixie1,model=e1000
 }
 
