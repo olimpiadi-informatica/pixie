@@ -9,17 +9,23 @@ STORAGE_DIR="${SELFDIR}/storage"
 rm -rf prof-out
 mkdir -p prof-out
 
-SYSROOT=$(rustc +nightly --print sysroot)
-LLVM_TOOLS_DIR="$SYSROOT/lib/rustlib/$(rustc +nightly -Vv | grep host | awk '{print $2}')/bin"
+# Pinned rather than a floating `nightly`: an untested newer nightly can (and
+# has) introduced codegen regressions that only show up on the exotic
+# `-C instrument-coverage` + no_std + SIMD combination pixie-uefi builds with,
+# so bump this deliberately rather than silently drifting.
+NIGHTLY=nightly-2026-05-23
+
+SYSROOT=$(rustc +$NIGHTLY --print sysroot)
+LLVM_TOOLS_DIR="$SYSROOT/lib/rustlib/$(rustc +$NIGHTLY -Vv | grep host | awk '{print $2}')/bin"
 LLVM_COV="$LLVM_TOOLS_DIR/llvm-cov"
 LLVM_PROFDATA="$LLVM_TOOLS_DIR/llvm-profdata"
 
 pushd pixie-shared
-RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-shared-%m-%p.profraw cargo +nightly test --no-fail-fast --all-features
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-shared-%m-%p.profraw cargo +$NIGHTLY test --no-fail-fast --all-features
 popd
 
 pushd pixie-uefi
-RUSTFLAGS='-Cinstrument-coverage -Zno-profiler-runtime' cargo +nightly build -F coverage
+RUSTFLAGS='-Cinstrument-coverage -Zno-profiler-runtime' cargo +$NIGHTLY build -F coverage
 popd
 
 pushd pixie-web
@@ -27,7 +33,7 @@ trunk build
 popd
 
 pushd pixie-server
-RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/build-pixie-server-%m-%p.profraw cargo +nightly build
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/build-pixie-server-%m-%p.profraw cargo +$NIGHTLY build
 popd
 
 mkdir -p "${STORAGE_DIR}/tftpboot" "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks" "${STORAGE_DIR}/admin"
@@ -43,7 +49,7 @@ TEST_OBJECTS=$(
   for file in \
     $(
       RUSTFLAGS="-C instrument-coverage" \
-        cargo +nightly test --manifest-path pixie-shared/Cargo.toml --no-fail-fast --all-features --no-run --message-format=json |
+        cargo +$NIGHTLY test --manifest-path pixie-shared/Cargo.toml --no-fail-fast --all-features --no-run --message-format=json |
         jq -r "select(.profile.test == true) | .filenames[]" |
         grep -v dSYM -
     ); do
