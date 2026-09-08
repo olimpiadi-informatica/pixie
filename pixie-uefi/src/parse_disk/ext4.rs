@@ -23,7 +23,11 @@ fn has_superblock(group: usize) -> bool {
     false
 }
 
-pub async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+pub async fn get_ext4_chunks(
+    disk: &mut Disk,
+    start: u64,
+    end: u64,
+) -> Result<Option<Vec<ChunkInfo>>> {
     if start + 2048 > end {
         // Not an ext4 partition.
         return Ok(None);

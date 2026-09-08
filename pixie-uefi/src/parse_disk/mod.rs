@@ -33,7 +33,7 @@ fn le64_32_32(buf: &[u8], lo: usize, hi: usize) -> u64 {
 }
 
 /// Returns chunks *relative to the start of the partition*.
-async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkInfo>> {
+async fn parse_partition(disk: &mut Disk, start: u64, end: u64) -> Result<Vec<ChunkInfo>> {
     if let Some(chunks) = fat::get_fat_chunks(disk, start, end).await? {
         info!(
             "FAT partition with {} chunks of size {}",
