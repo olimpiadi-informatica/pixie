@@ -3,6 +3,9 @@ set -xe
 
 TEMPDIR=$(mktemp -d)
 DEV=""
+# Optional: path to write e2e store/flash timings to, in github-action-benchmark's
+# "customSmallerIsBetter" format. Left unset, nothing is timed or written.
+BENCH_JSON="$2"
 
 mkdir $TEMPDIR/mnt
 
@@ -136,7 +139,9 @@ done
 losetup -d $DEV
 
 curl 'http://localhost:8080/admin/curr_action/mac:52:54:00:12:34:56/store'
+store_start=$(date +%s.%N)
 run_qemu $TEMPDIR/store.log
+store_end=$(date +%s.%N)
 
 # Check that we restore the original disk image.
 
@@ -144,7 +149,9 @@ rm -f $TEMPDIR/disk.img
 truncate -s 8G $TEMPDIR/disk.img
 
 curl 'http://localhost:8080/admin/curr_action/all/flash'
+flash_cold_start=$(date +%s.%N)
 run_qemu $TEMPDIR/flash-1.log
+flash_cold_end=$(date +%s.%N)
 run_qemu1 $TEMPDIR/flash1-1.log
 
 DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
@@ -174,7 +181,9 @@ losetup -d $DEV
 # Check that we don't fetch any data if the disk contents have not changed.
 
 curl 'http://localhost:8080/admin/curr_action/all/flash'
+flash_cached_start=$(date +%s.%N)
 run_qemu $TEMPDIR/flash-2.log
+flash_cached_end=$(date +%s.%N)
 run_qemu1 $TEMPDIR/flash1-2.log
 
 DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
@@ -209,4 +218,18 @@ fi
 if ! grep "Disk scanned; 0 chunks to fetch" $TEMPDIR/flash1-2.log &>/dev/null; then
   echo "Data was re-fetched"
   exit 1
+fi
+
+# Only reached if every correctness check above passed.
+if [ -n "$BENCH_JSON" ]; then
+  awk -v s0="$store_start" -v s1="$store_end" \
+      -v c0="$flash_cold_start" -v c1="$flash_cold_end" \
+      -v k0="$flash_cached_start" -v k1="$flash_cached_end" \
+      'BEGIN {
+        printf "[\n"
+        printf "  {\"name\": \"store (qemu e2e)\", \"unit\": \"s\", \"value\": %.3f},\n", s1 - s0
+        printf "  {\"name\": \"flash, cold (qemu e2e)\", \"unit\": \"s\", \"value\": %.3f},\n", c1 - c0
+        printf "  {\"name\": \"flash, cached (qemu e2e)\", \"unit\": \"s\", \"value\": %.3f}\n", k1 - k0
+        printf "]\n"
+      }' >"$BENCH_JSON"
 fi

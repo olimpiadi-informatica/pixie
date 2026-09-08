@@ -1,6 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(test, feature(test))]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate test;
 
 pub mod bijection;
 pub mod chunk_codec;

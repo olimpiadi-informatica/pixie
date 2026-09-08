@@ -39,6 +39,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -68,5 +71,40 @@ jobs:
       - name: Install trunk
         uses: jetli/trunk-action@v0.5.0
 
+      - name: Run flash codec benchmark (pixie-shared)
+        working-directory: pixie-shared
+        run: cargo +nightly bench --features std | tee ../flash-codec-bench.txt
+
+      - name: Track flash codec benchmark
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "cargo"
+          name: "Flash codec micro-benchmark (chunk_codec)"
+          output-file-path: flash-codec-bench.txt
+          gh-pages-branch: benchmark-data
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.ref == 'refs/heads/master' }}
+          comment-on-alert: ${{ github.event_name == 'pull_request' }}
+          alert-threshold: "200%"
+          fail-on-alert: false
+          summary-always: true
+
       - name: Run test
+        env:
+          BENCH_JSON: ${{ github.workspace }}/qemu-bench.json
         run: setsid ./test.sh
+
+      - name: Track e2e store/flash benchmark
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: "customSmallerIsBetter"
+          name: "Store/Flash E2E (qemu)"
+          output-file-path: qemu-bench.json
+          gh-pages-branch: benchmark-data
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.ref == 'refs/heads/master' }}
+          skip-fetch-gh-pages: true
+          comment-on-alert: ${{ github.event_name == 'pull_request' }}
+          alert-threshold: "200%"
+          fail-on-alert: false
+          summary-always: true
