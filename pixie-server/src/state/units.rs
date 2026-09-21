@@ -87,7 +87,12 @@ impl State {
         self.units.subscribe()
     }
 
-    pub fn register_unit(&self, mac: MacAddr6, station: RegistrationInfo, stats: UnitStats) -> Result<()> {
+    pub fn register_unit(
+        &self,
+        mac: MacAddr6,
+        station: RegistrationInfo,
+        stats: UnitStats,
+    ) -> Result<()> {
         if !self.config.images.contains(&station.image) {
             bail!("Unknown image: {}", station.image);
         }
