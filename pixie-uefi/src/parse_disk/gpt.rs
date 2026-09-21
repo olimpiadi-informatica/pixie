@@ -9,13 +9,14 @@ use crate::store::ChunkInfo;
 
 pub async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     let disk_size = disk.size() as usize;
-    let (primary, secondary, partitions) = match disk.partitions() {
+    let (primary, secondary, mut partitions) = match disk.partitions() {
         Ok(partitions) => partitions,
         Err(e) => {
             log::debug!("Failed to parse GPT partitions: {e:?}");
             return Ok(None);
         }
     };
+    partitions.sort_by_key(|p| p.byte_start);
 
     let mut pos = 0usize;
     let mut chunks = vec![ChunkInfo {

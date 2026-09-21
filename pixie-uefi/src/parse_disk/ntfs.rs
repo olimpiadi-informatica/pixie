@@ -25,7 +25,7 @@ pub async fn get_ntfs_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option
         x @ 128..=224 => panic!("too many sectors per cluster: {}", x),
     };
     let bytes_per_cluster = bytes_per_sector * sectors_per_cluster;
-    let num_clusters = (end as usize - start as usize).div_ceil(bytes_per_cluster);
+    let num_clusters = (end as usize - start as usize) / bytes_per_cluster;
 
     let bytes_per_file_record = match boot_sector[0x40] {
         x @ 0..=127 => x as usize * bytes_per_cluster,
