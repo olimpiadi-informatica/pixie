@@ -43,8 +43,8 @@ async fn handle_request(state: &State, req: TcpRequest, peer_mac: MacAddr6) -> R
                 .get_image_serialized(&unit.image)?
                 .context("Image not yet stored")?
         }
-        TcpRequest::Register(station) => {
-            state.register_unit(peer_mac, station.clone())?;
+        TcpRequest::Register(station, stat) => {
+            state.register_unit(peer_mac, station.clone(), stat)?;
             state.set_registration_hint(station);
             Vec::new()
         }

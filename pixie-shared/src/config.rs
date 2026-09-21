@@ -1,4 +1,4 @@
-use crate::{Action, Bijection};
+use crate::{Action, Bijection, UnitStats};
 use alloc::{string::String, vec::Vec};
 use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
@@ -67,6 +67,7 @@ pub struct Unit {
     pub last_ping_timestamp: u64,
     #[serde(default)]
     pub last_ping_comment: Vec<u8>,
+    pub stats: UnitStats,
 }
 
 impl Unit {

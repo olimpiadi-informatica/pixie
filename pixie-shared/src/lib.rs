@@ -107,6 +107,13 @@ pub struct RegistrationInfo {
     pub image: String,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnitStats {
+    pub ram: u64,
+    pub disk: u64,
+    pub cpu: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HintPacket {
     pub station: RegistrationInfo,
@@ -186,7 +193,7 @@ pub enum TcpRequest {
     GetImage,
     /// Registers the client with the given info.
     /// The response is empty.
-    Register(RegistrationInfo),
+    Register(RegistrationInfo, UnitStats),
     /// Uploads the given chunk to the server, the content is already compressed.
     /// The response is empty.
     UploadChunk(Vec<u8>),

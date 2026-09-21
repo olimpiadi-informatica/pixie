@@ -1,7 +1,7 @@
 use crate::state::State;
 use anyhow::{Result, bail, ensure};
 use macaddr::MacAddr6;
-use pixie_shared::{Action, RegistrationInfo, Unit};
+use pixie_shared::{Action, RegistrationInfo, Unit, UnitStats};
 use std::net::Ipv4Addr;
 use tokio::sync::watch;
 
@@ -87,7 +87,7 @@ impl State {
         self.units.subscribe()
     }
 
-    pub fn register_unit(&self, mac: MacAddr6, station: RegistrationInfo) -> Result<()> {
+    pub fn register_unit(&self, mac: MacAddr6, station: RegistrationInfo, stats: UnitStats) -> Result<()> {
         if !self.config.images.contains(&station.image) {
             bail!("Unknown image: {}", station.image);
         }
@@ -109,6 +109,7 @@ impl State {
                     unit.row = station.row;
                     unit.col = station.col;
                     unit.image = station.image;
+                    unit.stats = stats;
                 } else {
                     let unit = Unit {
                         mac,
@@ -121,6 +122,7 @@ impl State {
                         image: station.image,
                         last_ping_timestamp: 0,
                         last_ping_comment: Vec::new(),
+                        stats,
                     };
                     units.push(unit);
                 }

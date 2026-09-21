@@ -5,7 +5,7 @@ use core::cell::RefCell;
 use core::net::SocketAddrV4;
 
 use futures::future::{Either, select};
-use pixie_shared::{HINT_PORT, HintPacket, RegistrationInfo, TcpRequest};
+use pixie_shared::{HINT_PORT, HintPacket, RegistrationInfo, TcpRequest, UnitStats};
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
 use crate::os::error::{Error, Result};
@@ -158,7 +158,14 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
         ui::flush();
     }
 
-    let msg = TcpRequest::Register(data.borrow().station.clone());
+    let mem_stats = crate::os::memory::stats();
+    let stat = UnitStats {
+        ram: mem_stats.used + mem_stats.free + mem_stats.other,
+        disk: crate::os::disk::Disk::largest().size(),
+        cpu: crate::os::util::get_cpu_model(),
+    };
+
+    let msg = TcpRequest::Register(data.borrow().station.clone(), stat);
     let buf = postcard::to_allocvec(&msg)?;
     let stream = TcpStream::connect(server_addr).await?;
     stream.write_u64_le(buf.len() as u64).await?;

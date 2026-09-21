@@ -36,7 +36,8 @@ cat >$TEMPDIR/storage/registered.json <<EOF
     "curr_action": null,
     "curr_progress": null,
     "next_action": "shutdown",
-    "image": "contestant"
+    "image": "contestant",
+    "stats": {"ram": 0, "disk": 0, "cpu": "UNKNOWN"}
   },
   {
     "mac": [82, 84, 0, 18, 52, 87],
@@ -46,7 +47,8 @@ cat >$TEMPDIR/storage/registered.json <<EOF
     "curr_action": null,
     "curr_progress": null,
     "next_action": "shutdown",
-    "image": "contestant"
+    "image": "contestant",
+    "stats": {"ram": 0, "disk": 0, "cpu": "UNKNOWN"}
   }
 ]
 EOF
