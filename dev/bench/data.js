@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789998097761,
+  "lastUpdate": 1790002679743,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -83,6 +83,48 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
             "value": 3515813.3,
             "range": "± 199452.5",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "committer": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "b6e25980c7f8392dbec4990a46f84eb2f0fb99d8",
+          "message": "Open disk with safe api",
+          "timestamp": "2026-09-21T16:56:30+02:00",
+          "tree_id": "0d5c2821d166df2f911d894ae45c06ccee97bbc0",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/b6e25980c7f8392dbec4990a46f84eb2f0fb99d8"
+        },
+        "date": 1790002678705,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_200kib",
+            "value": 341844.29,
+            "range": "± 3822.14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_20b",
+            "value": 2347.48,
+            "range": "± 48.62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
+            "value": 3615633.65,
+            "range": "± 239043.84",
             "unit": "ns/iter"
           }
         ]
