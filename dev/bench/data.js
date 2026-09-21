@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790003437622,
+  "lastUpdate": 1790003541030,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -286,6 +286,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 11.363,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "committer": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "b7e5ab6e496b1693cdbece1b77128a7d7da29a27",
+          "message": "cargo fmt",
+          "timestamp": "2026-09-21T17:09:05+02:00",
+          "tree_id": "65994f66c47f7b64d8b8e09aed8599d35cc867d0",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/b7e5ab6e496b1693cdbece1b77128a7d7da29a27"
+        },
+        "date": 1790003541014,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 21.191,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 16.265,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 11.302,
             "unit": "s"
           }
         ]
