@@ -90,7 +90,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     let boid = BootOptions::reboot_target().expect("Could not find reboot target");
     let bo_command = BootOptions::get(boid);
 
-    let mut disk = disk::Disk::largest();
+    let mut disk = disk::Disk::largest().await;
     let chunks = parse_disk::parse_disk(&mut disk).await?;
     info!(
         "Total size of chunks: {}",
