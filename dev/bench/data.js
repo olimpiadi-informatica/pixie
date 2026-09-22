@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790093170125,
+  "lastUpdate": 1790093269957,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -367,6 +367,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 11.302,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "committer": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "84cbe4bc37cd71db2c551e6e2e83891b1d6b0d6b",
+          "message": "Improve gpt parser to be more granular",
+          "timestamp": "2026-09-22T18:02:03+02:00",
+          "tree_id": "45eb603308108132947a2d207ef2c66e0c2ca7b6",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/84cbe4bc37cd71db2c551e6e2e83891b1d6b0d6b"
+        },
+        "date": 1790093269947,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 20.609,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 15.657,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 11.008,
             "unit": "s"
           }
         ]
