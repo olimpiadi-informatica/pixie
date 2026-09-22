@@ -2,7 +2,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use gpt_disk_io::BlockIo;
-use gpt_disk_io::gpt_disk_types::{BlockSize, Lba};
+use gpt_disk_io::gpt_disk_types::{BlockSize, GptHeader, Lba};
 use uefi::Handle;
 use uefi::boot::{OpenProtocolParams, ScopedProtocol};
 use uefi::proto::media::block::BlockIO;
@@ -161,11 +161,25 @@ impl Disk {
         self.write_sync(offset, buf)
     }
 
-    pub fn partitions(&mut self) -> Result<Vec<DiskPartition>> {
+    pub fn partitions(&mut self) -> Result<((u64, u64), (u64, u64), Vec<DiskPartition>)> {
+        fn gpt_range(header: &GptHeader, block_size: u64) -> (u64, u64) {
+            let header_start = header.my_lba.to_u64() * block_size;
+            let header_end = header_start + block_size;
+
+            let entries_bytes = header.number_of_partition_entries.to_u32() as u64
+                * header.size_of_partition_entry.to_u32() as u64;
+            let entries_blocks = (entries_bytes + block_size - 1) / block_size;
+            let entries_start = header.partition_entry_lba.to_u64() * block_size;
+            let entries_end = entries_start + entries_blocks * block_size;
+
+            (header_start.min(entries_start), header_end.max(entries_end))
+        }
+
         let block_size = self.block_size().to_u64();
         let mut disk = gpt_disk_io::Disk::new(self)?;
         let mut buf = [0; 1 << 14];
         let header = disk.read_primary_gpt_header(&mut buf)?;
+        let secondary_header = disk.read_secondary_gpt_header(&mut buf)?;
         // TODO(veluca): bubble up this error.
         let part_array_layout = header.get_partition_entry_array_layout()?;
         let mut buf = [0; 1 << 14];
@@ -191,7 +205,7 @@ impl Disk {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(x)
+        Ok((gpt_range(&header, block_size), gpt_range(&secondary_header, block_size), x))
     }
 }
 

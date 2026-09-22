@@ -6,5 +6,5 @@ mkdir -p $DIR
 
 ./setup.sh --release $DIR
 
-cp pixie-server/target/release/pixie-server /usr/local/bin
+cp --remove-destination pixie-server/target/release/pixie-server /usr/local/bin
 cp pixie.service /etc/systemd/system/
