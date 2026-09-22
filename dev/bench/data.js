@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790003541030,
+  "lastUpdate": 1790093170125,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -167,6 +167,48 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
             "value": 3654435.35,
             "range": "± 295584",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "committer": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "84cbe4bc37cd71db2c551e6e2e83891b1d6b0d6b",
+          "message": "Improve gpt parser to be more granular",
+          "timestamp": "2026-09-22T18:02:03+02:00",
+          "tree_id": "45eb603308108132947a2d207ef2c66e0c2ca7b6",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/84cbe4bc37cd71db2c551e6e2e83891b1d6b0d6b"
+        },
+        "date": 1790093168036,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_200kib",
+            "value": 140351.3,
+            "range": "± 1637.14",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_20b",
+            "value": 2607.94,
+            "range": "± 408.18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
+            "value": 1992657.1,
+            "range": "± 28785.33",
             "unit": "ns/iter"
           }
         ]
