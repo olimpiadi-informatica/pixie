@@ -44,37 +44,26 @@ struct ConsoleControl {
     lock_std_in: unsafe extern "efiapi" fn(*mut ConsoleControl, *const u16) -> uefi::Status,
 }
 
-fn score_mode(w: usize, h: usize, current_res: Option<(usize, usize)>) -> i32 {
-    let mut score = match (w, h) {
-        (1920, 1080) => 10_000,
-        (1680, 1050) => 9_500,
-        (1600, 900) => 9_000,
-        (1440, 900) => 8_500,
-        (1366, 768) => 8_000,
-        (1280, 800) => 7_500,
-        (1280, 720) => 7_000,
-        (1280, 1024) => 6_500,
-        (1024, 768) => 6_000,
-        (800, 600) => 5_000,
-        _ => {
-            if w < 640 || h < 480 {
-                return -1000;
-            }
-            if w <= 1920 && h <= 1200 {
-                5_000 + ((w * h) / 1_000) as i32
-            } else if w <= 2560 && h <= 1600 {
-                4_000 + ((w * h) / 10_000) as i32
-            } else {
-                2_000
-            }
-        }
-    };
-    if let Some((cw, ch)) = current_res {
-        if cw == w && ch == h && w >= 1024 && h >= 600 {
-            score += 250;
-        }
+fn score_mode(w: usize, h: usize, current_res: Option<(usize, usize)>) -> i64 {
+    if w < 640 || h < 480 {
+        return -1_000_000;
     }
-    score
+    if w < h {
+        return -500_000;
+    }
+    // Prioritize highest resolution (usually the display native resolution), up to 1920x1200
+    if w <= 1920 && h <= 1200 {
+        let mut score = 1_000_000_i64 + (w * h) as i64;
+        if let Some((cw, ch)) = current_res {
+            if cw == w && ch == h {
+                score += 1_000;
+            }
+        }
+        score
+    } else {
+        // Too big (> 1920x1200): deprioritize, preferring the smallest oversized mode
+        500_000_i64 - ((w * h) / 100) as i64
+    }
 }
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
