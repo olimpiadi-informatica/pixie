@@ -162,7 +162,38 @@ async fn run() -> Result<()> {
     }
 }
 
+const KERNEL_STACK_SIZE: usize = 512 * 1024; // 512 KiB
+
+#[repr(C, align(16))]
+struct KernelStack {
+    data: [u8; KERNEL_STACK_SIZE],
+}
+
+struct SyncWrapper<T>(core::cell::UnsafeCell<T>);
+unsafe impl<T> Sync for SyncWrapper<T> {}
+
+static KERNEL_STACK: SyncWrapper<KernelStack> =
+    SyncWrapper(core::cell::UnsafeCell::new(KernelStack {
+        data: [0; KERNEL_STACK_SIZE],
+    }));
+
+extern "C" fn kernel_entry() -> ! {
+    os::start(run)
+}
+
 #[entry]
 fn main() -> Status {
-    os::start(run)
+    unsafe {
+        let stack_top = (KERNEL_STACK.0.get() as *mut u8).add(KERNEL_STACK_SIZE);
+        let new_rsp = stack_top as usize & !0x0F;
+
+        core::arch::asm!(
+            "mov rsp, {new_rsp}",
+            "sub rsp, 32",
+            "call {entry}",
+            new_rsp = in(reg) new_rsp,
+            entry = sym kernel_entry,
+            options(noreturn)
+        );
+    }
 }

@@ -43,6 +43,11 @@ impl Timer {
         (rdtsc() - ticks_at_start) / ticks_per_micro
     }
 
+    pub fn ticks_per_micro() -> i64 {
+        Self::ensure_init();
+        TICKS_PER_MICRO.load(Ordering::Relaxed)
+    }
+
     pub fn instant() -> Instant {
         Instant::from_micros(Timer::micros())
     }

@@ -1,4 +1,3 @@
-use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::net::Ipv4Addr;
@@ -11,26 +10,20 @@ use smoltcp::iface::{
 use smoltcp::socket::dhcpv4::{Event, Socket as Dhcpv4Socket};
 use smoltcp::wire::{DhcpOption, HardwareAddress, IpCidr};
 use spin::Mutex;
-use uefi::Handle;
-use uefi::proto::Protocol;
 use uefi::proto::console::text::Color;
-use uefi::proto::device_path::DevicePath;
-use uefi::proto::device_path::build::DevicePathBuilder;
-use uefi::proto::device_path::text::{AllowShortcuts, DevicePathToText, DisplayOnly};
-use uefi::proto::network::snp::SimpleNetwork;
 
 use super::timer::Timer;
-use crate::os::boot_options::BootOptions;
 use crate::os::executor::Executor;
 use crate::os::executor::event::{Event as ExecutorEvent, EventTrigger};
-use crate::os::net::interface::SnpDevice;
+use crate::os::net::interface::{KernelNic, KernelNicDevice};
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
-use crate::os::send_wrapper::SendWrapper;
 use crate::os::timer::rdtsc;
-use crate::os::ui;
+use crate::os::{pci, ui};
 
+pub mod e1000e;
 mod interface;
+pub mod rtl8169;
 mod speed;
 mod tcp;
 mod udp;
@@ -41,7 +34,7 @@ static EPHEMERAL_PORT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct NetworkData {
     interface: Interface,
-    device: SnpDevice,
+    device: KernelNicDevice,
     socket_set: SocketSet<'static>,
     dhcp_socket_handle: SocketHandle,
 }
@@ -55,55 +48,89 @@ fn with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> T {
     f(mg.as_mut().expect("Network is not initialized"))
 }
 
-fn device_path_to_string(device: &DevicePath) -> String {
-    let handle = uefi::boot::get_handle_for_protocol::<DevicePathToText>().unwrap();
-    let device_path_to_text =
-        uefi::boot::open_protocol_exclusive::<DevicePathToText>(handle).unwrap();
-    device_path_to_text
-        .convert_device_path_to_text(device, DisplayOnly(true), AllowShortcuts(true))
-        .unwrap()
-        .to_string()
-}
+pub(super) fn init() {
+    log::info!("Probing PCI network controllers (e1000/e1000e, rtl8169)...");
+    let pci_devices = pci::scan_pci();
+    let mut nics: Vec<KernelNic> = Vec::new();
 
-/// Find the topmost device that implements this protocol.
-fn handle_on_device<P: Protocol>(device: &DevicePath) -> Option<Handle> {
-    for i in 0..device.node_iter().count() {
-        let mut buf = vec![];
-        let mut dev = DevicePathBuilder::with_vec(&mut buf);
-        for node in device.node_iter().take(i + 1) {
-            dev = dev.push(&node).unwrap();
-        }
-        let mut dev = dev.finalize().unwrap();
-        if let Ok(h) = uefi::boot::locate_device_path::<P>(&mut dev) {
-            return Some(h);
+    for dev in pci_devices {
+        if e1000e::probe(&dev) {
+            log::info!(
+                "Found Intel Ethernet controller at {:02x}:{:02x}.{:x} (vendor: {:04x}, device: {:04x})",
+                dev.bus,
+                dev.dev,
+                dev.func,
+                dev.vendor_id,
+                dev.device_id
+            );
+            match e1000e::E1000Device::new(dev) {
+                Ok(nic) => nics.push(KernelNic::E1000(nic)),
+                Err(err) => log::error!("Failed to initialize Intel NIC: {err}"),
+            }
+        } else if rtl8169::probe(&dev) {
+            log::info!(
+                "Found Realtek Ethernet controller at {:02x}:{:02x}.{:x} (vendor: {:04x}, device: {:04x})",
+                dev.bus,
+                dev.dev,
+                dev.func,
+                dev.vendor_id,
+                dev.device_id
+            );
+            match rtl8169::Rtl8169Device::new(dev) {
+                Ok(nic) => nics.push(KernelNic::Rtl8169(nic)),
+                Err(err) => log::error!("Failed to initialize Realtek NIC: {err}"),
+            }
         }
     }
-    None
-}
 
-pub(super) fn init() {
-    let curopt = BootOptions::get(BootOptions::current());
-    let (descr, device) = BootOptions::boot_entry_info(&curopt[..]);
+    if nics.is_empty() {
+        panic!("No supported network controller found (Intel e1000/e1000e or Realtek rtl8169)");
+    }
+
+    // Network Interface Arbitration: check link status on detected NICs, polling up to 5s
     log::info!(
-        "Configuring network on interface used for booting ({} -- {})",
-        descr,
-        device_path_to_string(device)
+        "Checking link status across {} detected NIC(s)...",
+        nics.len()
+    );
+    let mut selected_idx = None;
+
+    for _ in 0..50 {
+        for (idx, nic) in nics.iter().enumerate() {
+            if nic.is_link_up() {
+                selected_idx = Some(idx);
+                break;
+            }
+        }
+        if selected_idx.is_some() {
+            break;
+        }
+        // Wait 100ms
+        let start = Timer::micros();
+        while Timer::micros() - start < 100_000 {
+            core::hint::spin_loop();
+        }
+    }
+
+    let selected_idx = selected_idx.unwrap_or_else(|| {
+        log::warn!("No interface reported link up within 5s; falling back to interface 0");
+        0
+    });
+
+    let selected_nic = nics.swap_remove(selected_idx);
+    let mac = selected_nic.mac_address();
+    log::info!(
+        "Selected network interface with MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (link up: {})",
+        mac[0],
+        mac[1],
+        mac[2],
+        mac[3],
+        mac[4],
+        mac[5],
+        selected_nic.is_link_up()
     );
 
-    let snp_handle = if let Some(handle) = handle_on_device::<SimpleNetwork>(device) {
-        handle
-    } else {
-        log::info!("SNP handle not found on device, falling back to first SNP handle");
-        uefi::boot::find_handles::<SimpleNetwork>().unwrap()[0]
-    };
-
-    let snp = uefi::boot::open_protocol_exclusive::<SimpleNetwork>(snp_handle).unwrap();
-
-    let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(
-        &snp.mode().current_address.0[..6],
-    ));
-
-    let mut device = SnpDevice::new(SendWrapper(snp));
+    let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(&mac));
+    let mut device = KernelNicDevice::new(selected_nic);
 
     let mut interface_config = Config::new(hw_addr);
     interface_config.random_seed = rdtsc() as u64;
@@ -126,24 +153,19 @@ pub(super) fn init() {
 
     Executor::spawn("[net_poll]", async {
         loop {
-            const MIN_WAIT_US: u64 = 1000;
             let wait = poll();
             match wait {
-                None => {
-                    Executor::wait_for_interrupt().await;
-                }
-                Some(wait) if wait < MIN_WAIT_US => {
-                    // Immediately wake if we want call poll() again in a very short time.
+                Some(0) => {
                     Executor::sched_yield().await;
                 }
-                Some(wait) => {
-                    futures::future::select(
-                        Executor::wait_for_interrupt(),
-                        // Reduce the waiting time, to try to ensure that we don't exceed the
-                        // suggested waiting time.
-                        Executor::sleep(Duration::from_micros(wait - MIN_WAIT_US)),
-                    )
-                    .await;
+                Some(us) if us < 1000 => {
+                    Executor::sched_yield().await;
+                }
+                Some(us) => {
+                    Executor::sleep(Duration::from_micros(us.min(1000))).await;
+                }
+                None => {
+                    Executor::sleep(Duration::from_millis(1)).await;
                 }
             }
         }
@@ -201,10 +223,12 @@ fn poll() -> Option<u64> {
     } = data.as_mut().unwrap();
 
     let status_out = interface.poll_egress(now, device, socket_set);
-    let status_in = interface.poll_ingress_single(now, device, socket_set);
-
-    if status_in == PollIngressSingleResult::None && status_out == PollResult::None {
-        return interface.poll_delay(now, socket_set).map(|x| x.micros());
+    let mut num_ingress = 0;
+    while interface.poll_ingress_single(now, device, socket_set) != PollIngressSingleResult::None {
+        num_ingress += 1;
+        if num_ingress >= 64 {
+            break;
+        }
     }
 
     let dhcp_status = socket_set
@@ -233,5 +257,13 @@ fn poll() -> Option<u64> {
             interface.routes_mut().remove_default_ipv4_route();
         }
     }
-    Some(0)
+
+    if num_ingress > 0 || status_out != PollResult::None || device.nic.has_packets() {
+        return Some(0);
+    }
+
+    interface
+        .poll_delay(now, socket_set)
+        .map(|x| x.micros())
+        .min(Some(1000))
 }

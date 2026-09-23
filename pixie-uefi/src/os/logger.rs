@@ -3,27 +3,80 @@ use core::fmt::Write;
 
 use log::Level;
 use spin::Mutex;
-use uefi::boot::ScopedProtocol;
-use uefi::proto::console::serial::Serial;
 use uefi::proto::console::text::Color;
 
-use crate::os::send_wrapper::SendWrapper;
+use crate::os::arch::io;
 use crate::os::timer::Timer;
 use crate::os::ui::{self, DrawArea};
 
-static SERIAL: Mutex<Option<SendWrapper<ScopedProtocol<Serial>>>> = Mutex::new(None);
+const COM1: u16 = 0x3F8;
+
+pub struct SerialPort {
+    port: u16,
+}
+
+impl SerialPort {
+    pub const fn new(port: u16) -> Self {
+        Self { port }
+    }
+
+    pub unsafe fn init(&self) {
+        unsafe {
+            io::outb(self.port + 1, 0x00); // Disable all interrupts
+            io::outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
+            io::outb(self.port, 0x01); // Set divisor to 1 (lo byte) 115200 baud
+            io::outb(self.port + 1, 0x00); //                  (hi byte)
+            io::outb(self.port + 3, 0x03); // 8 bits, no parity, one stop bit
+            io::outb(self.port + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
+            io::outb(self.port + 4, 0x0B); // IRQs enabled, RTS/DSR set
+        }
+    }
+
+    pub fn write_byte(&self, byte: u8) {
+        unsafe {
+            for _ in 0..100_000 {
+                if (io::inb(self.port + 5) & 0x20) != 0 {
+                    break;
+                }
+                io::pause();
+            }
+            io::outb(self.port, byte);
+        }
+    }
+
+    pub fn write_str(&self, s: &str) {
+        for b in s.bytes() {
+            if b == b'\n' {
+                self.write_byte(b'\r');
+            }
+            self.write_byte(b);
+        }
+    }
+
+    pub fn has_data(&self) -> bool {
+        unsafe { (io::inb(self.port + 5) & 0x01) != 0 }
+    }
+
+    pub fn read_byte(&self) -> Option<u8> {
+        if self.has_data() {
+            Some(unsafe { io::inb(self.port) })
+        } else {
+            None
+        }
+    }
+}
+
+pub static SERIAL: Mutex<SerialPort> = Mutex::new(SerialPort::new(COM1));
 static DRAW_AREA: Mutex<DrawArea> = Mutex::new(DrawArea::invalid());
 
-struct Logger {}
+struct Logger;
 
-pub(super) fn init() {
-    let serial = uefi::boot::find_handles::<Serial>()
-        .ok()
-        .map(|handles| uefi::boot::open_protocol_exclusive::<Serial>(handles[0]).unwrap());
+pub fn init() {
+    unsafe {
+        SERIAL.lock().init();
+    }
 
-    *SERIAL.lock() = serial.map(SendWrapper);
-
-    log::set_logger(&Logger {}).unwrap();
+    let _ = log::set_logger(&Logger);
     log::set_max_level(log::LevelFilter::Trace);
 
     *DRAW_AREA.lock() = DrawArea::logs();
@@ -31,30 +84,26 @@ pub(super) fn init() {
 }
 
 fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
-    if let Some(serial) = &mut *SERIAL.lock() {
-        let style = match level {
-            Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
-            Level::Debug => anstyle::AnsiColor::Blue.on_default(),
-            Level::Info => anstyle::AnsiColor::Green.on_default(),
-            Level::Warn => anstyle::AnsiColor::Yellow.on_default(),
-            Level::Error => anstyle::AnsiColor::Red.on_default().bold(),
-        };
-        write!(
-            serial.0,
-            "[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\r\n"
-        )
-        .unwrap();
-    }
+    let style = match level {
+        Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
+        Level::Debug => anstyle::AnsiColor::Blue.on_default(),
+        Level::Info => anstyle::AnsiColor::Green.on_default(),
+        Level::Warn => anstyle::AnsiColor::Yellow.on_default(),
+        Level::Error => anstyle::AnsiColor::Red.on_default().bold(),
+    };
 
-    {
-        let col = match level {
-            Level::Trace => Color::Cyan,
-            Level::Debug => Color::Blue,
-            Level::Info => Color::Green,
-            Level::Warn => Color::Yellow,
-            Level::Error => Color::Red,
-        };
-        let mut draw_area = DRAW_AREA.lock();
+    let log_line = format!("[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\n");
+    SERIAL.lock().write_str(&log_line);
+
+    let col = match level {
+        Level::Trace => Color::Cyan,
+        Level::Debug => Color::Blue,
+        Level::Info => Color::Green,
+        Level::Warn => Color::Yellow,
+        Level::Error => Color::Red,
+    };
+
+    if let Some(mut draw_area) = DRAW_AREA.try_lock() {
         write!(draw_area, "[{time:.1}s ").unwrap();
         draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
         writeln!(draw_area, "{target}] {msg}").unwrap();
@@ -81,6 +130,6 @@ impl log::Log for Logger {
     }
 
     fn flush(&self) {
-        // no-op
+        // Serial FIFO is flushed as bytes are written
     }
 }

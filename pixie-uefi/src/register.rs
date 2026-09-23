@@ -161,7 +161,7 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     let mem_stats = crate::os::memory::stats();
     let stat = UnitStats {
         ram: mem_stats.used + mem_stats.free + mem_stats.other,
-        disk: crate::os::disk::Disk::largest().size(),
+        disk: crate::os::disk::Disk::largest().await.size(),
         cpu: crate::os::util::get_cpu_model(),
     };
 

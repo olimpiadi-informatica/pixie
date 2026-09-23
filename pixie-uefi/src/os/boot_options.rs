@@ -114,6 +114,7 @@ impl BootOptions {
 
     /// Boot entry *must* be valid (TODO).
     /// Returns boot option description and device path of the option.
+    #[allow(dead_code)]
     pub fn boot_entry_info(entry: &[u8]) -> (String, &DevicePath) {
         let skip_attropt = &entry[6..];
         let end_of_description = skip_attropt

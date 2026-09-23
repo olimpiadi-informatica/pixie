@@ -1,93 +1,74 @@
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
-use uefi::Status;
-use uefi::boot::ScopedProtocol;
-use uefi::proto::network::snp::{ReceiveFlags, SimpleNetwork};
 
 use super::ETH_PACKET_SIZE;
-use crate::os::send_wrapper::SendWrapper;
-use crate::os::{input, ui};
-use crate::power_control;
+use super::e1000e::E1000Device;
+use super::rtl8169::Rtl8169Device;
 
-type Snp = SendWrapper<ScopedProtocol<SimpleNetwork>>;
+#[allow(clippy::large_enum_variant)]
+pub enum KernelNic {
+    E1000(E1000Device),
+    Rtl8169(Rtl8169Device),
+}
 
-pub struct SnpDevice {
-    snp: Snp,
+impl KernelNic {
+    pub fn mac_address(&self) -> [u8; 6] {
+        match self {
+            KernelNic::E1000(d) => d.mac_address(),
+            KernelNic::Rtl8169(d) => d.mac_address(),
+        }
+    }
+
+    pub fn is_link_up(&self) -> bool {
+        match self {
+            KernelNic::E1000(d) => d.is_link_up(),
+            KernelNic::Rtl8169(d) => d.is_link_up(),
+        }
+    }
+
+    pub fn transmit(&mut self, packet: &[u8]) {
+        match self {
+            KernelNic::E1000(d) => d.transmit(packet),
+            KernelNic::Rtl8169(d) => d.transmit(packet),
+        }
+    }
+
+    pub fn receive(&mut self, buf: &mut [u8]) -> Option<usize> {
+        match self {
+            KernelNic::E1000(d) => d.receive(buf),
+            KernelNic::Rtl8169(d) => d.receive(buf),
+        }
+    }
+
+    pub fn has_packets(&self) -> bool {
+        match self {
+            KernelNic::E1000(d) => d.has_packets(),
+            KernelNic::Rtl8169(d) => d.has_packets(),
+        }
+    }
+}
+
+pub struct KernelNicDevice {
+    pub nic: KernelNic,
     tx_buf: [u8; ETH_PACKET_SIZE],
-    // Received packets might contain Ethernet-related padding (up to 4 bytes).
     rx_buf: [u8; ETH_PACKET_SIZE + 4],
 }
 
-impl SnpDevice {
-    pub fn new(snp: Snp) -> SnpDevice {
-        // Shut down the SNP protocol if needed.
-        let _ = snp.shutdown();
-        let _ = snp.stop();
-        // Initialize.
-        snp.start().unwrap();
-        snp.initialize(0, 0).unwrap();
-        // Enable packet reception.
-        snp.receive_filters(
-            ReceiveFlags::UNICAST | ReceiveFlags::BROADCAST,
-            ReceiveFlags::empty(),
-            true,
-            None,
-        )
-        .unwrap();
-
-        SnpDevice {
-            snp,
+impl KernelNicDevice {
+    pub fn new(nic: KernelNic) -> Self {
+        Self {
+            nic,
             tx_buf: [0; ETH_PACKET_SIZE],
             rx_buf: [0; ETH_PACKET_SIZE + 4],
         }
     }
 }
 
-impl Drop for SnpDevice {
-    fn drop(&mut self) {
-        self.snp.stop().unwrap()
-    }
-}
-
-pub struct SnpRxToken<'a> {
+pub struct KernelRxToken<'a> {
     packet: &'a mut [u8],
 }
 
-pub struct SnpTxToken<'a> {
-    snp: &'a Snp,
-    buf: &'a mut [u8],
-}
-
-impl TxToken for SnpTxToken<'_> {
-    fn consume<R, F>(self, len: usize, f: F) -> R
-    where
-        F: FnOnce(&mut [u8]) -> R,
-    {
-        assert!(len <= self.buf.len());
-        let payload = &mut self.buf[..len];
-        let ret = f(payload);
-        let snp = self.snp;
-        snp.transmit(0, payload, None, None, None)
-            .expect("Failed to transmit frame");
-        // Wait until sending is complete.
-        while snp.get_recycled_transmit_buffer_status().unwrap().is_none() {
-            if snp.mode().media_present.0 == 0 {
-                let err = uefi::boot::set_watchdog_timer(0, 0x10000, None);
-                if let Err(err) = err
-                    && err.status() != Status::UNSUPPORTED
-                {
-                    log::error!("Error disabling watchdog: {err:?}");
-                }
-                ui::red_screen();
-                input::wait_for_key().expect("Failed to wait for input");
-                power_control::reset();
-            }
-        }
-        ret
-    }
-}
-
-impl RxToken for SnpRxToken<'_> {
+impl<'a> RxToken for KernelRxToken<'a> {
     fn consume<R, F>(self, f: F) -> R
     where
         F: FnOnce(&[u8]) -> R,
@@ -96,29 +77,52 @@ impl RxToken for SnpRxToken<'_> {
     }
 }
 
-impl Device for SnpDevice {
-    type TxToken<'d> = SnpTxToken<'d>;
-    type RxToken<'d> = SnpRxToken<'d>;
+pub struct KernelTxToken<'a> {
+    nic: &'a mut KernelNic,
+    buf: &'a mut [u8],
+}
 
-    fn receive(&mut self, _: Instant) -> Option<(SnpRxToken<'_>, SnpTxToken<'_>)> {
-        let rec = self.snp.receive(&mut self.rx_buf, None, None, None, None);
-        if rec == Err(Status::NOT_READY.into()) {
-            return None;
-        }
-        Some((
-            SnpRxToken {
-                packet: &mut self.rx_buf[..rec.unwrap()],
-            },
-            SnpTxToken {
-                snp: &self.snp,
-                buf: &mut self.tx_buf,
-            },
-        ))
+impl<'a> TxToken for KernelTxToken<'a> {
+    fn consume<R, F>(self, len: usize, f: F) -> R
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
+        assert!(len <= self.buf.len());
+        let payload = &mut self.buf[..len];
+        let ret = f(payload);
+        self.nic.transmit(payload);
+        ret
+    }
+}
+
+impl Device for KernelNicDevice {
+    type RxToken<'d>
+        = KernelRxToken<'d>
+    where
+        Self: 'd;
+    type TxToken<'d>
+        = KernelTxToken<'d>
+    where
+        Self: 'd;
+
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        let rec = self.nic.receive(&mut self.rx_buf);
+        rec.map(|len| {
+            (
+                KernelRxToken {
+                    packet: &mut self.rx_buf[..len],
+                },
+                KernelTxToken {
+                    nic: &mut self.nic,
+                    buf: &mut self.tx_buf,
+                },
+            )
+        })
     }
 
-    fn transmit(&mut self, _: Instant) -> Option<SnpTxToken<'_>> {
-        Some(SnpTxToken {
-            snp: &self.snp,
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        Some(KernelTxToken {
+            nic: &mut self.nic,
             buf: &mut self.tx_buf,
         })
     }
@@ -126,11 +130,8 @@ impl Device for SnpDevice {
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet;
-        let mode = self.snp.mode();
-        assert!(mode.media_header_size == 14);
-        caps.max_transmission_unit =
-            ETH_PACKET_SIZE.min((mode.max_packet_size + mode.media_header_size) as usize);
-        caps.max_burst_size = Some(1);
+        caps.max_transmission_unit = ETH_PACKET_SIZE;
+        caps.max_burst_size = None;
         caps
     }
 }

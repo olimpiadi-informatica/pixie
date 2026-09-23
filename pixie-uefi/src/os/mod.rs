@@ -1,28 +1,32 @@
-use core::ffi::c_void;
 use core::future::Future;
-use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
-use uefi::boot::{EventType, Tpl};
-use uefi::{Event, Status};
+use uefi::proto::console::gop::GraphicsOutput;
 
+use self::boot_info::BootInfo;
 use self::error::Result;
 use self::executor::Executor;
 use self::timer::Timer;
 
+pub mod arch;
+pub mod boot_info;
 pub mod boot_options;
 pub mod disk;
 pub mod error;
 pub mod executor;
+mod font;
 pub mod input;
 mod logger;
 pub mod memory;
 pub mod net;
+pub mod panic;
+pub mod pci;
 mod send_wrapper;
 mod timer;
 pub mod ui;
 pub mod util;
+pub mod watchdog;
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
@@ -33,27 +37,98 @@ where
 {
     assert!(!INITIALIZED.swap(true, Ordering::Relaxed));
 
+    // Initialize UEFI helpers while Boot Services are alive
     uefi::helpers::init().unwrap();
 
-    unsafe extern "efiapi" fn exit_boot_services(_e: Event, _ctx: Option<NonNull<c_void>>) {
-        panic!("You must never exit boot services");
-    }
+    // 1. Locate GOP framebuffer
+    let gop_handle = uefi::boot::find_handles::<GraphicsOutput>()
+        .ok()
+        .and_then(|handles| handles.into_iter().next())
+        .expect("GraphicsOutput protocol not found");
 
-    unsafe {
-        uefi::boot::create_event(
-            EventType::SIGNAL_EXIT_BOOT_SERVICES,
-            Tpl::NOTIFY,
-            Some(exit_boot_services),
-            None,
-        )
-        .unwrap();
-    }
+    let mut gop = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(gop_handle)
+        .expect("Failed to open GraphicsOutput protocol");
 
+    let mode_info = gop.current_mode_info();
+    let (fb_width, fb_height) = mode_info.resolution();
+    let fb_stride = mode_info.stride() as u32;
+    let mut fb = gop.frame_buffer();
+    let fb_ptr = fb.as_mut_ptr();
+    let fb_size = fb.size();
+
+    // 2. Locate ACPI RSDP pointer
+    let rsdp_addr = uefi::system::with_config_table(|entries| {
+        for entry in entries {
+            if entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID
+                || entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI_GUID
+            {
+                return Some(entry.address as u64);
+            }
+        }
+        None
+    });
+
+    // 3. Calibrate TSC before ExitBootServices
     Timer::ensure_init();
-    ui::init();
-    logger::init();
+    let tsc_ticks_per_micro = Timer::ticks_per_micro();
+
+    // 4. Save BootInfo
+    let boot_info = BootInfo {
+        framebuffer_base: fb_ptr as u64,
+        framebuffer_size: fb_size,
+        fb_width: fb_width as u32,
+        fb_height: fb_height as u32,
+        fb_stride,
+        rsdp_addr,
+        tsc_ticks_per_micro,
+    };
+    boot_info::set_boot_info(boot_info);
+
+    // Drop GOP protocol handle before exiting boot services
+    drop(gop);
+
+    // 5. Exit UEFI Boot Services -> Transition to Bare-Metal Kernel!
+    let memory_map = unsafe { uefi::boot::exit_boot_services(None) };
+
+    // 6. Kernel Architecture Initialization
+    unsafe {
+        arch::init(); // GDT, IDT (with lightweight ISRs), Local APIC
+    }
+
+    // 7. Memory Allocators
+    memory::init(&memory_map);
+
+    // 8. Console & UI & Watchdog
+    ui::init(boot_info); // GOP Framebuffer UI
+    logger::init(); // 16550 UART COM1
+    watchdog::init();
+
+    log::info!("Pixie Bare-Metal Kernel initialized in 64-bit Long Mode");
+    log::info!(
+        "Framebuffer: {}x{} (stride: {}) at 0x{:X}",
+        fb_width,
+        fb_height,
+        fb_stride,
+        fb_ptr as usize
+    );
+
+    let mem_stats = memory::stats();
+    log::info!(
+        "Physical Memory: {} MB usable, {} MB reserved",
+        (mem_stats.used + mem_stats.free) / (1024 * 1024),
+        mem_stats.other / (1024 * 1024)
+    );
+
+    // 9. Start Local APIC periodic timer for watchdog (e.g. vector 32)
+    unsafe {
+        arch::apic::start_timer(32, 100_000_000);
+        arch::io::sti(); // Enable interrupts
+    }
+
+    // 10. Initialize network stack
     net::init();
 
+    // 11. Spawn core tasks
     Executor::spawn("init", async move {
         loop {
             if let Err(err) = f().await {
@@ -64,17 +139,8 @@ where
 
     Executor::spawn("[watchdog]", async move {
         loop {
-            let err = uefi::boot::set_watchdog_timer(300, 0x10000, None);
-
-            if let Err(err) = err {
-                if err.status() != Status::UNSUPPORTED {
-                    log::error!("Error disabling watchdog: {err:?}");
-                }
-
-                break;
-            }
-
-            Executor::sleep(Duration::from_secs(30)).await;
+            watchdog::pet();
+            Executor::sleep(Duration::from_secs(5)).await;
         }
     });
 
