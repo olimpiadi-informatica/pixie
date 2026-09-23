@@ -20,6 +20,16 @@ impl Timer {
         if INITIALIZED.load(Ordering::Relaxed) {
             return;
         }
+
+        // Try CPUID leaf 0x16 first (Processor Base Frequency in MHz, available on Intel Core 6th Gen+)
+        let max_leaf = core::arch::x86_64::__get_cpuid_max(0).0;
+        let cpuid_mhz = if max_leaf >= 0x16 {
+            let res = core::arch::x86_64::__cpuid(0x16);
+            res.eax as i64 // Base frequency in MHz (e.g. 2400 for 2.4GHz)
+        } else {
+            0
+        };
+
         // Read timer clock & wait to stabilize the counter.
         rdtsc();
         uefi::boot::stall(Duration::from_micros(20000));
@@ -28,11 +38,17 @@ impl Timer {
         let tsc_after = rdtsc();
 
         TICKS_AT_START.store(tsc_after, Ordering::Relaxed);
-        // TICKS_PER_MICRO is a multiple of 10 on every reasonable system.
-        TICKS_PER_MICRO.store(
-            (tsc_after - tsc_before) / (20000 * 10) * 10,
-            Ordering::Relaxed,
-        );
+
+        let calibrated = (tsc_after - tsc_before) / 20_000;
+        let ticks_per_micro = if (500..=6000).contains(&cpuid_mhz) {
+            cpuid_mhz
+        } else if (500..=6000).contains(&calibrated) {
+            (calibrated / 10) * 10
+        } else {
+            2500 // Sane 2.5 GHz fallback
+        };
+
+        TICKS_PER_MICRO.store(ticks_per_micro.max(1), Ordering::Relaxed);
         INITIALIZED.store(true, Ordering::Relaxed);
     }
 

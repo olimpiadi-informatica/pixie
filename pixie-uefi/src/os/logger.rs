@@ -13,38 +13,59 @@ const COM1: u16 = 0x3F8;
 
 pub struct SerialPort {
     port: u16,
+    present: bool,
 }
 
 impl SerialPort {
     pub const fn new(port: u16) -> Self {
-        Self { port }
+        Self {
+            port,
+            present: false,
+        }
     }
 
-    pub unsafe fn init(&self) {
+    pub unsafe fn init(&mut self) {
         unsafe {
+            // Test if 16550 UART hardware is physically present using loopback mode
             io::outb(self.port + 1, 0x00); // Disable all interrupts
-            io::outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
-            io::outb(self.port, 0x01); // Set divisor to 1 (lo byte) 115200 baud
+            io::outb(self.port + 4, 0x1E); // Loopback mode, RTS/DTR set
+            io::outb(self.port, 0xAE);     // Write test byte
+            let echo = io::inb(self.port);
+            if echo != 0xAE {
+                self.present = false;
+                return;
+            }
+            self.present = true;
+
+            // Initialize baud rate divisor to 1 (115200 baud)
+            io::outb(self.port + 3, 0x80); // Enable DLAB
+            io::outb(self.port, 0x01);     // Set divisor to 1 (lo byte)
             io::outb(self.port + 1, 0x00); //                  (hi byte)
             io::outb(self.port + 3, 0x03); // 8 bits, no parity, one stop bit
-            io::outb(self.port + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
-            io::outb(self.port + 4, 0x0B); // IRQs enabled, RTS/DSR set
+            io::outb(self.port + 2, 0xC7); // Enable FIFO, clear them, 14-byte threshold
+            io::outb(self.port + 4, 0x0B); // Leave loopback, IRQs enabled, RTS/DSR set
         }
     }
 
     pub fn write_byte(&self, byte: u8) {
+        if !self.present {
+            return;
+        }
         unsafe {
-            for _ in 0..100_000 {
+            for _ in 0..2_000 {
                 if (io::inb(self.port + 5) & 0x20) != 0 {
-                    break;
+                    io::outb(self.port, byte);
+                    return;
                 }
                 io::pause();
             }
-            io::outb(self.port, byte);
         }
     }
 
     pub fn write_str(&self, s: &str) {
+        if !self.present {
+            return;
+        }
         for b in s.bytes() {
             if b == b'\n' {
                 self.write_byte(b'\r');
@@ -54,10 +75,16 @@ impl SerialPort {
     }
 
     pub fn has_data(&self) -> bool {
+        if !self.present {
+            return false;
+        }
         unsafe { (io::inb(self.port + 5) & 0x01) != 0 }
     }
 
     pub fn read_byte(&self) -> Option<u8> {
+        if !self.present {
+            return None;
+        }
         if self.has_data() {
             Some(unsafe { io::inb(self.port) })
         } else {

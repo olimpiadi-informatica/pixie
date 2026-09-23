@@ -60,14 +60,15 @@ pub(super) fn spawn_network_speed_task() {
             let w = draw_area.size().0;
             let vtx = TX_SPEED.bytes_per_second();
             let vrx = RX_SPEED.bytes_per_second();
+            let pad = w.saturating_sub(22);
             draw_area.write_with_color(
-                &format!("Network \u{2193}:{0:1$}", "", w - 22),
+                &format!("Network \u{2193}:{0:1$}", "", pad),
                 Color::Green,
                 Color::Black,
             );
             writeln!(draw_area, "{:10.1}/s", BytesFmt(vrx)).unwrap();
             draw_area.write_with_color(
-                &format!("Network \u{2191}:{0:1$}", "", w - 22),
+                &format!("Network \u{2191}:{0:1$}", "", pad),
                 Color::Cyan,
                 Color::Black,
             );

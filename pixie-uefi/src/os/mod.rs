@@ -40,21 +40,81 @@ where
     // Initialize UEFI helpers while Boot Services are alive
     uefi::helpers::init().unwrap();
 
-    // 1. Locate GOP framebuffer
-    let gop_handle = uefi::boot::find_handles::<GraphicsOutput>()
-        .ok()
-        .and_then(|handles| handles.into_iter().next())
-        .expect("GraphicsOutput protocol not found");
+    // 1. Locate and configure GOP framebuffer
+    let gop_handles = uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default();
+    let open_gop = |handle: uefi::Handle| -> Option<uefi::boot::ScopedProtocol<GraphicsOutput>> {
+        if let Ok(gop) = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(handle) {
+            return Some(gop);
+        }
+        let params = uefi::boot::OpenProtocolParams {
+            handle,
+            agent: uefi::boot::image_handle(),
+            controller: None,
+        };
+        unsafe {
+            uefi::boot::open_protocol::<GraphicsOutput>(
+                params,
+                uefi::boot::OpenProtocolAttributes::GetProtocol,
+            )
+            .ok()
+        }
+    };
 
-    let mut gop = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(gop_handle)
-        .expect("Failed to open GraphicsOutput protocol");
+    let mut selected_fb = None;
+    for &handle in &gop_handles {
+        if let Some(mut gop) = open_gop(handle) {
+            let mode_info = gop.current_mode_info();
+            let (fb_width, fb_height) = mode_info.resolution();
+            let fb_stride = mode_info.stride() as u32;
+            let mut fb = gop.frame_buffer();
+            let fb_ptr = fb.as_mut_ptr();
+            let fb_size = fb.size();
+            if fb_width > 0 && fb_height > 0 && !fb_ptr.is_null() && fb_size > 0 {
+                selected_fb = Some((
+                    fb_ptr as u64,
+                    fb_size,
+                    fb_width as u32,
+                    fb_height as u32,
+                    fb_stride,
+                ));
+                break;
+            }
+        }
+    }
 
-    let mode_info = gop.current_mode_info();
-    let (fb_width, fb_height) = mode_info.resolution();
-    let fb_stride = mode_info.stride() as u32;
-    let mut fb = gop.frame_buffer();
-    let fb_ptr = fb.as_mut_ptr();
-    let fb_size = fb.size();
+    if selected_fb.is_none() {
+        for &handle in &gop_handles {
+            if let Some(mut gop) = open_gop(handle) {
+                let valid_mode = gop.modes().find(|m| {
+                    let info = m.info();
+                    let (w, h) = info.resolution();
+                    w > 0 && h > 0
+                });
+                if let Some(mode) = valid_mode {
+                    let _ = gop.set_mode(&mode);
+                    let mode_info = gop.current_mode_info();
+                    let (fb_width, fb_height) = mode_info.resolution();
+                    let fb_stride = mode_info.stride() as u32;
+                    let mut fb = gop.frame_buffer();
+                    let fb_ptr = fb.as_mut_ptr();
+                    let fb_size = fb.size();
+                    if fb_width > 0 && fb_height > 0 && !fb_ptr.is_null() && fb_size > 0 {
+                        selected_fb = Some((
+                            fb_ptr as u64,
+                            fb_size,
+                            fb_width as u32,
+                            fb_height as u32,
+                            fb_stride,
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    let (fb_base, fb_size, fb_width, fb_height, fb_stride) = selected_fb
+        .expect("GraphicsOutput protocol not found or no valid framebuffer mode");
 
     // 2. Locate ACPI RSDP pointer
     let rsdp_addr = uefi::system::with_config_table(|entries| {
@@ -74,18 +134,15 @@ where
 
     // 4. Save BootInfo
     let boot_info = BootInfo {
-        framebuffer_base: fb_ptr as u64,
+        framebuffer_base: fb_base,
         framebuffer_size: fb_size,
-        fb_width: fb_width as u32,
-        fb_height: fb_height as u32,
+        fb_width,
+        fb_height,
         fb_stride,
         rsdp_addr,
         tsc_ticks_per_micro,
     };
     boot_info::set_boot_info(boot_info);
-
-    // Drop GOP protocol handle before exiting boot services
-    drop(gop);
 
     // 5. Exit UEFI Boot Services -> Transition to Bare-Metal Kernel!
     let memory_map = unsafe { uefi::boot::exit_boot_services(None) };
@@ -109,7 +166,7 @@ where
         fb_width,
         fb_height,
         fb_stride,
-        fb_ptr as usize
+        fb_base as usize
     );
 
     let mem_stats = memory::stats();

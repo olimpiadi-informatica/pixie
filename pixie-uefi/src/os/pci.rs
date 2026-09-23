@@ -109,31 +109,16 @@ impl PciDevice {
         // Memory space
         let is_64bit = ((orig >> 1) & 0x03) == 0x02;
 
-        // Size probe
-        self.write_u32(offset, 0xFFFF_FFFF);
-        let size_low = self.read_u32(offset);
-        self.write_u32(offset, orig);
-
-        let (base, size) = if is_64bit {
+        let base = if is_64bit {
             let orig_high = self.read_u32(offset + 4);
-            self.write_u32(offset + 4, 0xFFFF_FFFF);
-            let size_high = self.read_u32(offset + 4);
-            self.write_u32(offset + 4, orig_high);
-
-            let base_addr = ((orig_high as u64) << 32) | ((orig as u64) & 0xFFFF_FFF0);
-            let size_mask = ((size_high as u64) << 32) | ((size_low as u64) & 0xFFFF_FFF0);
-            let sz = (!(size_mask) + 1) as usize;
-            (base_addr, sz)
+            ((orig_high as u64) << 32) | ((orig as u64) & 0xFFFF_FFF0)
         } else {
-            let base_addr = (orig as u64) & 0xFFFF_FFF0;
-            let size_mask = (size_low as u64) & 0xFFFF_FFF0;
-            let sz = (!(size_mask) + 1) as usize;
-            (base_addr, sz)
+            (orig as u64) & 0xFFFF_FFF0
         };
 
         Some(Bar::Memory {
             base,
-            size,
+            size: 0,
             is_64bit,
         })
     }

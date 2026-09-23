@@ -178,7 +178,7 @@ pub(super) fn init() {
             let ip = ip();
             let w = draw_area.size().0;
             if let Some(ip) = ip {
-                write!(draw_area, "IP: {ip:>0$}", w - 4).unwrap();
+                write!(draw_area, "IP: {ip:>0$}", w.saturating_sub(4)).unwrap();
                 Executor::sleep(Duration::from_secs(10)).await
             } else {
                 draw_area.write_with_color("DHCP...", Color::Yellow, Color::Black);

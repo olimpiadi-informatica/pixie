@@ -1,6 +1,8 @@
 use core::arch::asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use super::io;
+
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 const APIC_DEFAULT_BASE: u64 = 0xFEE00000;
 
@@ -41,6 +43,12 @@ unsafe fn apic_write(offset: usize, val: u32) {
 }
 
 pub unsafe fn init() {
+    // Mask legacy 8259 PIC to prevent PIT IRQ 0 from firing on CPU vector 8 (Double Fault)
+    unsafe {
+        io::outb(0x21, 0xFF);
+        io::outb(0xA1, 0xFF);
+    }
+
     let apic_msr = unsafe { rdmsr(IA32_APIC_BASE_MSR) };
     let base = apic_msr & 0xFFFF_F000;
     let base = if base == 0 { APIC_DEFAULT_BASE } else { base };

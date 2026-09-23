@@ -112,8 +112,13 @@ impl Executor {
     async fn draw_tasks() {
         let mut draw_area = DrawArea::tasks();
         let (w, h) = draw_area.size();
-        assert!((w - 1).is_multiple_of(TASK_LEN + 1));
+        if w <= 1 || h <= 2 {
+            return;
+        }
         let num_w = (w - 1) / (TASK_LEN + 1);
+        if num_w == 0 {
+            return;
+        }
         let mut last = Timer::micros() as u64;
         Self::sleep(Duration::from_millis(100)).await;
         loop {

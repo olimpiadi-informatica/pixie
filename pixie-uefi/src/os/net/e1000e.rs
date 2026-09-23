@@ -107,7 +107,7 @@ impl E1000Device {
         let mut mac = [0u8; 6];
         let ral = unsafe { Self::mmio_read(mmio_base, REG_RAL) };
         let rah = unsafe { Self::mmio_read(mmio_base, REG_RAH) };
-        if (rah & (1 << 31)) != 0 && ral != 0 {
+        if ral != 0 && ral != 0xFFFF_FFFF {
             mac[0] = (ral & 0xFF) as u8;
             mac[1] = ((ral >> 8) & 0xFF) as u8;
             mac[2] = ((ral >> 16) & 0xFF) as u8;
@@ -136,7 +136,8 @@ impl E1000Device {
         unsafe {
             Self::mmio_write(mmio_base, REG_CTRL, ctrl | CTRL_RST);
         }
-        for _ in 0..100_000 {
+        let reset_start = crate::os::timer::Timer::micros();
+        while (crate::os::timer::Timer::micros() - reset_start) < 50_000 {
             let c = unsafe { Self::mmio_read(mmio_base, REG_CTRL) };
             if (c & CTRL_RST) == 0 {
                 break;
@@ -205,12 +206,12 @@ impl E1000Device {
         }
 
         unsafe {
-            Self::mmio_write(mmio_base, REG_RDBAL, (rx_ring_phys & 0xFFFF_FFFF) as u32);
             Self::mmio_write(
                 mmio_base,
                 REG_RDBAH,
                 ((rx_ring_phys >> 32) & 0xFFFF_FFFF) as u32,
             );
+            Self::mmio_write(mmio_base, REG_RDBAL, (rx_ring_phys & 0xFFFF_FFFF) as u32);
             Self::mmio_write(mmio_base, REG_RDLEN, rx_ring_bytes as u32);
             Self::mmio_write(mmio_base, REG_RDH, 0);
             Self::mmio_write(mmio_base, REG_RDT, (NUM_RX_DESC - 1) as u32);
@@ -249,12 +250,12 @@ impl E1000Device {
         }
 
         unsafe {
-            Self::mmio_write(mmio_base, REG_TDBAL, (tx_ring_phys & 0xFFFF_FFFF) as u32);
             Self::mmio_write(
                 mmio_base,
                 REG_TDBAH,
                 ((tx_ring_phys >> 32) & 0xFFFF_FFFF) as u32,
             );
+            Self::mmio_write(mmio_base, REG_TDBAL, (tx_ring_phys & 0xFFFF_FFFF) as u32);
             Self::mmio_write(mmio_base, REG_TDLEN, tx_ring_bytes as u32);
             Self::mmio_write(mmio_base, REG_TDH, 0);
             Self::mmio_write(mmio_base, REG_TDT, 0);
@@ -296,8 +297,7 @@ impl E1000Device {
         while (unsafe { core::ptr::read_volatile(&desc.status) } & 1) == 0 {
             core::hint::spin_loop();
             iters += 1;
-            if iters > 1_000_000 {
-                log::warn!("e1000 transmit timeout waiting for descriptor");
+            if iters > 10_000 {
                 return;
             }
         }

@@ -167,7 +167,8 @@ impl Rtl8169Device {
         unsafe {
             reg.write_u8(REG_CR, CR_RST);
         }
-        for _ in 0..100_000 {
+        let reset_start = crate::os::timer::Timer::micros();
+        while (crate::os::timer::Timer::micros() - reset_start) < 50_000 {
             let cr = unsafe { reg.read_u8(REG_CR) };
             if (cr & CR_RST) == 0 {
                 break;
@@ -180,28 +181,23 @@ impl Rtl8169Device {
             reg.write_u8(REG_9346CR, 0xC0);
         }
 
-        // 4. Enable Tx and Rx
-        unsafe {
-            reg.write_u8(REG_CR, CR_TE | CR_RE);
-        }
-
-        // 5. Transmit configuration: max DMA burst 1024 bytes, standard IFG
+        // 4. Transmit configuration: max DMA burst 1024 bytes, standard IFG
         unsafe {
             reg.write_u32(REG_TCR, (6 << 8) | (3 << 24));
         }
 
-        // 6. Receive configuration: Accept Physical Match, Multicast, Broadcast; unlimited Rx DMA burst
+        // 5. Receive configuration: Accept Physical Match, Multicast, Broadcast; unlimited Rx DMA burst
         unsafe {
             reg.write_u32(REG_RCR, 0x0E | (7 << 8) | (7 << 13));
         }
 
-        // 7. Max Rx packet size
+        // 6. Max Rx packet size and enable 64-bit PCI DAC mode + Checksum offload
         unsafe {
             reg.write_u16(REG_RMS, BUFFER_SIZE as u16);
-            reg.write_u16(REG_CPCR, 0);
+            reg.write_u16(REG_CPCR, (1 << 4) | (1 << 5)); // PCIDAC | RxChkSum
         }
 
-        // 8. Allocate and initialize Receive Descriptor Ring
+        // 7. Allocate and initialize Receive Descriptor Ring
         let rx_ring_phys = memory::alloc_page().ok_or("Out of memory for RX ring")?;
         let rx_descs =
             unsafe { core::slice::from_raw_parts_mut(rx_ring_phys as *mut RtlDesc, NUM_RX_DESC) };
@@ -226,15 +222,16 @@ impl Rtl8169Device {
             };
         }
 
+        // Program RX Ring address: write HIGH before LOW to latch 64-bit address
         unsafe {
-            reg.write_u32(REG_RX_DESC_LOW, (rx_ring_phys & 0xFFFF_FFFF) as u32);
             reg.write_u32(
                 REG_RX_DESC_HIGH,
                 ((rx_ring_phys >> 32) & 0xFFFF_FFFF) as u32,
             );
+            reg.write_u32(REG_RX_DESC_LOW, (rx_ring_phys & 0xFFFF_FFFF) as u32);
         }
 
-        // 9. Allocate and initialize Transmit Descriptor Ring
+        // 8. Allocate and initialize Transmit Descriptor Ring
         let tx_ring_phys = memory::alloc_page().ok_or("Out of memory for TX ring")?;
         let tx_descs =
             unsafe { core::slice::from_raw_parts_mut(tx_ring_phys as *mut RtlDesc, NUM_TX_DESC) };
@@ -259,12 +256,18 @@ impl Rtl8169Device {
             };
         }
 
+        // Program TX Ring address: write HIGH before LOW to latch 64-bit address
         unsafe {
-            reg.write_u32(REG_TX_DESC_LOW, (tx_ring_phys & 0xFFFF_FFFF) as u32);
             reg.write_u32(
                 REG_TX_DESC_HIGH,
                 ((tx_ring_phys >> 32) & 0xFFFF_FFFF) as u32,
             );
+            reg.write_u32(REG_TX_DESC_LOW, (tx_ring_phys & 0xFFFF_FFFF) as u32);
+        }
+
+        // 9. Enable Tx and Rx AFTER descriptor rings are fully programmed
+        unsafe {
+            reg.write_u8(REG_CR, CR_TE | CR_RE);
         }
 
         // 10. Lock configuration registers and mask interrupts
@@ -305,8 +308,7 @@ impl Rtl8169Device {
         while (unsafe { core::ptr::read_volatile(&desc.opts1) } & DESC_OWN) != 0 {
             core::hint::spin_loop();
             iters += 1;
-            if iters > 1_000_000 {
-                log::warn!("rtl8169 transmit timeout waiting for descriptor");
+            if iters > 10_000 {
                 return;
             }
         }
@@ -371,5 +373,5 @@ impl Rtl8169Device {
 }
 
 pub fn probe(pci: &PciDevice) -> bool {
-    pci.vendor_id == 0x10EC && pci.class_code == 0x02
+    pci.vendor_id == 0x10EC && pci.class_code == 0x02 && pci.device_id != 0x8139
 }

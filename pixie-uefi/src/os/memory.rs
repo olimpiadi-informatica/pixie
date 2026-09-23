@@ -172,34 +172,6 @@ pub struct MemoryStats {
 
 static TOTAL_RAM: AtomicU64 = AtomicU64::new(0);
 
-fn protect_page_tables(fa: &mut FrameBitmap, pml4_phys: u64) {
-    if pml4_phys == 0 {
-        return;
-    }
-    fa.mark_used((pml4_phys / PAGE_SIZE) as usize, 1);
-    let pml4 = unsafe { core::slice::from_raw_parts(pml4_phys as *const u64, 512) };
-    for &pml4e in pml4 {
-        if (pml4e & 1) != 0 {
-            let pdpt_phys = pml4e & 0x000F_FFFF_FFFF_F000;
-            fa.mark_used((pdpt_phys / PAGE_SIZE) as usize, 1);
-            let pdpt = unsafe { core::slice::from_raw_parts(pdpt_phys as *const u64, 512) };
-            for &pdpte in pdpt {
-                if (pdpte & 1) != 0 && (pdpte & (1 << 7)) == 0 {
-                    let pd_phys = pdpte & 0x000F_FFFF_FFFF_F000;
-                    fa.mark_used((pd_phys / PAGE_SIZE) as usize, 1);
-                    let pd = unsafe { core::slice::from_raw_parts(pd_phys as *const u64, 512) };
-                    for &pde in pd {
-                        if (pde & 1) != 0 && (pde & (1 << 7)) == 0 {
-                            let pt_phys = pde & 0x000F_FFFF_FFFF_F000;
-                            fa.mark_used((pt_phys / PAGE_SIZE) as usize, 1);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 pub fn init(memory_map: &MemoryMapOwned) {
     let mut total_ram = 0u64;
 
@@ -213,27 +185,17 @@ pub fn init(memory_map: &MemoryMapOwned) {
             let num_pages = entry.page_count as usize;
 
             match entry.ty {
-                MemoryType::CONVENTIONAL
-                | MemoryType::BOOT_SERVICES_CODE
-                | MemoryType::BOOT_SERVICES_DATA => {
+                MemoryType::CONVENTIONAL | MemoryType::BOOT_SERVICES_CODE => {
                     fa.mark_free(start_page, num_pages);
                 }
                 _ => {
-                    // Reserved / Runtime / LOADER_CODE / LOADER_DATA (our kernel code, data, and stack)
+                    // Reserved / Runtime / LOADER_CODE / LOADER_DATA / BOOT_SERVICES_DATA
                 }
             }
         }
 
         // Always protect the first 1MB (BIOS IVT, BDA, EBDA, VGA buffers)
         fa.mark_used(0, (0x100000 / PAGE_SIZE) as usize);
-
-        // Protect active page tables pointed to by CR3
-        let cr3: u64;
-        unsafe {
-            core::arch::asm!("mov {}, cr3", out(reg) cr3);
-        }
-        let pml4_phys = cr3 & 0x000F_FFFF_FFFF_F000;
-        protect_page_tables(&mut fa, pml4_phys);
     }
 
     TOTAL_RAM.store(total_ram, Ordering::Relaxed);
