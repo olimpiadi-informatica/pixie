@@ -161,6 +161,7 @@ impl Disk {
         self.write_sync(offset, buf)
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn partitions(&mut self) -> Result<((u64, u64), (u64, u64), Vec<DiskPartition>)> {
         fn gpt_range(header: &GptHeader, block_size: u64) -> (u64, u64) {
             let header_start = header.my_lba.to_u64() * block_size;
@@ -168,7 +169,7 @@ impl Disk {
 
             let entries_bytes = header.number_of_partition_entries.to_u32() as u64
                 * header.size_of_partition_entry.to_u32() as u64;
-            let entries_blocks = (entries_bytes + block_size - 1) / block_size;
+            let entries_blocks = entries_bytes.div_ceil(block_size);
             let entries_start = header.partition_entry_lba.to_u64() * block_size;
             let entries_end = entries_start + entries_blocks * block_size;
 
@@ -205,7 +206,11 @@ impl Disk {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok((gpt_range(&header, block_size), gpt_range(&secondary_header, block_size), x))
+        Ok((
+            gpt_range(&header, block_size),
+            gpt_range(&secondary_header, block_size),
+            x,
+        ))
     }
 }
 
