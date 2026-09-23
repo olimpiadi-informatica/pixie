@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790158747333,
+  "lastUpdate": 1790159646839,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -251,6 +251,48 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
             "value": 3522755.65,
             "range": "± 222539.44",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "committer": {
+            "email": "casarin.filippo17@gmail.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "364c6114ffd7fb2be1945e1026ebdb65795570a2",
+          "message": "fmt & clippy",
+          "timestamp": "2026-09-23T12:32:24+02:00",
+          "tree_id": "c087f9c36da22fe4dd602da311c8823274af721d",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/364c6114ffd7fb2be1945e1026ebdb65795570a2"
+        },
+        "date": 1790159645707,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_200kib",
+            "value": 344228.26,
+            "range": "± 3449.87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_20b",
+            "value": 2390.89,
+            "range": "± 15.17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
+            "value": 3508314.55,
+            "range": "± 197206.91",
             "unit": "ns/iter"
           }
         ]
