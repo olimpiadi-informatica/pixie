@@ -1,11 +1,12 @@
+use alloc::vec::Vec;
 use core::sync::atomic::{Ordering, compiler_fence};
 
 use crate::os::arch::io;
 use crate::os::memory;
 use crate::os::pci::{Bar, PciDevice};
 
-const NUM_RX_DESC: usize = 64;
-const NUM_TX_DESC: usize = 64;
+const NUM_RX_DESC: usize = 256;
+const NUM_TX_DESC: usize = 128;
 pub const BUFFER_SIZE: usize = 2048;
 
 // Realtek Register Offsets
@@ -128,10 +129,10 @@ pub struct Rtl8169Device {
     reg: RegisterAccess,
     mac: [u8; 6],
     rx_descs: &'static mut [RtlDesc],
-    rx_bufs: [u64; NUM_RX_DESC],
+    rx_bufs: Vec<u64>,
     rx_cur: usize,
     tx_descs: &'static mut [RtlDesc],
-    tx_bufs: [u64; NUM_TX_DESC],
+    tx_bufs: Vec<u64>,
     tx_cur: usize,
 }
 
@@ -162,6 +163,13 @@ impl Rtl8169Device {
         for (i, byte) in mac.iter_mut().enumerate() {
             *byte = unsafe { reg.read_u8(REG_MAC0 + i) };
         }
+        if mac == [0; 6] || mac == [0xFF; 6] {
+            if let Some(info) = *crate::os::boot_info::BOOT_INFO.lock() {
+                if let Some(uefi_mac) = info.uefi_mac {
+                    mac = uefi_mac;
+                }
+            }
+        }
 
         // 2. Reset device
         unsafe {
@@ -181,14 +189,21 @@ impl Rtl8169Device {
             reg.write_u8(REG_9346CR, 0xC0);
         }
 
+        // Reprogram MAC address registers after reset
+        for (i, byte) in mac.iter().enumerate() {
+            unsafe {
+                reg.write_u8(REG_MAC0 + i, *byte);
+            }
+        }
+
         // 4. Transmit configuration: max DMA burst 1024 bytes, standard IFG
         unsafe {
             reg.write_u32(REG_TCR, (6 << 8) | (3 << 24));
         }
 
-        // 5. Receive configuration: Accept Physical Match, Multicast, Broadcast; unlimited Rx DMA burst
+        // 5. Receive configuration: Accept All (AAP | APM | AM | AB); unlimited Rx DMA burst
         unsafe {
-            reg.write_u32(REG_RCR, 0x0E | (7 << 8) | (7 << 13));
+            reg.write_u32(REG_RCR, 0x0F | (7 << 8) | (7 << 13));
         }
 
         // 6. Max Rx packet size and enable 64-bit PCI DAC mode + Checksum offload
@@ -202,7 +217,7 @@ impl Rtl8169Device {
         let rx_descs =
             unsafe { core::slice::from_raw_parts_mut(rx_ring_phys as *mut RtlDesc, NUM_RX_DESC) };
 
-        let mut rx_bufs = [0u64; NUM_RX_DESC];
+        let mut rx_bufs = alloc::vec![0u64; NUM_RX_DESC];
         for i in (0..NUM_RX_DESC).step_by(2) {
             let page = memory::alloc_page().ok_or("Out of memory for RX buffer")?;
             rx_bufs[i] = page;
@@ -236,7 +251,7 @@ impl Rtl8169Device {
         let tx_descs =
             unsafe { core::slice::from_raw_parts_mut(tx_ring_phys as *mut RtlDesc, NUM_TX_DESC) };
 
-        let mut tx_bufs = [0u64; NUM_TX_DESC];
+        let mut tx_bufs = alloc::vec![0u64; NUM_TX_DESC];
         for i in (0..NUM_TX_DESC).step_by(2) {
             let page = memory::alloc_page().ok_or("Out of memory for TX buffer")?;
             tx_bufs[i] = page;
@@ -343,11 +358,67 @@ impl Rtl8169Device {
         }
 
         compiler_fence(Ordering::SeqCst);
+
+        // Check if packet is complete (both First Segment and Last Segment set)
+        if (opts1 & (DESC_FS | DESC_LS)) != (DESC_FS | DESC_LS) {
+            let mut new_flags = DESC_OWN | (BUFFER_SIZE as u32 & 0x3FFF);
+            if self.rx_cur == NUM_RX_DESC - 1 {
+                new_flags |= DESC_EOR;
+            }
+            unsafe {
+                core::ptr::write_volatile(&mut desc.opts1, new_flags);
+            }
+            compiler_fence(Ordering::SeqCst);
+            self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
+            return None;
+        }
+
         let raw_len = (opts1 & 0x3FFF) as usize;
-        let pkt_len = if raw_len > 4 { raw_len - 4 } else { raw_len };
-        let copy_len = pkt_len.min(buf.len());
+        if raw_len < 14 {
+            let mut new_flags = DESC_OWN | (BUFFER_SIZE as u32 & 0x3FFF);
+            if self.rx_cur == NUM_RX_DESC - 1 {
+                new_flags |= DESC_EOR;
+            }
+            unsafe {
+                core::ptr::write_volatile(&mut desc.opts1, new_flags);
+            }
+            compiler_fence(Ordering::SeqCst);
+            self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
+            return None;
+        }
 
         let buf_ptr = self.rx_bufs[self.rx_cur] as *const u8;
+        let eth_type = u16::from_be_bytes(unsafe {
+            [
+                core::ptr::read_volatile(buf_ptr.add(12)),
+                core::ptr::read_volatile(buf_ptr.add(13)),
+            ]
+        });
+
+        let pkt_len = if eth_type == 0x0800 && raw_len >= 34 {
+            // IPv4: read total length from IP header (bytes 16..18)
+            let ip_total_len = u16::from_be_bytes(unsafe {
+                [
+                    core::ptr::read_volatile(buf_ptr.add(16)),
+                    core::ptr::read_volatile(buf_ptr.add(17)),
+                ]
+            }) as usize;
+            let full_eth_len = 14 + ip_total_len;
+            if full_eth_len <= raw_len {
+                full_eth_len
+            } else {
+                raw_len
+            }
+        } else if eth_type == 0x0806 {
+            // ARP: standard frame is 42 bytes (14 eth + 28 arp), capped at min 42, max 60 (or raw_len)
+            raw_len.min(60).max(42)
+        } else if raw_len > 1514 && raw_len > 4 {
+            raw_len - 4
+        } else {
+            raw_len
+        };
+
+        let copy_len = pkt_len.min(buf.len());
         unsafe {
             core::ptr::copy_nonoverlapping(buf_ptr, buf.as_mut_ptr(), copy_len);
         }
@@ -358,6 +429,7 @@ impl Rtl8169Device {
         }
         unsafe {
             core::ptr::write_volatile(&mut desc.opts1, new_flags);
+            self.reg.write_u16(REG_ISR, 0xFFFF);
         }
         compiler_fence(Ordering::SeqCst);
 

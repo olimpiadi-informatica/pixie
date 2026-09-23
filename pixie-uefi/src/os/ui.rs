@@ -51,6 +51,7 @@ pub struct Screen {
     fb_height: usize,
     cols: usize,
     rows: usize,
+    is_vga_text: bool,
     front_buffer: Vec<ScreenChar>,
     back_buffer: Vec<ScreenChar>,
 }
@@ -68,6 +69,49 @@ fn w() -> usize {
 
 fn h() -> usize {
     ROWS.load(Ordering::Relaxed)
+}
+
+fn color_to_vga(c: Color) -> u8 {
+    match c {
+        Color::Black => 0,
+        Color::Blue => 1,
+        Color::Green => 2,
+        Color::Cyan => 3,
+        Color::Red => 4,
+        Color::Magenta => 5,
+        Color::Brown => 6,
+        Color::LightGray => 7,
+        Color::DarkGray => 8,
+        Color::LightBlue => 9,
+        Color::LightGreen => 10,
+        Color::LightCyan => 11,
+        Color::LightRed => 12,
+        Color::LightMagenta => 13,
+        Color::Yellow => 14,
+        Color::White => 15,
+    }
+}
+
+fn rgb_to_vga(rgb: u32) -> u8 {
+    match rgb {
+        0x00000000 => 0,
+        0x000000AA => 1,
+        0x0000AA00 => 2,
+        0x0000AAAA => 3,
+        0x00AA0000 => 4,
+        0x00AA00AA => 5,
+        0x00AA5500 => 6,
+        0x00AAAAAA => 7,
+        0x00555555 => 8,
+        0x005555FF => 9,
+        0x0055FF55 => 10,
+        0x0055FFFF => 11,
+        0x00FF5555 => 12,
+        0x00FF55FF => 13,
+        0x00FFFF55 => 14,
+        0x00FFFFFF => 15,
+        _ => 7,
+    }
 }
 
 fn color_to_rgb(c: Color) -> u32 {
@@ -93,8 +137,15 @@ fn color_to_rgb(c: Color) -> u32 {
 
 impl Screen {
     pub fn new(boot_info: BootInfo) -> Self {
-        let cols = (boot_info.fb_width as usize) / FONT_WIDTH;
-        let rows = (boot_info.fb_height as usize) / FONT_HEIGHT;
+        let is_vga_text = boot_info.framebuffer_base == 0xB8000;
+        let (cols, rows) = if is_vga_text {
+            (80, 25)
+        } else {
+            (
+                (boot_info.fb_width as usize) / FONT_WIDTH,
+                (boot_info.fb_height as usize) / FONT_HEIGHT,
+            )
+        };
         COLS.store(cols, Ordering::Relaxed);
         ROWS.store(rows, Ordering::Relaxed);
 
@@ -107,13 +158,27 @@ impl Screen {
             fb_height: boot_info.fb_height as usize,
             cols,
             rows,
+            is_vga_text,
             front_buffer: vec![ScreenChar::default(); total_chars],
             back_buffer: vec![ScreenChar::default(); total_chars],
         }
     }
 
     fn draw_char_raw(&mut self, col: usize, row: usize, c: char, fg: u32, bg: u32) {
-        if col >= self.cols || row >= self.rows {
+        if self.framebuffer_base.is_null() || col >= self.cols || row >= self.rows {
+            return;
+        }
+
+        if self.is_vga_text {
+            let vga_ptr = 0xB8000 as *mut u16;
+            let ascii = if (c as u32) < 128 { c as u8 } else { b'?' };
+            let vga_fg = rgb_to_vga(fg);
+            let vga_bg = rgb_to_vga(bg);
+            let attr = (vga_bg << 4) | (vga_fg & 0x0F);
+            let cell = (ascii as u16) | ((attr as u16) << 8);
+            unsafe {
+                core::ptr::write_volatile(vga_ptr.add(row * 80 + col), cell);
+            }
             return;
         }
 
@@ -162,12 +227,24 @@ impl Screen {
     }
 
     pub fn clear_all(&mut self, bg: Color) {
-        let bg_rgb = color_to_rgb(bg);
-        for y in 0..self.fb_height {
-            let offset = y * self.fb_stride;
-            for x in 0..self.fb_width {
+        if self.is_vga_text {
+            let vga_ptr = 0xB8000 as *mut u16;
+            let vga_bg = color_to_vga(bg);
+            let attr = (vga_bg << 4) | 7;
+            let cell = (b' ' as u16) | ((attr as u16) << 8);
+            for i in 0..(80 * 25) {
                 unsafe {
-                    core::ptr::write_volatile(self.framebuffer_base.add(offset + x), bg_rgb);
+                    core::ptr::write_volatile(vga_ptr.add(i), cell);
+                }
+            }
+        } else if !self.framebuffer_base.is_null() {
+            let bg_rgb = color_to_rgb(bg);
+            for y in 0..self.fb_height {
+                let offset = y * self.fb_stride;
+                for x in 0..self.fb_width {
+                    unsafe {
+                        core::ptr::write_volatile(self.framebuffer_base.add(offset + x), bg_rgb);
+                    }
                 }
             }
         }
@@ -285,6 +362,7 @@ pub fn display_fault_screen(reason: &str) {
         }
     }
 
+    let mut displayed = false;
     if let Some(mut s) = guard {
         if let Some(screen) = s.as_mut() {
             screen.clear_all(Color::Red);
@@ -297,6 +375,37 @@ pub fn display_fault_screen(reason: &str) {
             let rx = screen.cols.saturating_sub(reason.len()) / 2;
             for (i, c) in reason.chars().enumerate() {
                 screen.draw_char_raw(rx + i, 8, c, 0xFFFFFFFF, 0x00AA0000);
+            }
+            displayed = true;
+        }
+    }
+
+    if !displayed {
+        let vga_ptr = 0xB8000 as *mut u16;
+        let attr = (4 << 4) | 15; // White on red
+        for i in 0..(80 * 25) {
+            unsafe {
+                core::ptr::write_volatile(vga_ptr.add(i), (b' ' as u16) | ((attr as u16) << 8));
+            }
+        }
+        let banner = "======================= SYSTEM FAULT DETECTED =======================";
+        let x = 80usize.saturating_sub(banner.len()) / 2;
+        for (i, c) in banner.chars().enumerate() {
+            unsafe {
+                core::ptr::write_volatile(
+                    vga_ptr.add(4 * 80 + x + i),
+                    (c as u8 as u16) | ((attr as u16) << 8),
+                );
+            }
+        }
+        let rx = 80usize.saturating_sub(reason.len()) / 2;
+        for (i, c) in reason.chars().enumerate().take(80) {
+            let ch = if (c as u32) < 128 { c as u8 } else { b'?' };
+            unsafe {
+                core::ptr::write_volatile(
+                    vga_ptr.add(8 * 80 + rx + i),
+                    (ch as u16) | ((attr as u16) << 8),
+                );
             }
         }
     }

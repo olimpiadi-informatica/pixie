@@ -10,6 +10,7 @@ pub struct BootInfo {
     pub fb_stride: u32,
     pub rsdp_addr: Option<u64>,
     pub tsc_ticks_per_micro: i64,
+    pub uefi_mac: Option<[u8; 6]>,
 }
 
 unsafe impl Send for BootInfo {}

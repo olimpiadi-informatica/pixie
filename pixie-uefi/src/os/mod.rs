@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::future::Future;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
@@ -41,7 +42,42 @@ where
     uefi::helpers::init().unwrap();
 
     // 1. Locate and configure GOP framebuffer
-    let gop_handles = uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default();
+    let mut gop_handles: Vec<uefi::Handle> = Vec::new();
+
+    // Check handles that have SimpleTextOutput protocol (the active console!)
+    if let Ok(text_handles) = uefi::boot::find_handles::<uefi::proto::console::text::Output>() {
+        for handle in text_handles {
+            let params = uefi::boot::OpenProtocolParams {
+                handle,
+                agent: uefi::boot::image_handle(),
+                controller: None,
+            };
+            if unsafe {
+                uefi::boot::open_protocol::<GraphicsOutput>(
+                    params,
+                    uefi::boot::OpenProtocolAttributes::GetProtocol,
+                )
+                .is_ok()
+            } {
+                if !gop_handles.contains(&handle) {
+                    gop_handles.push(handle);
+                }
+            }
+        }
+    }
+
+    if let Ok(handle) = uefi::boot::get_handle_for_protocol::<GraphicsOutput>() {
+        if !gop_handles.contains(&handle) {
+            gop_handles.push(handle);
+        }
+    }
+
+    for handle in uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default() {
+        if !gop_handles.contains(&handle) {
+            gop_handles.push(handle);
+        }
+    }
+
     let open_gop = |handle: uefi::Handle| -> Option<uefi::boot::ScopedProtocol<GraphicsOutput>> {
         if let Ok(gop) = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(handle) {
             return Some(gop);
@@ -61,6 +97,8 @@ where
     };
 
     let mut selected_fb = None;
+    let mut _active_gop = None;
+
     for &handle in &gop_handles {
         if let Some(mut gop) = open_gop(handle) {
             let mode_info = gop.current_mode_info();
@@ -70,6 +108,14 @@ where
             let fb_ptr = fb.as_mut_ptr();
             let fb_size = fb.size();
             if fb_width > 0 && fb_height > 0 && !fb_ptr.is_null() && fb_size > 0 {
+                // Activate scanout on this port
+                let current_mode = gop.modes().find(|m| {
+                    let info = m.info();
+                    info.resolution() == (fb_width, fb_height)
+                });
+                if let Some(mode) = current_mode {
+                    let _ = gop.set_mode(&mode);
+                }
                 selected_fb = Some((
                     fb_ptr as u64,
                     fb_size,
@@ -77,6 +123,7 @@ where
                     fb_height as u32,
                     fb_stride,
                 ));
+                _active_gop = Some(gop);
                 break;
             }
         }
@@ -106,6 +153,7 @@ where
                             fb_height as u32,
                             fb_stride,
                         ));
+                        _active_gop = Some(gop);
                         break;
                     }
                 }
@@ -113,8 +161,11 @@ where
         }
     }
 
-    let (fb_base, fb_size, fb_width, fb_height, fb_stride) = selected_fb
-        .expect("GraphicsOutput protocol not found or no valid framebuffer mode");
+    // Fallback: If GOP is absent, use standard VGA text mode buffer at physical 0xB8000 (80x25)
+    let (fb_base, fb_size, fb_width, fb_height, fb_stride) = match selected_fb {
+        Some(fb) => fb,
+        None => (0xB8000, 80 * 25 * 2, 80, 25, 80),
+    };
 
     // 2. Locate ACPI RSDP pointer
     let rsdp_addr = uefi::system::with_config_table(|entries| {
@@ -128,7 +179,39 @@ where
         None
     });
 
-    // 3. Calibrate TSC before ExitBootServices
+    // 3. Calibrate TSC and capture UEFI network MAC before ExitBootServices
+    let mut uefi_mac = None;
+    if let Ok(snp_handles) = uefi::boot::find_handles::<uefi::proto::network::snp::SimpleNetwork>() {
+        for handle in snp_handles {
+            let open_snp = || -> Option<uefi::boot::ScopedProtocol<uefi::proto::network::snp::SimpleNetwork>> {
+                if let Ok(snp) = uefi::boot::open_protocol_exclusive::<uefi::proto::network::snp::SimpleNetwork>(handle) {
+                    return Some(snp);
+                }
+                let params = uefi::boot::OpenProtocolParams {
+                    handle,
+                    agent: uefi::boot::image_handle(),
+                    controller: None,
+                };
+                unsafe {
+                    uefi::boot::open_protocol::<uefi::proto::network::snp::SimpleNetwork>(
+                        params,
+                        uefi::boot::OpenProtocolAttributes::GetProtocol,
+                    )
+                    .ok()
+                }
+            };
+            if let Some(snp) = open_snp() {
+                let mode = snp.mode();
+                let mut mac = [0u8; 6];
+                mac.copy_from_slice(&mode.current_address.0[..6]);
+                if mac != [0; 6] && (mac[0] & 1) == 0 {
+                    uefi_mac = Some(mac);
+                    break;
+                }
+            }
+        }
+    }
+
     Timer::ensure_init();
     let tsc_ticks_per_micro = Timer::ticks_per_micro();
 
@@ -141,6 +224,7 @@ where
         fb_stride,
         rsdp_addr,
         tsc_ticks_per_micro,
+        uefi_mac,
     };
     boot_info::set_boot_info(boot_info);
 
@@ -176,9 +260,9 @@ where
         mem_stats.other / (1024 * 1024)
     );
 
-    // 9. Start Local APIC periodic timer for watchdog (e.g. vector 32)
+    // 9. Start Local APIC periodic timer (5ms = 200 Hz) for smooth UI & watchdog
     unsafe {
-        arch::apic::start_timer(32, 100_000_000);
+        arch::apic::start_periodic_timer(32, 5_000);
         arch::io::sti(); // Enable interrupts
     }
 

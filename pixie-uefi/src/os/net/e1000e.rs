@@ -125,6 +125,14 @@ impl E1000Device {
             }
         }
 
+        if mac == [0; 6] {
+            if let Some(info) = *crate::os::boot_info::BOOT_INFO.lock() {
+                if let Some(uefi_mac) = info.uefi_mac {
+                    mac = uefi_mac;
+                }
+            }
+        }
+
         // 2. Disable interrupts
         unsafe {
             Self::mmio_write(mmio_base, REG_IMC, 0xFFFF_FFFF);
