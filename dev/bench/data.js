@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790158653137,
+  "lastUpdate": 1790158747333,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -448,6 +448,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 11.008,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "55024474+Virv12@users.noreply.github.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "0f5307699987537b82a730723b953ce120a6510a",
+          "message": "Fix crash on out-of-order GPT partitions and unaligned NTFS partitions\n\n- Sort GPT partitions by starting byte offset in parse_gpt so\n  partitions listed out of order in the GPT array are processed in\n  disk order, preventing an assertion crash in parse_disk.\n- Use integer division for NTFS cluster count calculation so cluster\n  ranges do not exceed partition boundaries when a partition's size is\n  not an exact multiple of the cluster size.",
+          "timestamp": "2026-09-23T12:16:21+02:00",
+          "tree_id": "5e96e7d1552a4c856f45c373646ae15f3c1a684c",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/0f5307699987537b82a730723b953ce120a6510a"
+        },
+        "date": 1790158747316,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 21.174,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 16.737,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 11.252,
             "unit": "s"
           }
         ]
