@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790093269957,
+  "lastUpdate": 1790158653137,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -209,6 +209,48 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
             "value": 1992657.1,
             "range": "± 28785.33",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "55024474+Virv12@users.noreply.github.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "0f5307699987537b82a730723b953ce120a6510a",
+          "message": "Fix crash on out-of-order GPT partitions and unaligned NTFS partitions\n\n- Sort GPT partitions by starting byte offset in parse_gpt so\n  partitions listed out of order in the GPT array are processed in\n  disk order, preventing an assertion crash in parse_disk.\n- Use integer division for NTFS cluster count calculation so cluster\n  ranges do not exceed partition boundaries when a partition's size is\n  not an exact multiple of the cluster size.",
+          "timestamp": "2026-09-23T12:16:21+02:00",
+          "tree_id": "5e96e7d1552a4c856f45c373646ae15f3c1a684c",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/0f5307699987537b82a730723b953ce120a6510a"
+        },
+        "date": 1790158652630,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_200kib",
+            "value": 341615.68,
+            "range": "± 3020.78",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_20b",
+            "value": 2345.36,
+            "range": "± 30.5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
+            "value": 3522755.65,
+            "range": "± 222539.44",
             "unit": "ns/iter"
           }
         ]
