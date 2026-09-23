@@ -29,6 +29,54 @@ pub mod ui;
 pub mod util;
 pub mod watchdog;
 
+use uefi::proto::unsafe_protocol;
+
+#[unsafe_protocol("f42f7782-012e-4c22-b5e8-56e6d1c961b6")]
+#[repr(C)]
+struct ConsoleControl {
+    get_mode: unsafe extern "efiapi" fn(
+        *mut ConsoleControl,
+        *mut u32,
+        *mut bool,
+        *mut bool,
+    ) -> uefi::Status,
+    set_mode: unsafe extern "efiapi" fn(*mut ConsoleControl, u32) -> uefi::Status,
+    lock_std_in: unsafe extern "efiapi" fn(*mut ConsoleControl, *const u16) -> uefi::Status,
+}
+
+fn score_mode(w: usize, h: usize, current_res: Option<(usize, usize)>) -> i32 {
+    let mut score = match (w, h) {
+        (1920, 1080) => 10_000,
+        (1680, 1050) => 9_500,
+        (1600, 900) => 9_000,
+        (1440, 900) => 8_500,
+        (1366, 768) => 8_000,
+        (1280, 800) => 7_500,
+        (1280, 720) => 7_000,
+        (1280, 1024) => 6_500,
+        (1024, 768) => 6_000,
+        (800, 600) => 5_000,
+        _ => {
+            if w < 640 || h < 480 {
+                return -1000;
+            }
+            if w <= 1920 && h <= 1200 {
+                5_000 + ((w * h) / 1_000) as i32
+            } else if w <= 2560 && h <= 1600 {
+                4_000 + ((w * h) / 10_000) as i32
+            } else {
+                2_000
+            }
+        }
+    };
+    if let Some((cw, ch)) = current_res {
+        if cw == w && ch == h && w >= 1024 && h >= 600 {
+            score += 250;
+        }
+    }
+    score
+}
+
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub fn start<F, Fut>(mut f: F) -> !
@@ -40,6 +88,26 @@ where
 
     // Initialize UEFI helpers while Boot Services are alive
     uefi::helpers::init().unwrap();
+
+    // 0. Explicitly request firmware to switch from text to graphics mode if ConsoleControl is present
+    if let Ok(handle) = uefi::boot::get_handle_for_protocol::<ConsoleControl>() {
+        let params = uefi::boot::OpenProtocolParams {
+            handle,
+            agent: uefi::boot::image_handle(),
+            controller: None,
+        };
+        if let Ok(mut cc) = unsafe {
+            uefi::boot::open_protocol::<ConsoleControl>(
+                params,
+                uefi::boot::OpenProtocolAttributes::GetProtocol,
+            )
+        } {
+            // 1 = EfiConsoleControlScreenGraphics
+            unsafe {
+                let _ = (cc.set_mode)(&mut *cc, 1);
+            }
+        }
+    }
 
     // 1. Locate and configure GOP framebuffer
     let mut gop_handles: Vec<uefi::Handle> = Vec::new();
@@ -78,6 +146,22 @@ where
         }
     }
 
+    // If still no GOP handles found, connect graphics controllers to see if GOP is produced
+    if gop_handles.is_empty() {
+        if let Ok(all_handles) =
+            uefi::boot::find_handles::<uefi::proto::device_path::DevicePath>()
+        {
+            for handle in all_handles {
+                let _ = uefi::boot::connect_controller(handle, None, None, true);
+            }
+        }
+        for handle in uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default() {
+            if !gop_handles.contains(&handle) {
+                gop_handles.push(handle);
+            }
+        }
+    }
+
     let open_gop = |handle: uefi::Handle| -> Option<uefi::boot::ScopedProtocol<GraphicsOutput>> {
         if let Ok(gop) = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(handle) {
             return Some(gop);
@@ -101,6 +185,32 @@ where
 
     for &handle in &gop_handles {
         if let Some(mut gop) = open_gop(handle) {
+            let current_res = {
+                let info = gop.current_mode_info();
+                let (w, h) = info.resolution();
+                if w > 0 && h > 0 {
+                    Some((w, h))
+                } else {
+                    None
+                }
+            };
+
+            // Pick optimal resolution from available modes
+            let best_mode = gop
+                .modes()
+                .filter(|m| {
+                    let (w, h) = m.info().resolution();
+                    w >= 640 && h >= 480
+                })
+                .max_by_key(|m| {
+                    let (w, h) = m.info().resolution();
+                    score_mode(w, h, current_res)
+                });
+
+            if let Some(mode) = best_mode {
+                let _ = gop.set_mode(&mode);
+            }
+
             let mode_info = gop.current_mode_info();
             let (fb_width, fb_height) = mode_info.resolution();
             let fb_stride = mode_info.stride() as u32;
@@ -108,14 +218,6 @@ where
             let fb_ptr = fb.as_mut_ptr();
             let fb_size = fb.size();
             if fb_width > 0 && fb_height > 0 && !fb_ptr.is_null() && fb_size > 0 {
-                // Activate scanout on this port
-                let current_mode = gop.modes().find(|m| {
-                    let info = m.info();
-                    info.resolution() == (fb_width, fb_height)
-                });
-                if let Some(mode) = current_mode {
-                    let _ = gop.set_mode(&mode);
-                }
                 selected_fb = Some((
                     fb_ptr as u64,
                     fb_size,
@@ -125,38 +227,6 @@ where
                 ));
                 _active_gop = Some(gop);
                 break;
-            }
-        }
-    }
-
-    if selected_fb.is_none() {
-        for &handle in &gop_handles {
-            if let Some(mut gop) = open_gop(handle) {
-                let valid_mode = gop.modes().find(|m| {
-                    let info = m.info();
-                    let (w, h) = info.resolution();
-                    w > 0 && h > 0
-                });
-                if let Some(mode) = valid_mode {
-                    let _ = gop.set_mode(&mode);
-                    let mode_info = gop.current_mode_info();
-                    let (fb_width, fb_height) = mode_info.resolution();
-                    let fb_stride = mode_info.stride() as u32;
-                    let mut fb = gop.frame_buffer();
-                    let fb_ptr = fb.as_mut_ptr();
-                    let fb_size = fb.size();
-                    if fb_width > 0 && fb_height > 0 && !fb_ptr.is_null() && fb_size > 0 {
-                        selected_fb = Some((
-                            fb_ptr as u64,
-                            fb_size,
-                            fb_width as u32,
-                            fb_height as u32,
-                            fb_stride,
-                        ));
-                        _active_gop = Some(gop);
-                        break;
-                    }
-                }
             }
         }
     }

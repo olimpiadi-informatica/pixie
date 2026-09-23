@@ -277,6 +277,33 @@ pub fn init(boot_info: BootInfo) {
 
     *CONTENT_DRAW_AREA.lock() = DrawArea::content();
 
+    Executor::spawn("[show_video_mode]", async move {
+        let mut draw_area = DrawArea::video_mode();
+        loop {
+            draw_area.clear();
+            let width = draw_area.size().0;
+            if boot_info.framebuffer_base == 0xB8000 {
+                write!(
+                    draw_area,
+                    "DISP:{0:1$}VGA Text (80x25)",
+                    "",
+                    width.saturating_sub(22)
+                )
+                .unwrap();
+            } else {
+                let label = alloc::format!("GOP {w}x{h}", w = boot_info.fb_width, h = boot_info.fb_height);
+                write!(
+                    draw_area,
+                    "DISP:{0:1$}{label}",
+                    "",
+                    width.saturating_sub(5 + label.len())
+                )
+                .unwrap();
+            }
+            Executor::sleep(Duration::from_secs(10)).await;
+        }
+    });
+
     Executor::spawn("[show_timer]", async move {
         let mut draw_area = DrawArea::time();
         loop {
@@ -462,6 +489,10 @@ impl DrawArea {
         let tw = Self::task_width();
         let width = w().saturating_sub(tw + 1);
         Self::new((tw + 1, col), (width, num_cols), false)
+    }
+
+    pub fn video_mode() -> DrawArea {
+        Self::task_side(0, 1)
     }
 
     pub fn ip() -> DrawArea {
