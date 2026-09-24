@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::fmt::Write;
-use core::sync::atomic::{Ordering, compiler_fence};
+use core::sync::atomic::{Ordering, fence};
 
 use crate::os::memory;
 use crate::os::pci::{Bar, PciDevice};
@@ -24,11 +24,13 @@ const REG_RDBAH: usize = 0x2804;
 const REG_RDLEN: usize = 0x2808;
 const REG_RDH: usize = 0x2810;
 const REG_RDT: usize = 0x2818;
+const REG_RXDCTL: usize = 0x2828;
 const REG_TDBAL: usize = 0x3800;
 const REG_TDBAH: usize = 0x3804;
 const REG_TDLEN: usize = 0x3808;
 const REG_TDH: usize = 0x3810;
 const REG_TDT: usize = 0x3818;
+const REG_TXDCTL: usize = 0x3828;
 const REG_MTA: usize = 0x5200;
 const REG_RAL: usize = 0x5400;
 const REG_RAH: usize = 0x5404;
@@ -48,11 +50,19 @@ const RCTL_BAM: u32 = 1 << 15; // Broadcast Accept Mode
 const RCTL_SZ_2048: u32 = 0 << 16; // 2048 Byte Buffer Size
 const RCTL_SECRC: u32 = 1 << 26; // Strip Ethernet CRC
 
+// Receive Descriptor Control Bits
+const RXDCTL_ENABLE: u32 = 1 << 25; // Queue Enable
+
 // Transmit Control Bits
 const TCTL_EN: u32 = 1 << 1; // Transmit Enable
 const TCTL_PSP: u32 = 1 << 3; // Pad Short Packets
 const TCTL_CT_SHIFT: u32 = 4; // Collision Threshold
 const TCTL_COLD_SHIFT: u32 = 12; // Collision Distance
+
+// Transmit Descriptor Control Bits
+const TXDCTL_FULL_TX_DESC_WB: u32 = (1 << 24) | (1 << 16); // GRAN=1 (descriptors) | WTHRESH=1
+const TXDCTL_COUNT_DESC: u32 = 1 << 22;
+const TXDCTL_ENABLE: u32 = 1 << 25; // Queue Enable
 
 // Transmit Command Bits
 const CMD_EOP: u8 = 1 << 0; // End of Packet
@@ -289,6 +299,15 @@ impl E1000Device {
         let rctl = RCTL_EN | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SZ_2048 | RCTL_SECRC;
         unsafe {
             Self::mmio_write(mmio_base, REG_RCTL, rctl);
+            let mut rxdctl = Self::mmio_read(mmio_base, REG_RXDCTL);
+            rxdctl |= RXDCTL_ENABLE;
+            Self::mmio_write(mmio_base, REG_RXDCTL, rxdctl);
+        }
+        for _ in 0..10_000 {
+            if (unsafe { Self::mmio_read(mmio_base, REG_RXDCTL) } & RXDCTL_ENABLE) != 0 {
+                break;
+            }
+            core::hint::spin_loop();
         }
         raw_fb::print(
             "[E1000] RX ring configured & RCTL enabled OK",
@@ -334,6 +353,21 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_TDH, 0);
             Self::mmio_write(mmio_base, REG_TDT, 0);
             Self::mmio_write(mmio_base, REG_TIPG, 10 | (8 << 10) | (6 << 20));
+
+            // Configure TXDCTL: descriptor granularity (GRAN=1), write-back threshold WTHRESH=1,
+            // queue enable (bit 25). This ensures the hardware writes back DD=1 immediately
+            // for completed packets rather than buffering writebacks.
+            let mut txdctl = Self::mmio_read(mmio_base, REG_TXDCTL);
+            txdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16)); // clear PTHRESH, HTHRESH, WTHRESH
+            txdctl |= TXDCTL_FULL_TX_DESC_WB | TXDCTL_COUNT_DESC | TXDCTL_ENABLE;
+            Self::mmio_write(mmio_base, REG_TXDCTL, txdctl);
+        }
+
+        for _ in 0..10_000 {
+            if (unsafe { Self::mmio_read(mmio_base, REG_TXDCTL) } & TXDCTL_ENABLE) != 0 {
+                break;
+            }
+            core::hint::spin_loop();
         }
 
         let tctl = TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT);
@@ -387,11 +421,18 @@ impl E1000Device {
         assert!(packet.len() <= BUFFER_SIZE);
         let desc = &mut self.tx_descs[self.tx_cur];
 
-        let mut iters = 0;
+        let start = crate::os::timer::Timer::micros();
         while (unsafe { core::ptr::read_volatile(&desc.status) } & 1) == 0 {
             core::hint::spin_loop();
-            iters += 1;
-            if iters > 10_000 {
+            if (crate::os::timer::Timer::micros() - start) > 50_000 {
+                let tdh = unsafe { Self::mmio_read(self.mmio_base, REG_TDH) };
+                let tdt = unsafe { Self::mmio_read(self.mmio_base, REG_TDT) };
+                log::error!(
+                    "[E1000] Transmit timeout waiting for desc {} (TDH={}, TDT={})",
+                    self.tx_cur,
+                    tdh,
+                    tdt
+                );
                 return;
             }
         }
@@ -399,6 +440,7 @@ impl E1000Device {
         let buf_ptr = self.tx_bufs[self.tx_cur] as *mut u8;
         unsafe {
             core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
+            core::ptr::write_volatile(&mut desc.buffer_addr, self.tx_bufs[self.tx_cur]);
             core::ptr::write_volatile(&mut desc.length, packet.len() as u16);
             core::ptr::write_volatile(&mut desc.cso, 0);
             core::ptr::write_volatile(&mut desc.cmd, CMD_EOP | CMD_IFCS | CMD_RS);
@@ -406,7 +448,7 @@ impl E1000Device {
             core::ptr::write_volatile(&mut desc.css, 0);
             core::ptr::write_volatile(&mut desc.special, 0);
         }
-        compiler_fence(Ordering::SeqCst);
+        fence(Ordering::SeqCst);
 
         self.tx_cur = (self.tx_cur + 1) % NUM_TX_DESC;
         unsafe {
@@ -421,12 +463,16 @@ impl E1000Device {
             return None;
         }
 
+        // Fatal errors: CRC Error (0x01), Symbol Error (0x02), RX Data Error (0x80)
+        // Checksum flags (TCPE 0x20, IPE 0x40) are NOT fatal link errors; smoltcp verifies checksums in software.
+        const RX_FATAL_ERRORS: u8 = 0x83;
         let errors = unsafe { core::ptr::read_volatile(&desc.errors) };
-        if errors != 0 || (status & 2) == 0 {
+        if (errors & RX_FATAL_ERRORS) != 0 || (status & 2) == 0 {
             unsafe {
+                core::ptr::write_volatile(&mut desc.buffer_addr, self.rx_bufs[self.rx_cur]);
                 core::ptr::write_volatile(&mut desc.status, 0);
             }
-            compiler_fence(Ordering::SeqCst);
+            fence(Ordering::SeqCst);
             let old_cur = self.rx_cur;
             self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
             unsafe {
@@ -435,15 +481,16 @@ impl E1000Device {
             return None;
         }
 
-        compiler_fence(Ordering::SeqCst);
+        fence(Ordering::SeqCst);
         let length = unsafe { core::ptr::read_volatile(&desc.length) } as usize;
         let copy_len = length.min(buf.len());
         let buf_ptr = self.rx_bufs[self.rx_cur] as *const u8;
         unsafe {
             core::ptr::copy_nonoverlapping(buf_ptr, buf.as_mut_ptr(), copy_len);
+            core::ptr::write_volatile(&mut desc.buffer_addr, self.rx_bufs[self.rx_cur]);
             core::ptr::write_volatile(&mut desc.status, 0);
         }
-        compiler_fence(Ordering::SeqCst);
+        fence(Ordering::SeqCst);
 
         let old_cur = self.rx_cur;
         self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
