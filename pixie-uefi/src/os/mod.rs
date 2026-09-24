@@ -3,7 +3,7 @@ use core::future::Future;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
-use uefi::proto::console::gop::GraphicsOutput;
+use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
 use self::boot_info::BootInfo;
 use self::error::Result;
@@ -211,25 +211,31 @@ where
             let cur = gop.current_mode_info();
             let (cw, ch) = cur.resolution();
             let mode_count = gop.modes().count();
-            let mut fb = gop.frame_buffer();
-            let fb_base = fb.as_mut_ptr() as u64;
-            let fb_size = fb.size();
+            let is_blt_only = cur.pixel_format() == PixelFormat::BltOnly;
+            let (fb_base, fb_size) = if is_blt_only {
+                (0, 0)
+            } else {
+                let mut fb = gop.frame_buffer();
+                (fb.as_mut_ptr() as u64, fb.size())
+            };
             uefi::println!(
-                "GOP[{}]: cur={}x{} stride={} FB=0x{:X} ({}K) modes={}",
+                "GOP[{}]: cur={}x{} stride={} FB=0x{:X} ({}K, blt_only={}) modes={}",
                 idx,
                 cw,
                 ch,
                 cur.stride(),
                 fb_base,
                 fb_size / 1024,
+                is_blt_only,
                 mode_count
             );
 
             let best_mode = gop
                 .modes()
                 .filter(|m| {
-                    let (w, h) = m.info().resolution();
-                    w >= 640 && h >= 480
+                    let info = m.info();
+                    let (w, h) = info.resolution();
+                    w >= 640 && h >= 480 && info.pixel_format() != PixelFormat::BltOnly
                 })
                 .max_by_key(|m| {
                     let (w, h) = m.info().resolution();
@@ -245,7 +251,7 @@ where
                     score_mode(bw, bh, Some((cw, ch)))
                 );
             } else {
-                uefi::println!("  -> No mode >= 640x480 found");
+                uefi::println!("  -> No direct framebuffer mode >= 640x480 found");
             }
         } else {
             uefi::println!("GOP[{}]: OpenProtocol FAILED", idx);
@@ -255,7 +261,7 @@ where
     // 2. Network SNP handles
     let snp_handles =
         uefi::boot::find_handles::<uefi::proto::network::snp::SimpleNetwork>().unwrap_or_default();
-    uefi::print!("SNP Network: {} handle(s)", snp_handles.len());
+    uefi::println!("SNP Network: {} handle(s)", snp_handles.len());
     let mut uefi_mac = None;
     for &h in &snp_handles {
         let params = uefi::boot::OpenProtocolParams {
@@ -269,27 +275,32 @@ where
                 uefi::boot::OpenProtocolAttributes::GetProtocol,
             )
         } {
-            let m = snp.mode();
-            let mac = &m.current_address.0[..6];
-            if mac != [0; 6] && (mac[0] & 1) == 0 {
-                let mut mac_arr = [0u8; 6];
-                mac_arr.copy_from_slice(mac);
-                uefi_mac = Some(mac_arr);
-                uefi::print!(
-                    " | MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (media_present: {:?})",
-                    mac[0],
-                    mac[1],
-                    mac[2],
-                    mac[3],
-                    mac[4],
-                    mac[5],
-                    m.media_present
-                );
-                break;
+            let raw_snp =
+                &*snp as *const _ as *const uefi_raw::protocol::network::snp::SimpleNetworkProtocol;
+            if unsafe { !(*raw_snp).mode.is_null() } {
+                let m = snp.mode();
+                let mac = &m.current_address.0[..6];
+                if mac != [0; 6] && (mac[0] & 1) == 0 {
+                    let mut mac_arr = [0u8; 6];
+                    mac_arr.copy_from_slice(mac);
+                    uefi_mac = Some(mac_arr);
+                    uefi::println!(
+                        "  -> MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (media_present: {:?})",
+                        mac[0],
+                        mac[1],
+                        mac[2],
+                        mac[3],
+                        mac[4],
+                        mac[5],
+                        m.media_present
+                    );
+                    break;
+                }
+            } else {
+                uefi::println!("  -> SNP mode pointer is null (uninitialized), skipping");
             }
         }
     }
-    uefi::println!("");
 
     // 3. Locate ACPI RSDP pointer
     let rsdp_addr = uefi::system::with_config_table(|entries| {
@@ -379,8 +390,9 @@ where
             let best_mode = gop
                 .modes()
                 .filter(|m| {
-                    let (w, h) = m.info().resolution();
-                    w >= 640 && h >= 480
+                    let info = m.info();
+                    let (w, h) = info.resolution();
+                    w >= 640 && h >= 480 && info.pixel_format() != PixelFormat::BltOnly
                 })
                 .max_by_key(|m| {
                     let (w, h) = m.info().resolution();
@@ -396,6 +408,10 @@ where
             }
 
             let mode_info = gop.current_mode_info();
+            if mode_info.pixel_format() == PixelFormat::BltOnly {
+                uefi::println!("      Current mode is BltOnly, skipping handle.");
+                continue;
+            }
             let (fb_width, fb_height) = mode_info.resolution();
             let fb_stride = mode_info.stride() as u32;
             let mut fb = gop.frame_buffer();

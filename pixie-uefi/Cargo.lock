@@ -394,6 +394,7 @@ dependencies = [
  "talc",
  "thingbuf",
  "uefi",
+ "uefi-raw",
 ]
 
 [[package]]
