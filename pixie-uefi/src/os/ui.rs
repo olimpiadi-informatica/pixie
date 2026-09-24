@@ -352,6 +352,8 @@ pub fn init(boot_info: BootInfo) {
             }
         }
     }
+
+    crate::os::logger::on_ui_init();
 }
 
 pub fn flush() {
@@ -542,14 +544,13 @@ impl DrawArea {
 
     pub fn clear(&mut self) {
         self.pos = (0, 0);
-        if let Some(mut s) = SCREEN.try_lock() {
-            if let Some(screen) = s.as_mut() {
-                for y in 0..self.size.1 {
-                    for x in 0..self.size.0 {
-                        let i = self.idx((x, y));
-                        if i < screen.back_buffer.len() {
-                            screen.back_buffer[i] = ScreenChar::default();
-                        }
+        let mut s = SCREEN.lock();
+        if let Some(screen) = s.as_mut() {
+            for y in 0..self.size.1 {
+                for x in 0..self.size.0 {
+                    let i = self.idx((x, y));
+                    if i < screen.back_buffer.len() {
+                        screen.back_buffer[i] = ScreenChar::default();
                     }
                 }
             }
@@ -557,44 +558,42 @@ impl DrawArea {
     }
 
     pub fn write_with_color(&mut self, msg: &str, fg: Color, bg: Color) {
-        if let Some(mut s) = SCREEN.try_lock() {
-            if let Some(screen) = s.as_mut() {
-                for c in msg.chars() {
-                    if c == '\n' {
-                        self.newline();
-                        continue;
-                    }
-                    if self.pos.0 >= self.size.0 {
-                        self.newline();
-                    }
-                    while self.scroll && self.pos.1 >= self.size.1 {
-                        self.pos.1 = self.pos.1.saturating_sub(1);
-                        for y in 0..self.size.1.saturating_sub(1) {
-                            for x in 0..self.size.0 {
-                                let cur = self.idx((x, y));
-                                let next = self.idx((x, y + 1));
-                                if cur < screen.back_buffer.len() && next < screen.back_buffer.len()
-                                {
-                                    screen.back_buffer[cur] = screen.back_buffer[next];
-                                }
-                            }
-                        }
-                        for x in 0..self.size.0 {
-                            let last = self.idx((x, self.size.1.saturating_sub(1)));
-                            if last < screen.back_buffer.len() {
-                                screen.back_buffer[last] = ScreenChar::default();
-                            }
-                        }
-                    }
-                    if self.pos.1 >= self.size.1 {
-                        continue;
-                    }
-                    let idx = self.idx(self.pos);
-                    if idx < screen.back_buffer.len() {
-                        screen.back_buffer[idx] = ScreenChar { c, fg, bg };
-                    }
-                    self.pos.0 += 1;
+        let mut s = SCREEN.lock();
+        if let Some(screen) = s.as_mut() {
+            for c in msg.chars() {
+                if c == '\n' {
+                    self.newline();
+                    continue;
                 }
+                if self.pos.0 >= self.size.0 {
+                    self.newline();
+                }
+                while self.scroll && self.pos.1 >= self.size.1 {
+                    self.pos.1 = self.pos.1.saturating_sub(1);
+                    for y in 0..self.size.1.saturating_sub(1) {
+                        for x in 0..self.size.0 {
+                            let cur = self.idx((x, y));
+                            let next = self.idx((x, y + 1));
+                            if cur < screen.back_buffer.len() && next < screen.back_buffer.len() {
+                                screen.back_buffer[cur] = screen.back_buffer[next];
+                            }
+                        }
+                    }
+                    for x in 0..self.size.0 {
+                        let last = self.idx((x, self.size.1.saturating_sub(1)));
+                        if last < screen.back_buffer.len() {
+                            screen.back_buffer[last] = ScreenChar::default();
+                        }
+                    }
+                }
+                if self.pos.1 >= self.size.1 {
+                    continue;
+                }
+                let idx = self.idx(self.pos);
+                if idx < screen.back_buffer.len() {
+                    screen.back_buffer[idx] = ScreenChar { c, fg, bg };
+                }
+                self.pos.0 += 1;
             }
         }
     }

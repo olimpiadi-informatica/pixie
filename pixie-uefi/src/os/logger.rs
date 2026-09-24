@@ -96,6 +96,16 @@ impl SerialPort {
 pub static SERIAL: Mutex<SerialPort> = Mutex::new(SerialPort::new(COM1));
 static DRAW_AREA: Mutex<DrawArea> = Mutex::new(DrawArea::invalid());
 
+struct LogEntry {
+    time: f64,
+    level: Level,
+    target: String,
+    msg: String,
+    col: Color,
+}
+
+static LOG_HISTORY: Mutex<alloc::vec::Vec<LogEntry>> = Mutex::new(alloc::vec::Vec::new());
+
 struct Logger;
 
 pub fn init() {
@@ -105,9 +115,24 @@ pub fn init() {
 
     let _ = log::set_logger(&Logger);
     log::set_max_level(log::LevelFilter::Trace);
+}
 
-    *DRAW_AREA.lock() = DrawArea::logs();
-    DRAW_AREA.lock().clear();
+pub fn on_ui_init() {
+    let mut area = DrawArea::logs();
+    area.clear();
+    *DRAW_AREA.lock() = area;
+
+    if let Some(history) = LOG_HISTORY.try_lock() {
+        if let Some(mut draw_area) = DRAW_AREA.try_lock() {
+            for entry in history.iter() {
+                write!(draw_area, "[{:.1}s ", entry.time).unwrap();
+                draw_area.write_with_color(&format!("{:5} ", entry.level), entry.col, Color::Black);
+                writeln!(draw_area, "{}] {}", entry.target, entry.msg).unwrap();
+            }
+        }
+    }
+
+    ui::flush();
 }
 
 fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
@@ -130,14 +155,27 @@ fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
         Level::Error => Color::Red,
     };
 
-    if let Some(mut draw_area) = DRAW_AREA.try_lock() {
-        write!(draw_area, "[{time:.1}s ").unwrap();
-        draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
-        writeln!(draw_area, "{target}] {msg}").unwrap();
+    if let Some(mut history) = LOG_HISTORY.try_lock() {
+        if history.len() >= 128 {
+            history.remove(0);
+        }
+        history.push(LogEntry {
+            time,
+            level,
+            target: target.into(),
+            msg: msg.clone(),
+            col,
+        });
     }
 
-    // Always flush UI so log messages immediately appear on the screen
-    ui::flush();
+    if let Some(mut draw_area) = DRAW_AREA.try_lock() {
+        if draw_area.size.0 > 0 && draw_area.size.1 > 0 {
+            write!(draw_area, "[{time:.1}s ").unwrap();
+            draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
+            writeln!(draw_area, "{target}] {msg}").unwrap();
+            ui::flush();
+        }
+    }
 }
 
 impl log::Log for Logger {
