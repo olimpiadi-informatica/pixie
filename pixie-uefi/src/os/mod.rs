@@ -125,7 +125,7 @@ where
         uefi::println!("ConsoleControl: NOT SUPPORTED by firmware");
     }
 
-    // 1. Locate GOP handles
+    // 1. Locate GOP handles tied to the active console (SimpleTextOutput)
     let mut gop_handles: Vec<uefi::Handle> = Vec::new();
 
     if let Ok(text_handles) = uefi::boot::find_handles::<uefi::proto::console::text::Output>() {
@@ -149,48 +149,16 @@ where
         }
     }
 
-    if let Ok(handle) = uefi::boot::get_handle_for_protocol::<GraphicsOutput>() {
-        if !gop_handles.contains(&handle) {
-            gop_handles.push(handle);
-        }
-    }
-
-    for handle in uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default() {
-        if !gop_handles.contains(&handle) {
-            gop_handles.push(handle);
-        }
-    }
-
-    uefi::println!("GOP Handles Found: {}", gop_handles.len());
-
+    // Fallback: If no console text handle has GOP, check the default GOP protocol handle
     if gop_handles.is_empty() {
-        uefi::println!("No GOP found! Connecting controllers via DevicePath...");
-        let mut connected = 0;
-        if let Ok(all_handles) =
-            uefi::boot::find_handles::<uefi::proto::device_path::DevicePath>()
-        {
-            for handle in all_handles {
-                if uefi::boot::connect_controller(handle, None, None, true).is_ok() {
-                    connected += 1;
-                }
-            }
+        if let Ok(handle) = uefi::boot::get_handle_for_protocol::<GraphicsOutput>() {
+            gop_handles.push(handle);
         }
-        for handle in uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default() {
-            if !gop_handles.contains(&handle) {
-                gop_handles.push(handle);
-            }
-        }
-        uefi::println!(
-            "  Connected {} device paths. GOP handles now: {}",
-            connected,
-            gop_handles.len()
-        );
     }
+
+    uefi::println!("[DBG 1] Found {} GOP console handle(s)", gop_handles.len());
 
     let open_gop = |handle: uefi::Handle| -> Option<core::mem::ManuallyDrop<uefi::boot::ScopedProtocol<GraphicsOutput>>> {
-        if let Ok(gop) = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(handle) {
-            return Some(core::mem::ManuallyDrop::new(gop));
-        }
         let params = uefi::boot::OpenProtocolParams {
             handle,
             agent: uefi::boot::image_handle(),
