@@ -21,6 +21,21 @@ pub struct ChunkInfo {
     pub size: usize,
 }
 
+impl ChunkInfo {
+    pub fn push(chunks: &mut Vec<ChunkInfo>, start: usize, size: usize) {
+        if size == 0 {
+            return;
+        }
+        if let Some(last) = chunks.last_mut() {
+            if last.start + last.size == start {
+                last.size += size;
+                return;
+            }
+        }
+        chunks.push(ChunkInfo { start, size });
+    }
+}
+
 async fn save_image(stream: &TcpStream, image: Image) -> Result<()> {
     let req = TcpRequest::UploadImage(image);
     let buf = postcard::to_allocvec(&req)?;

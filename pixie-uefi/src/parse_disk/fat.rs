@@ -94,18 +94,16 @@ pub async fn get_fat_chunks(
         .await?;
 
     let mut chunks = Vec::new();
-    chunks.push(ChunkInfo {
-        start: 0,
-        size: (first_data_sector * sector_size) as usize,
-    });
+    ChunkInfo::push(&mut chunks, 0, (first_data_sector * sector_size) as usize);
 
     for idx in 2..2 + data_cluster_count as usize {
         if fat_type.index(&fat, idx) != 0 {
-            chunks.push(ChunkInfo {
-                start: (first_data_sector + (idx - 2) as u64 * sectors_per_cluster) as usize
+            ChunkInfo::push(
+                &mut chunks,
+                (first_data_sector + (idx - 2) as u64 * sectors_per_cluster) as usize
                     * sector_size as usize,
-                size: cluster_size as usize,
-            });
+                cluster_size as usize,
+            );
         }
     }
 

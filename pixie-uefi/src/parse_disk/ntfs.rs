@@ -81,10 +81,11 @@ pub async fn get_ntfs_chunks(
                 for bit in 0..8 {
                     if cnt < num_clusters as u64 {
                         if byte >> bit & 1 != 0 {
-                            chunks.push(ChunkInfo {
-                                start: cnt as usize * bytes_per_cluster,
-                                size: bytes_per_cluster,
-                            });
+                            ChunkInfo::push(
+                                &mut chunks,
+                                cnt as usize * bytes_per_cluster,
+                                bytes_per_cluster,
+                            );
                         }
                         cnt += 1;
                     }

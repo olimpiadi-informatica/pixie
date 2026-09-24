@@ -85,11 +85,11 @@ pub async fn get_ext4_chunks(
             if has_superblock(group) {
                 for block in 0..blocks_for_special_group {
                     if group * blocks_per_group as usize + block < blocks_count as usize {
-                        ans.push(ChunkInfo {
-                            start: block_size as usize
-                                * (group * blocks_per_group as usize + block),
-                            size: block_size as usize,
-                        });
+                        ChunkInfo::push(
+                            &mut ans,
+                            block_size as usize * (group * blocks_per_group as usize + block),
+                            block_size as usize,
+                        );
                     }
                 }
             }
@@ -102,10 +102,11 @@ pub async fn get_ext4_chunks(
             for block in 0..8 * block_size as usize {
                 let is_used = bitmap[block / 8] >> (block % 8) & 1 != 0;
                 if is_used && group * blocks_per_group as usize + block < blocks_count as usize {
-                    ans.push(ChunkInfo {
-                        start: block_size as usize * (group * blocks_per_group as usize + block),
-                        size: block_size as usize,
-                    });
+                    ChunkInfo::push(
+                        &mut ans,
+                        block_size as usize * (group * blocks_per_group as usize + block),
+                        block_size as usize,
+                    );
                 }
             }
         }

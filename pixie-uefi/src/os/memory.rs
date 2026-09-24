@@ -64,9 +64,17 @@ impl FrameBitmap {
         let mut consecutive = 0;
         let mut start_page = 0;
 
-        for p in 0..=self.max_page {
+        let mut p = 0;
+        while p <= self.max_page {
             let word = p / 64;
             let bit = p % 64;
+
+            // Fast path: skip fully allocated 64-page words if we aren't in the middle of a run
+            if bit == 0 && consecutive == 0 && self.bitmap[word] == !0u64 {
+                p += 64;
+                continue;
+            }
+
             if (self.bitmap[word] & (1 << bit)) == 0 {
                 if consecutive == 0 {
                     start_page = p;
@@ -84,6 +92,7 @@ impl FrameBitmap {
             } else {
                 consecutive = 0;
             }
+            p += 1;
         }
         None
     }
@@ -171,14 +180,7 @@ impl OomHandler for AllocOnOom {
                 unsafe { talc.claim(span) }?;
                 Ok(())
             }
-            None => {
-                log::error!(
-                    "OOM: Could not allocate physical memory for layout size {} (min_bytes: {})",
-                    layout.size(),
-                    min_bytes
-                );
-                Err(())
-            }
+            None => Err(()),
         }
     }
 }
