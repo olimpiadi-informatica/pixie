@@ -273,6 +273,7 @@ impl Executor {
 
     /// Interrupt task execution.
     /// This is useful to yield the CPU to other tasks.
+    #[allow(dead_code)]
     pub fn sched_yield() -> impl Future<Output = ()> {
         let mut ready = false;
         poll_fn(move |cx| {

@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{Ordering, fence};
+use core::time::Duration;
 
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
@@ -157,7 +158,7 @@ impl NvmeDisk {
             if Timer::micros() > deadline {
                 return Err(Error::msg("NVMe controller ready state timeout"));
             }
-            Executor::sched_yield().await;
+            Executor::sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -250,6 +251,32 @@ impl NvmeDisk {
             );
         }
 
+        // Fast path: quick spin for immediate completions (< 20 us)
+        for _ in 0..100 {
+            let completion =
+                unsafe { ptr::read_volatile(cq.as_ptr::<NvmeCompletion>().add(*cq_head as usize)) };
+            if (completion.status & 1 != 0) == *cq_phase {
+                fence(Ordering::Acquire);
+                if completion.status & 0xfffe != 0 {
+                    return Err(Error::msg("NVMe command completed with error"));
+                }
+                *cq_head += 1;
+                if *cq_head == QUEUE_ENTRIES as u16 {
+                    *cq_head = 0;
+                    *cq_phase = !*cq_phase;
+                }
+                unsafe {
+                    core::ptr::write_volatile(
+                        (bar0 + NVME_REG_DOORBELL + (2 * queue as u64 + 1) * doorbell_stride)
+                            as *mut u32,
+                        *cq_head as u32,
+                    );
+                }
+                return Ok(());
+            }
+            core::hint::spin_loop();
+        }
+
         let deadline = Timer::micros() + COMMAND_TIMEOUT_MICROS;
         loop {
             let completion =
@@ -276,7 +303,7 @@ impl NvmeDisk {
             if Timer::micros() > deadline {
                 return Err(Error::msg("NVMe command timed out"));
             }
-            Executor::sched_yield().await;
+            Executor::sleep(Duration::from_micros(50)).await;
         }
     }
 
@@ -509,7 +536,6 @@ impl NvmeDisk {
 
             cur_offset += chunk_bytes as u64;
             remaining = &mut remaining[chunk_bytes..];
-            Executor::sched_yield().await;
         }
         Ok(())
     }
@@ -560,7 +586,6 @@ impl NvmeDisk {
 
             cur_offset += chunk_bytes as u64;
             remaining = &remaining[chunk_bytes..];
-            Executor::sched_yield().await;
         }
         Ok(())
     }

@@ -225,16 +225,16 @@ pub(super) fn init() {
             let wait = poll();
             match wait {
                 Some(0) => {
-                    Executor::sched_yield().await;
+                    Executor::sleep(Duration::from_micros(100)).await;
                 }
                 Some(us) if us < 1000 => {
-                    Executor::sched_yield().await;
+                    Executor::sleep(Duration::from_micros(us.max(100))).await;
                 }
                 Some(us) => {
-                    Executor::sleep(Duration::from_micros(us.min(1000))).await;
+                    Executor::sleep(Duration::from_micros(us.min(5000))).await;
                 }
                 None => {
-                    Executor::sleep(Duration::from_millis(1)).await;
+                    Executor::sleep(Duration::from_millis(2)).await;
                 }
             }
         }

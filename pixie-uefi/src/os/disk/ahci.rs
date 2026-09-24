@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{Ordering, fence};
+use core::time::Duration;
 
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
@@ -26,6 +27,7 @@ const PORT_REG_SERR: usize = 0x30;
 const PORT_REG_CI: usize = 0x38;
 
 const COMMAND_TIMEOUT_MICROS: i64 = 10_000_000;
+const AHCI_DMA_PAGES: usize = 32; // 128 KiB transfer buffer
 
 struct DmaBuffer {
     phys: u64,
@@ -134,7 +136,7 @@ impl AhciDisk {
         let cmd_list = DmaBuffer::new(1)?; // 4KB (Command list needs 1KB)
         let recv_fis = DmaBuffer::new(1)?; // 4KB (FIS needs 256 bytes)
         let cmd_table = DmaBuffer::new(1)?; // 4KB (Command table + PRDT)
-        let data = DmaBuffer::new(1)?; // 4KB data buffer
+        let data = DmaBuffer::new(AHCI_DMA_PAGES)?; // 128KB data buffer
 
         let mut disk = Self {
             pci,
@@ -274,6 +276,19 @@ impl AhciDisk {
         // Issue command on slot 0
         self.port_write32(PORT_REG_CI, 1);
 
+        // Fast path: brief spin for ultra-fast completions (< 50 us)
+        for _ in 0..100 {
+            if (self.port_read32(PORT_REG_CI) & 1) == 0 {
+                let tfd = self.port_read32(PORT_REG_TFD);
+                if (tfd & 1) != 0 {
+                    return Err(Error::msg("AHCI command error (TFD ERR)"));
+                }
+                return Ok(());
+            }
+            core::hint::spin_loop();
+        }
+
+        // Async path: cooperative sleep allowing executor to run other tasks or halt CPU
         let deadline = Timer::micros() + COMMAND_TIMEOUT_MICROS;
         loop {
             if (self.port_read32(PORT_REG_CI) & 1) == 0 {
@@ -287,7 +302,7 @@ impl AhciDisk {
             if Timer::micros() > deadline {
                 return Err(Error::msg("AHCI command timeout"));
             }
-            Executor::sched_yield().await;
+            Executor::sleep(Duration::from_micros(100)).await;
         }
     }
 
@@ -406,11 +421,12 @@ impl AhciDisk {
     pub fn read_sync(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
         let mut cur_offset = offset;
         let mut remaining = buf;
+        let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         while !remaining.is_empty() {
             let lba = cur_offset / self.block_size;
             let in_block = (cur_offset % self.block_size) as usize;
             let blocks = ((in_block + remaining.len()).div_ceil(self.block_size as usize))
-                .min((PAGE_SIZE / self.block_size) as usize);
+                .min(max_blocks);
 
             let phys = self.data.phys();
             self.issue_cmd_sync(
@@ -434,11 +450,12 @@ impl AhciDisk {
     pub async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
         let mut cur_offset = offset;
         let mut remaining = buf;
+        let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         while !remaining.is_empty() {
             let lba = cur_offset / self.block_size;
             let in_block = (cur_offset % self.block_size) as usize;
             let blocks = ((in_block + remaining.len()).div_ceil(self.block_size as usize))
-                .min((PAGE_SIZE / self.block_size) as usize);
+                .min(max_blocks);
 
             let phys = self.data.phys();
             self.issue_cmd(
@@ -456,7 +473,6 @@ impl AhciDisk {
 
             cur_offset += chunk_bytes as u64;
             remaining = &mut remaining[chunk_bytes..];
-            Executor::sched_yield().await;
         }
         Ok(())
     }
@@ -464,11 +480,12 @@ impl AhciDisk {
     pub fn write_sync(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         let mut cur_offset = offset;
         let mut remaining = buf;
+        let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         while !remaining.is_empty() {
             let lba = cur_offset / self.block_size;
             let in_block = (cur_offset % self.block_size) as usize;
             let blocks = ((in_block + remaining.len()).div_ceil(self.block_size as usize))
-                .min((PAGE_SIZE / self.block_size) as usize);
+                .min(max_blocks);
 
             let phys = self.data.phys();
             if in_block != 0 || remaining.len() < blocks * self.block_size as usize {
@@ -504,11 +521,12 @@ impl AhciDisk {
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
         let mut cur_offset = offset;
         let mut remaining = buf;
+        let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         while !remaining.is_empty() {
             let lba = cur_offset / self.block_size;
             let in_block = (cur_offset % self.block_size) as usize;
             let blocks = ((in_block + remaining.len()).div_ceil(self.block_size as usize))
-                .min((PAGE_SIZE / self.block_size) as usize);
+                .min(max_blocks);
 
             let phys = self.data.phys();
             if in_block != 0 || remaining.len() < blocks * self.block_size as usize {
@@ -539,7 +557,6 @@ impl AhciDisk {
 
             cur_offset += chunk_bytes as u64;
             remaining = &remaining[chunk_bytes..];
-            Executor::sched_yield().await;
         }
         Ok(())
     }
