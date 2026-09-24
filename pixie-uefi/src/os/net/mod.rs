@@ -319,9 +319,9 @@ pub(super) fn init() {
                     // Periodic log of stats during DHCP polling (every ~2s)
                     if let Some(stats) = try_with_net(|n| n.device.nic.get_e1000_stats()).flatten() {
                         log::info!(
-                            "[NET STATS] TX:{} (hw GPTC:{}), RX:{} (hw GPRC:{}), MPC:{}, RNBC:{}, CRC:{}, RDH:{}, RDT:{}, TDH:{}, TDT:{}, STATUS:0x{:X}, TCTL:0x{:X}, TXDCTL:0x{:X}",
+                            "[NET STATS] TX:{} (hw GPTC:{}), RX:{} (hw GPRC:{}), MPC:{}, RNBC:{}, CRC:{}, RDH:{}, RDT:{}, TDH:{}, TDT:{}, STATUS:0x{:X}, TCTL:0x{:X}, TXDCTL:0x{:X}, RCTL:0x{:X}, RXDCTL:0x{:X}",
                             tx, stats.gptc, rx, stats.gprc, stats.mpc, stats.rnbc, stats.crcerrs,
-                            stats.rdh, stats.rdt, stats.tdh, stats.tdt, stats.status, stats.tctl, stats.txdctl
+                            stats.rdh, stats.rdt, stats.tdh, stats.tdt, stats.status, stats.tctl, stats.txdctl, stats.rctl, stats.rxdctl
                         );
                     }
                 }

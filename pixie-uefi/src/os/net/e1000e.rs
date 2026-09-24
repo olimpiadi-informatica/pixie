@@ -64,6 +64,8 @@ pub struct E1000Stats {
     pub status: u32,
     pub tctl: u32,
     pub txdctl: u32,
+    pub rctl: u32,
+    pub rxdctl: u32,
 }
 
 // Receive Control Bits
@@ -267,6 +269,12 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_RDLEN, 0);
             Self::mmio_write(mmio_base, REG_RDH, 0);
             Self::safe_write_tail(mmio_base, REG_RDT, 0);
+            Self::mmio_write(mmio_base, REG_RDBAH + 0x100, 0);
+            Self::mmio_write(mmio_base, REG_RDBAL + 0x100, 0);
+            Self::mmio_write(mmio_base, REG_RDLEN + 0x100, 0);
+            Self::mmio_write(mmio_base, REG_RDH + 0x100, 0);
+            Self::safe_write_tail(mmio_base, REG_RDT + 0x100, 0);
+            Self::mmio_write(mmio_base, REG_RXDCTL + 0x100, 0);
             Self::mmio_write(mmio_base, REG_TDBAH, 0);
             Self::mmio_write(mmio_base, REG_TDBAL, 0);
             Self::mmio_write(mmio_base, REG_TDLEN, 0);
@@ -389,14 +397,23 @@ impl E1000Device {
             Self::safe_write_tail(mmio_base, REG_RDT, (NUM_RX_DESC - 1) as u32);
         }
 
+        const REG_MRQC: usize = 0x5818;
         let rctl = RCTL_EN | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SZ_2048 | RCTL_SECRC;
         unsafe {
+            // Disable Multiple Receive Queues / RSS so all incoming frames route directly to Queue 0
+            Self::mmio_write(mmio_base, REG_MRQC, 0);
+
             Self::mmio_write(mmio_base, REG_RCTL, rctl);
+
+            // Configure RXDCTL: WTHRESH=0 ensures immediate descriptor writeback upon packet arrival
+            // without waiting for descriptor coalescing or interrupt delay timers (since we run polled).
             let mut rxdctl = Self::mmio_read(mmio_base, REG_RXDCTL);
             rxdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16));
-            rxdctl |= (8) | (8 << 8) | (4 << 16) | RXDCTL_ENABLE;
+            rxdctl |= RXDCTL_ENABLE;
             Self::mmio_write(mmio_base, REG_RXDCTL, rxdctl);
-            Self::mmio_write(mmio_base, REG_RXDCTL + 0x100, rxdctl);
+
+            // Explicitly ensure Queue 1 is disabled so packets are not steered into an unmapped queue
+            Self::mmio_write(mmio_base, REG_RXDCTL + 0x100, 0);
         }
         for _ in 0..10_000 {
             if (unsafe { Self::mmio_read(mmio_base, REG_RXDCTL) } & RXDCTL_ENABLE) != 0 {
@@ -695,6 +712,8 @@ impl E1000Device {
                 status: Self::mmio_read(self.mmio_base, REG_STATUS),
                 tctl: Self::mmio_read(self.mmio_base, REG_TCTL),
                 txdctl: Self::mmio_read(self.mmio_base, REG_TXDCTL),
+                rctl: Self::mmio_read(self.mmio_base, REG_RCTL),
+                rxdctl: Self::mmio_read(self.mmio_base, REG_RXDCTL),
             }
         }
     }
