@@ -147,6 +147,9 @@ pub(super) fn init() {
         for (idx, nic) in nics.iter().enumerate() {
             if nic.is_link_up() {
                 selected_idx = Some(idx);
+                w.clear();
+                let _ = core::write!(w, "[NET] Link UP detected on NIC {} (step {})", idx, step);
+                raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
                 break;
             }
         }

@@ -178,31 +178,38 @@ impl E1000Device {
             let _ = Self::mmio_read(mmio_base, REG_ICR);
         }
 
-        // 3. Reset device
+        // 3. Stop RX and TX units cleanly before setting up rings
+        // NOTE: We deliberately do NOT assert CTRL_RST. On Intel PCH LAN controllers (I217/I218/I219),
+        // asserting CTRL_RST causes internal interconnect stalls (hanging any subsequent MMIO read),
+        // drops PHY autonegotiation, and conflicts with the Intel Management Engine (ME).
+        // Since UEFI PXE has already initialized the PHY and negotiated link, a soft stop of RX/TX
+        // cleanly resets descriptor processing without disrupting the hardware or link state.
         raw_fb::print(
-            "[E1000] Resetting device (CTRL_RST)...",
+            "[E1000] Stopping RX/TX units...",
             raw_fb::COLOR_CYAN,
             raw_fb::COLOR_DARK_BLUE,
         );
-        let ctrl = unsafe { Self::mmio_read(mmio_base, REG_CTRL) };
         unsafe {
-            Self::mmio_write(mmio_base, REG_CTRL, ctrl | CTRL_RST);
+            Self::mmio_write(mmio_base, REG_RCTL, 0);
+            Self::mmio_write(mmio_base, REG_TCTL, 0);
+            Self::mmio_write(mmio_base, REG_RDBAH, 0);
+            Self::mmio_write(mmio_base, REG_RDBAL, 0);
+            Self::mmio_write(mmio_base, REG_RDLEN, 0);
+            Self::mmio_write(mmio_base, REG_RDH, 0);
+            Self::mmio_write(mmio_base, REG_RDT, 0);
+            Self::mmio_write(mmio_base, REG_TDBAH, 0);
+            Self::mmio_write(mmio_base, REG_TDBAL, 0);
+            Self::mmio_write(mmio_base, REG_TDLEN, 0);
+            Self::mmio_write(mmio_base, REG_TDH, 0);
+            Self::mmio_write(mmio_base, REG_TDT, 0);
         }
-        let reset_start = crate::os::timer::Timer::micros();
-        let mut iters = 0;
-        while iters < 200_000 && (crate::os::timer::Timer::micros() - reset_start) < 50_000 {
-            let c = unsafe { Self::mmio_read(mmio_base, REG_CTRL) };
-            if (c & CTRL_RST) == 0 {
-                break;
-            }
-            iters += 1;
-            core::hint::spin_loop();
-        }
-        w.clear();
-        let _ = core::write!(w, "[E1000] Reset done (iters: {})", iters);
-        raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+        raw_fb::print(
+            "[E1000] Stopped RX/TX units OK",
+            raw_fb::COLOR_GREEN,
+            raw_fb::COLOR_DARK_BLUE,
+        );
 
-        // 4. Disable interrupts again post-reset
+        // 4. Disable interrupts again
         unsafe {
             Self::mmio_write(mmio_base, REG_IMC, 0xFFFF_FFFF);
             let _ = Self::mmio_read(mmio_base, REG_ICR);
@@ -235,6 +242,11 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_RAL, ral_val);
             Self::mmio_write(mmio_base, REG_RAH, rah_val);
         }
+        raw_fb::print(
+            "[E1000] MTA cleared & MAC written OK",
+            raw_fb::COLOR_GREEN,
+            raw_fb::COLOR_DARK_BLUE,
+        );
 
         // 8. Allocate and initialize Receive Descriptor Ring
         let rx_ring_bytes = NUM_RX_DESC * core::mem::size_of::<RxDesc>();
@@ -278,6 +290,11 @@ impl E1000Device {
         unsafe {
             Self::mmio_write(mmio_base, REG_RCTL, rctl);
         }
+        raw_fb::print(
+            "[E1000] RX ring configured & RCTL enabled OK",
+            raw_fb::COLOR_GREEN,
+            raw_fb::COLOR_DARK_BLUE,
+        );
 
         // 9. Allocate and initialize Transmit Descriptor Ring
         let tx_ring_bytes = NUM_TX_DESC * core::mem::size_of::<TxDesc>();
@@ -323,6 +340,26 @@ impl E1000Device {
         unsafe {
             Self::mmio_write(mmio_base, REG_TCTL, tctl);
         }
+        raw_fb::print(
+            "[E1000] TX ring configured & TCTL enabled OK",
+            raw_fb::COLOR_GREEN,
+            raw_fb::COLOR_DARK_BLUE,
+        );
+
+        let status = unsafe { Self::mmio_read(mmio_base, REG_STATUS) };
+        let link_up = (status & (1 << 1)) != 0;
+        w.clear();
+        let _ = core::write!(
+            w,
+            "[E1000] Status: 0x{:08X} (link: {})",
+            status,
+            if link_up { "UP" } else { "DOWN" }
+        );
+        raw_fb::print(
+            w.as_str(),
+            if link_up { raw_fb::COLOR_GREEN } else { raw_fb::COLOR_YELLOW },
+            raw_fb::COLOR_DARK_BLUE,
+        );
 
         Ok(Self {
             pci,
