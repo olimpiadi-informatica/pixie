@@ -6,7 +6,7 @@ use uefi::boot::MemoryType;
 use uefi::mem::memory_map::{MemoryMap, MemoryMapOwned};
 
 pub const PAGE_SIZE: u64 = 4096;
-const MAX_PAGES: usize = 65536 * 64; // 4,194,304 pages = 16 GiB of RAM
+const MAX_PAGES: usize = 262144 * 64; // 16,777,216 pages = 64 GiB of RAM
 const BITMAP_WORDS: usize = MAX_PAGES / 64;
 
 // Bitmap: 1 = reserved/used, 0 = free
@@ -121,7 +121,7 @@ pub fn free_contiguous(phys: u64, num_pages: usize) {
     FRAME_ALLOCATOR.lock().free_contiguous(phys, num_pages);
 }
 
-const MAX_BLOCK_SIZE: usize = 128 << 20; // 128 MB maximum chunk
+const MAX_BLOCK_SIZE: usize = 32 << 20; // 32 MB maximum chunk to avoid physical fragmentation failure
 
 pub struct AllocOnOom {
     next_block_size: usize,
@@ -129,30 +129,56 @@ pub struct AllocOnOom {
 
 impl OomHandler for AllocOnOom {
     fn handle_oom(talc: &mut Talc<Self>, layout: core::alloc::Layout) -> Result<(), ()> {
-        let bs = talc.oom_handler.next_block_size.max(layout.size());
-        talc.oom_handler.next_block_size =
-            (talc.oom_handler.next_block_size * 2).min(MAX_BLOCK_SIZE);
+        let min_bytes = layout.size().max(PAGE_SIZE as usize);
+        let mut target_bytes = talc.oom_handler.next_block_size.max(min_bytes);
 
-        let num_pages = bs.div_ceil(PAGE_SIZE as usize);
-        let phys = if TOTAL_RAM.load(Ordering::Relaxed) == 0 {
-            uefi::boot::allocate_pages(
-                uefi::boot::AllocateType::AnyPages,
-                uefi::boot::MemoryType::LOADER_DATA,
-                num_pages,
-            )
-            .ok()
-            .map(|ptr| ptr.as_ptr() as u64)
-        } else {
-            alloc_contiguous(num_pages)
-        };
+        // Attempt to allocate target_bytes. If large contiguous physical frames
+        // are unavailable due to fragmentation, back off by halving down to min_bytes.
+        let mut chosen_pages = 0;
+        let mut phys = None;
+
+        while target_bytes >= min_bytes {
+            let num_pages = target_bytes.div_ceil(PAGE_SIZE as usize);
+            let p = if TOTAL_RAM.load(Ordering::Relaxed) == 0 {
+                uefi::boot::allocate_pages(
+                    uefi::boot::AllocateType::AnyPages,
+                    uefi::boot::MemoryType::LOADER_DATA,
+                    num_pages,
+                )
+                .ok()
+                .map(|ptr| ptr.as_ptr() as u64)
+            } else {
+                alloc_contiguous(num_pages)
+            };
+
+            if let Some(addr) = p {
+                phys = Some(addr);
+                chosen_pages = num_pages;
+                // Target doubling for subsequent OOMs, capped at MAX_BLOCK_SIZE
+                talc.oom_handler.next_block_size = (target_bytes * 2).min(MAX_BLOCK_SIZE);
+                break;
+            }
+
+            if target_bytes <= min_bytes {
+                break;
+            }
+            target_bytes = (target_bytes / 2).max(min_bytes);
+        }
 
         match phys {
             Some(phys) => {
-                let span = Span::from_base_size(phys as *mut u8, num_pages * PAGE_SIZE as usize);
+                let span = Span::from_base_size(phys as *mut u8, chosen_pages * PAGE_SIZE as usize);
                 unsafe { talc.claim(span) }?;
                 Ok(())
             }
-            None => Err(()),
+            None => {
+                log::error!(
+                    "OOM: Could not allocate physical memory for layout size {} (min_bytes: {})",
+                    layout.size(),
+                    min_bytes
+                );
+                Err(())
+            }
         }
     }
 }

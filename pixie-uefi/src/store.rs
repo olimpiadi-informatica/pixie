@@ -108,7 +108,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     let free_mem = memory::stats().free;
     let channel_size =
-        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
+        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).clamp(4, 32);
     log::debug!(
         "Free memory: {}. Channel size: {channel_size}",
         BytesFmt(free_mem)
@@ -133,8 +133,9 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     let task1 = async {
         let tx1 = tx1;
+        let mut data = Vec::new();
         for chunk_info in chunks {
-            let mut data = vec![0; chunk_info.size];
+            data.resize(chunk_info.size, 0);
             disk.read(chunk_info.start as u64, &mut data).await?;
             let cdata = compress(&data);
             let hash = blake3::hash(&data).into();

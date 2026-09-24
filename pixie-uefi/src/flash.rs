@@ -37,6 +37,7 @@ async fn fetch_image(stream: &TcpStream) -> Result<Image> {
 struct Stats {
     chunks: usize,
     unique: usize,
+    scanned: usize,
     fetch: usize,
     recv: usize,
     pack_recv: usize,
@@ -98,6 +99,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let stats = RefCell::new(Stats {
         chunks: image.disk.len(),
         unique: chunks_info.len(),
+        scanned: 0,
         fetch: 0,
         recv: 0,
         pack_recv: 0,
@@ -108,6 +110,13 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         draw_area.clear();
         writeln!(draw_area, "{} total chunks", stats.borrow().chunks).unwrap();
         writeln!(draw_area, "{} unique chunks", stats.borrow().unique).unwrap();
+        writeln!(
+            draw_area,
+            "{} / {} chunks scanned",
+            stats.borrow().scanned,
+            stats.borrow().unique
+        )
+        .unwrap();
         writeln!(draw_area, "{} chunks to fetch", stats.borrow().fetch).unwrap();
         writeln!(draw_area, "{} chunks received", stats.borrow().recv).unwrap();
         writeln!(draw_area, "{} packets received", stats.borrow().pack_recv).unwrap();
@@ -134,9 +143,10 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
 
     let mut disk = disk::Disk::largest().await;
 
+    let mut buf = Vec::new();
     for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
         let mut found = None;
-        let mut buf = vec![0; size];
+        buf.resize(size, 0);
         for &offset in &pos {
             disk.read(offset as u64, &mut buf).await.unwrap();
             if blake3::hash(&buf).as_bytes() == &hash {
@@ -154,6 +164,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
             chunks_info.insert(hash, (size, csize, pos));
             stats.borrow_mut().fetch = chunks_info.len();
         }
+        stats.borrow_mut().scanned += 1;
         update_content(draw);
     }
 
@@ -170,7 +181,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         let tx = tx;
         let mut last_seen = Vec::new();
         let free_mem = memory::stats().free;
-        let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
+        let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).clamp(64, 512);
         log::debug!(
             "Free memory: {}. Max chunks in memory: {max_chunks}",
             BytesFmt(free_mem)

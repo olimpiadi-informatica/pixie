@@ -32,7 +32,7 @@ mod store;
 mod export_cov;
 
 // Memory to keep free for non-chunk storage.
-const MIN_MEMORY: u64 = 32 << 20;
+const MIN_MEMORY: u64 = 64 << 20;
 
 async fn server_discover() -> Result<SocketAddrV4> {
     let socket = UdpSocket::bind(None).await?;
