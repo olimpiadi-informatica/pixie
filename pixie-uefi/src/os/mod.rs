@@ -78,7 +78,19 @@ where
     // Initialize UEFI helpers while Boot Services are alive
     uefi::helpers::init().unwrap();
 
-    // 0. Explicitly request firmware to switch from text to graphics mode if ConsoleControl is present
+    // 0. Initialize UEFI helpers while Boot Services are alive
+    let _ = uefi::system::with_stdout(|stdout| stdout.clear());
+
+    uefi::println!("==================== PIXIE UEFI BOOT DIAGNOSTICS ====================");
+    uefi::println!(
+        "Firmware: {} | Vendor Rev: 0x{:X} | UEFI Rev: {}",
+        uefi::system::firmware_vendor(),
+        uefi::system::firmware_revision(),
+        uefi::system::uefi_revision()
+    );
+
+    // Check ConsoleControl protocol without modifying mode yet
+    let mut cc_protocol = None;
     if let Ok(handle) = uefi::boot::get_handle_for_protocol::<ConsoleControl>() {
         let params = uefi::boot::OpenProtocolParams {
             handle,
@@ -91,17 +103,31 @@ where
                 uefi::boot::OpenProtocolAttributes::GetProtocol,
             )
         } {
-            // 1 = EfiConsoleControlScreenGraphics
-            unsafe {
-                let _ = (cc.set_mode)(&mut *cc, 1);
-            }
+            let mut mode = 999u32;
+            let mut uga = false;
+            let mut locked = false;
+            let status = unsafe { (cc.get_mode)(&mut *cc, &mut mode, &mut uga, &mut locked) };
+            uefi::println!(
+                "ConsoleControl: PRESENT (status: {:?}, current_mode: {}, uga: {})",
+                status,
+                match mode {
+                    0 => "Text (0)",
+                    1 => "Graphics (1)",
+                    _ => "Unknown",
+                },
+                uga
+            );
+            cc_protocol = Some(cc);
+        } else {
+            uefi::println!("ConsoleControl: OpenProtocol FAILED");
         }
+    } else {
+        uefi::println!("ConsoleControl: NOT SUPPORTED by firmware");
     }
 
-    // 1. Locate and configure GOP framebuffer
+    // 1. Locate GOP handles
     let mut gop_handles: Vec<uefi::Handle> = Vec::new();
 
-    // Check handles that have SimpleTextOutput protocol (the active console!)
     if let Ok(text_handles) = uefi::boot::find_handles::<uefi::proto::console::text::Output>() {
         for handle in text_handles {
             let params = uefi::boot::OpenProtocolParams {
@@ -135,13 +161,18 @@ where
         }
     }
 
-    // If still no GOP handles found, connect graphics controllers to see if GOP is produced
+    uefi::println!("GOP Handles Found: {}", gop_handles.len());
+
     if gop_handles.is_empty() {
+        uefi::println!("No GOP found! Connecting controllers via DevicePath...");
+        let mut connected = 0;
         if let Ok(all_handles) =
             uefi::boot::find_handles::<uefi::proto::device_path::DevicePath>()
         {
             for handle in all_handles {
-                let _ = uefi::boot::connect_controller(handle, None, None, true);
+                if uefi::boot::connect_controller(handle, None, None, true).is_ok() {
+                    connected += 1;
+                }
             }
         }
         for handle in uefi::boot::find_handles::<GraphicsOutput>().unwrap_or_default() {
@@ -149,6 +180,11 @@ where
                 gop_handles.push(handle);
             }
         }
+        uefi::println!(
+            "  Connected {} device paths. GOP handles now: {}",
+            connected,
+            gop_handles.len()
+        );
     }
 
     let open_gop = |handle: uefi::Handle| -> Option<uefi::boot::ScopedProtocol<GraphicsOutput>> {
@@ -169,6 +205,151 @@ where
         }
     };
 
+    // Print diagnostic info for each GOP handle
+    for (idx, &handle) in gop_handles.iter().enumerate() {
+        if let Some(mut gop) = open_gop(handle) {
+            let cur = gop.current_mode_info();
+            let (cw, ch) = cur.resolution();
+            let mode_count = gop.modes().count();
+            let mut fb = gop.frame_buffer();
+            let fb_base = fb.as_mut_ptr() as u64;
+            let fb_size = fb.size();
+            uefi::println!(
+                "GOP[{}]: cur={}x{} stride={} FB=0x{:X} ({}K) modes={}",
+                idx,
+                cw,
+                ch,
+                cur.stride(),
+                fb_base,
+                fb_size / 1024,
+                mode_count
+            );
+
+            let best_mode = gop
+                .modes()
+                .filter(|m| {
+                    let (w, h) = m.info().resolution();
+                    w >= 640 && h >= 480
+                })
+                .max_by_key(|m| {
+                    let (w, h) = m.info().resolution();
+                    score_mode(w, h, Some((cw, ch)))
+                });
+
+            if let Some(m) = best_mode {
+                let (bw, bh) = m.info().resolution();
+                uefi::println!(
+                    "  -> Best Mode: {}x{} (score: {})",
+                    bw,
+                    bh,
+                    score_mode(bw, bh, Some((cw, ch)))
+                );
+            } else {
+                uefi::println!("  -> No mode >= 640x480 found");
+            }
+        } else {
+            uefi::println!("GOP[{}]: OpenProtocol FAILED", idx);
+        }
+    }
+
+    // 2. Network SNP handles
+    let snp_handles =
+        uefi::boot::find_handles::<uefi::proto::network::snp::SimpleNetwork>().unwrap_or_default();
+    uefi::print!("SNP Network: {} handle(s)", snp_handles.len());
+    let mut uefi_mac = None;
+    for &h in &snp_handles {
+        let params = uefi::boot::OpenProtocolParams {
+            handle: h,
+            agent: uefi::boot::image_handle(),
+            controller: None,
+        };
+        if let Ok(snp) = unsafe {
+            uefi::boot::open_protocol::<uefi::proto::network::snp::SimpleNetwork>(
+                params,
+                uefi::boot::OpenProtocolAttributes::GetProtocol,
+            )
+        } {
+            let m = snp.mode();
+            let mac = &m.current_address.0[..6];
+            if mac != [0; 6] && (mac[0] & 1) == 0 {
+                let mut mac_arr = [0u8; 6];
+                mac_arr.copy_from_slice(mac);
+                uefi_mac = Some(mac_arr);
+                uefi::print!(
+                    " | MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (media_present: {:?})",
+                    mac[0],
+                    mac[1],
+                    mac[2],
+                    mac[3],
+                    mac[4],
+                    mac[5],
+                    m.media_present
+                );
+                break;
+            }
+        }
+    }
+    uefi::println!("");
+
+    // 3. Locate ACPI RSDP pointer
+    let rsdp_addr = uefi::system::with_config_table(|entries| {
+        for entry in entries {
+            if entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID
+                || entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI_GUID
+            {
+                return Some(entry.address as u64);
+            }
+        }
+        None
+    });
+    uefi::println!("ACPI RSDP Address: 0x{:X}", rsdp_addr.unwrap_or(0));
+
+    // 4. Calibrate TSC
+    Timer::ensure_init();
+    let tsc_ticks_per_micro = Timer::ticks_per_micro();
+    uefi::println!("TSC Calibrated: {} ticks/us", tsc_ticks_per_micro);
+
+    // 5. Interactive Debug Busy-Wait
+    uefi::println!("----------------------------------------------------------------------");
+    uefi::println!("DEBUG PAUSE: Press SPACE to PAUSE indefinitely. Any other key to resume.");
+    uefi::print!("Auto-continuing in: ");
+
+    let mut remaining = 20; // 20 seconds
+    let mut paused = false;
+
+    loop {
+        let key = uefi::system::with_stdin(|stdin| stdin.read_key().ok().flatten());
+        if let Some(key) = key {
+            match key {
+                uefi::proto::console::text::Key::Printable(c) if u16::from(c) == b' ' as u16 => {
+                    paused = !paused;
+                    if paused {
+                        uefi::println!("\n*** PAUSED by user. Press any key to resume... ***");
+                    } else {
+                        uefi::println!("\n*** RESUMING... ***");
+                        break;
+                    }
+                }
+                _ => {
+                    uefi::println!("\n*** Key pressed: continuing immediately! ***");
+                    break;
+                }
+            }
+        }
+
+        if !paused {
+            uefi::print!("{}s ", remaining);
+            if remaining == 0 {
+                uefi::println!("\n*** Timeout: continuing now. ***");
+                break;
+            }
+            remaining -= 1;
+        }
+
+        uefi::boot::stall(Duration::from_secs(1));
+    }
+
+    // 6. Transition to selected GOP framebuffer
     let mut selected_fb = None;
     let mut _active_gop = None;
 
@@ -184,7 +365,6 @@ where
                 }
             };
 
-            // Pick optimal resolution from available modes
             let best_mode = gop
                 .modes()
                 .filter(|m| {
@@ -197,7 +377,11 @@ where
                 });
 
             if let Some(mode) = best_mode {
-                let _ = gop.set_mode(&mode);
+                let (bw, bh) = mode.info().resolution();
+                uefi::println!("[1/4] Applying GOP mode {}x{} on handle {:?}...", bw, bh, handle);
+                let res = gop.set_mode(&mode);
+                uefi::println!("      set_mode result: {:?}", res);
+                uefi::boot::stall(Duration::from_secs(1));
             }
 
             let mode_info = gop.current_mode_info();
@@ -226,55 +410,21 @@ where
         None => (0xB8000, 80 * 25 * 2, 80, 25, 80),
     };
 
-    // 2. Locate ACPI RSDP pointer
-    let rsdp_addr = uefi::system::with_config_table(|entries| {
-        for entry in entries {
-            if entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID
-                || entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI_GUID
-            {
-                return Some(entry.address as u64);
-            }
-        }
-        None
-    });
-
-    // 3. Calibrate TSC and capture UEFI network MAC before ExitBootServices
-    let mut uefi_mac = None;
-    if let Ok(snp_handles) = uefi::boot::find_handles::<uefi::proto::network::snp::SimpleNetwork>() {
-        for handle in snp_handles {
-            let open_snp = || -> Option<uefi::boot::ScopedProtocol<uefi::proto::network::snp::SimpleNetwork>> {
-                if let Ok(snp) = uefi::boot::open_protocol_exclusive::<uefi::proto::network::snp::SimpleNetwork>(handle) {
-                    return Some(snp);
-                }
-                let params = uefi::boot::OpenProtocolParams {
-                    handle,
-                    agent: uefi::boot::image_handle(),
-                    controller: None,
-                };
-                unsafe {
-                    uefi::boot::open_protocol::<uefi::proto::network::snp::SimpleNetwork>(
-                        params,
-                        uefi::boot::OpenProtocolAttributes::GetProtocol,
-                    )
-                    .ok()
-                }
-            };
-            if let Some(snp) = open_snp() {
-                let mode = snp.mode();
-                let mut mac = [0u8; 6];
-                mac.copy_from_slice(&mode.current_address.0[..6]);
-                if mac != [0; 6] && (mac[0] & 1) == 0 {
-                    uefi_mac = Some(mac);
-                    break;
-                }
-            }
+    // Step 2: Switch ConsoleControl if GOP is active
+    if let Some(mut cc) = cc_protocol {
+        if selected_fb.is_some() {
+            uefi::println!("[2/4] Switching ConsoleControl to Graphics mode (1)...");
+            let res = unsafe { (cc.set_mode)(&mut *cc, 1) };
+            uefi::println!("      ConsoleControl set_mode result: {:?}", res);
+            uefi::boot::stall(Duration::from_secs(1));
+        } else {
+            uefi::println!("[2/4] GOP is NOT active; leaving ConsoleControl in Text mode!");
+            uefi::boot::stall(Duration::from_secs(1));
         }
     }
 
-    Timer::ensure_init();
-    let tsc_ticks_per_micro = Timer::ticks_per_micro();
-
-    // 4. Save BootInfo
+    // Step 3: Save BootInfo
+    uefi::println!("[3/4] Storing BootInfo (fb_base=0x{:X}, size={}K)...", fb_base, fb_size / 1024);
     let boot_info = BootInfo {
         framebuffer_base: fb_base,
         framebuffer_size: fb_size,
@@ -287,7 +437,11 @@ where
     };
     boot_info::set_boot_info(boot_info);
 
-    // 5. Exit UEFI Boot Services -> Transition to Bare-Metal Kernel!
+    // Step 4: Exit Boot Services
+    uefi::println!("[4/4] Calling exit_boot_services (transferring to bare metal)...");
+    uefi::println!("      (If system halts here, exit_boot_services or arch::init faulted)");
+    uefi::boot::stall(Duration::from_secs(2));
+
     let memory_map = unsafe { uefi::boot::exit_boot_services(None) };
 
     // 6. Kernel Architecture Initialization
