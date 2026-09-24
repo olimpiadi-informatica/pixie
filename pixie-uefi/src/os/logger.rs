@@ -136,9 +136,8 @@ fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
         writeln!(draw_area, "{target}] {msg}").unwrap();
     }
 
-    if level <= Level::Warn {
-        ui::flush();
-    }
+    // Always flush UI so log messages immediately appear on the screen
+    ui::flush();
 }
 
 impl log::Log for Logger {

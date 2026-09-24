@@ -53,8 +53,8 @@ pub(super) fn init() {
     let pci_devices = pci::scan_pci();
     let mut nics: Vec<KernelNic> = Vec::new();
 
-    for dev in pci_devices {
-        if e1000e::probe(&dev) {
+    for dev in &pci_devices {
+        if e1000e::probe(dev) {
             log::info!(
                 "Found Intel Ethernet controller at {:02x}:{:02x}.{:x} (vendor: {:04x}, device: {:04x})",
                 dev.bus,
@@ -63,11 +63,11 @@ pub(super) fn init() {
                 dev.vendor_id,
                 dev.device_id
             );
-            match e1000e::E1000Device::new(dev) {
+            match e1000e::E1000Device::new(*dev) {
                 Ok(nic) => nics.push(KernelNic::E1000(nic)),
                 Err(err) => log::error!("Failed to initialize Intel NIC: {err}"),
             }
-        } else if rtl8169::probe(&dev) {
+        } else if rtl8169::probe(dev) {
             log::info!(
                 "Found Realtek Ethernet controller at {:02x}:{:02x}.{:x} (vendor: {:04x}, device: {:04x})",
                 dev.bus,
@@ -76,7 +76,7 @@ pub(super) fn init() {
                 dev.vendor_id,
                 dev.device_id
             );
-            match rtl8169::Rtl8169Device::new(dev) {
+            match rtl8169::Rtl8169Device::new(*dev) {
                 Ok(nic) => nics.push(KernelNic::Rtl8169(nic)),
                 Err(err) => log::error!("Failed to initialize Realtek NIC: {err}"),
             }
@@ -84,7 +84,17 @@ pub(super) fn init() {
     }
 
     if nics.is_empty() {
-        panic!("No supported network controller found (Intel e1000/e1000e or Realtek rtl8169)");
+        let mut dev_list = alloc::string::String::new();
+        for dev in &pci_devices {
+            if dev.class_code == 0x02 {
+                let _ = core::write!(
+                    dev_list,
+                    " [{:02x}:{:02x}.{:x} ID {:04x}:{:04x} class {:02x}:{:02x}]",
+                    dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, dev.class_code, dev.subclass
+                );
+            }
+        }
+        panic!("No supported NIC matched! PCI Network devices:{dev_list}");
     }
 
     // Network Interface Arbitration: check link status on detected NICs, polling up to 5s

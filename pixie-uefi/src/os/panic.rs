@@ -3,6 +3,7 @@ use core::panic::PanicInfo;
 
 use crate::os::arch::io;
 use crate::os::logger::SERIAL;
+use crate::os::raw_fb;
 use crate::os::timer::Timer;
 use crate::os::{input, ui};
 use crate::power_control;
@@ -58,10 +59,19 @@ pub fn handle_fault(reason: &str) -> ! {
         }
     }
 
+    // Direct hardware fallback: write fault directly to physical framebuffer
+    raw_fb::draw_fault_banner(reason);
     ui::display_fault_screen(reason);
 
     for sec in (1..=30).rev() {
         ui::update_fault_countdown(sec);
+        let mut cdown = raw_fb::StackWriter::<128>::new();
+        let _ = write!(
+            cdown,
+            "Rebooting in {sec:2} seconds... (press any key to reboot immediately)"
+        );
+        raw_fb::print_at(2, 6, cdown.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_BG_RED);
+
         let serial = SERIAL.lock();
         let mut msg_buf = StackBuf::<128>::new();
         let _ = writeln!(

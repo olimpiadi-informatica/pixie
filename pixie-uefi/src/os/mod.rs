@@ -1,8 +1,10 @@
 use alloc::vec::Vec;
+use core::fmt::Write;
 use core::future::Future;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
+use uefi::mem::memory_map::MemoryMap;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 
 use self::boot_info::BootInfo;
@@ -23,6 +25,7 @@ pub mod memory;
 pub mod net;
 pub mod panic;
 pub mod pci;
+pub mod raw_fb;
 mod send_wrapper;
 mod timer;
 pub mod ui;
@@ -460,24 +463,88 @@ where
     uefi::println!("[DBG 14] BootInfo stored successfully");
 
     // Step 4: Exit Boot Services
-    uefi::println!("[DBG 15] Calling exit_boot_services in 2 seconds...");
-    uefi::println!("         (Text console and Boot Services will terminate at this point)");
-    uefi::boot::stall(Duration::from_secs(2));
+    uefi::println!("----------------------------------------------------------------------");
+    uefi::println!("[DBG 15] Ready to exit boot services.");
+    uefi::println!(
+        "         Resolution: {}x{}, Stride: {}, FB: 0x{:X} ({}K)",
+        fb_width,
+        fb_height,
+        fb_stride,
+        fb_base,
+        fb_size / 1024
+    );
+    uefi::println!("         Pausing 5 seconds so you can read this screen...");
+    for s in (1..=5).rev() {
+        uefi::println!("         Exiting boot services in {}s...", s);
+        uefi::boot::stall(Duration::from_secs(1));
+    }
 
     let memory_map = unsafe { uefi::boot::exit_boot_services(None) };
 
-    // 6. Kernel Architecture Initialization
-    unsafe {
-        arch::init(); // GDT, IDT (with lightweight ISRs), Local APIC
+    // 6. Direct Framebuffer Early Diagnostics
+    raw_fb::init(&boot_info);
+    raw_fb::clear_screen(raw_fb::COLOR_DARK_BLUE);
+    raw_fb::print("================== PIXIE POST-EBS KERNEL DIAGNOSTICS ==================", raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
+
+    let mut w = raw_fb::StackWriter::<128>::new();
+    let _ = core::write!(w, "[POST-EBS 1] ExitBootServices OK! Memory map: {} entries", memory_map.len());
+    raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 2] Initializing GDT...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    unsafe { arch::gdt::init(); }
+    raw_fb::print("[POST-EBS 2] GDT initialized OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 3] Initializing IDT...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    unsafe { arch::idt::init(); }
+    raw_fb::print("[POST-EBS 3] IDT initialized OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 4] Initializing Local APIC...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    unsafe { arch::apic::init(); }
+    raw_fb::print("[POST-EBS 4] Local APIC initialized OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 5] Initializing Physical Memory & Allocator...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    memory::init(&memory_map);
+    let mem_stats = memory::stats();
+    w.clear();
+    let _ = core::write!(w, "[POST-EBS 5] Memory ready: Usable: {} MB, Reserved: {} MB", (mem_stats.used + mem_stats.free) / (1024 * 1024), mem_stats.other / (1024 * 1024));
+    raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 6] Scanning PCI bus...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    let pci_devices = pci::scan_pci();
+    w.clear();
+    let _ = core::write!(w, "[POST-EBS 6] Found {} PCI device(s)", pci_devices.len());
+    raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+    for dev in &pci_devices {
+        if dev.class_code == 0x02 { // Network controller
+            w.clear();
+            let _ = core::write!(w, "  -> NET: {:02x}:{:02x}.{:x} ID: {:04x}:{:04x} class: {:02x}:{:02x}", dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, dev.class_code, dev.subclass);
+            raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
+        }
     }
 
-    // 7. Memory Allocators
-    memory::init(&memory_map);
-
-    // 8. Console & UI & Watchdog
-    ui::init(boot_info); // GOP Framebuffer UI
-    logger::init(); // 16550 UART COM1
+    raw_fb::print("[POST-EBS 7] Initializing Serial COM1 & Watchdog...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    logger::init();
     watchdog::init();
+    raw_fb::print("[POST-EBS 7] Serial & Watchdog OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 8] Starting APIC Timer & STI...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    unsafe {
+        arch::apic::start_periodic_timer(32, 5_000);
+        arch::io::sti();
+    }
+    raw_fb::print("[POST-EBS 8] Timer running & interrupts enabled OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 9] Initializing Network stack (net::init)...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    net::init();
+    raw_fb::print("[POST-EBS 9] Network stack initialized OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
+    raw_fb::print("[POST-EBS 10] Initializing UI subsystem...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    // Stall 3 seconds so the user can read all diagnostic lines on the screen!
+    let stall_start = timer::Timer::micros();
+    while timer::Timer::micros() - stall_start < 3_000_000 {
+        arch::io::pause();
+    }
+    ui::init(boot_info);
 
     log::info!("Pixie Bare-Metal Kernel initialized in 64-bit Long Mode");
     log::info!(
@@ -488,21 +555,11 @@ where
         fb_base as usize
     );
 
-    let mem_stats = memory::stats();
     log::info!(
         "Physical Memory: {} MB usable, {} MB reserved",
         (mem_stats.used + mem_stats.free) / (1024 * 1024),
         mem_stats.other / (1024 * 1024)
     );
-
-    // 9. Start Local APIC periodic timer (5ms = 200 Hz) for smooth UI & watchdog
-    unsafe {
-        arch::apic::start_periodic_timer(32, 5_000);
-        arch::io::sti(); // Enable interrupts
-    }
-
-    // 10. Initialize network stack
-    net::init();
 
     // 11. Spawn core tasks
     Executor::spawn("init", async move {
