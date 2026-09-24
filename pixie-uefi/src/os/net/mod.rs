@@ -19,7 +19,7 @@ use crate::os::net::interface::{KernelNic, KernelNicDevice};
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
 use crate::os::timer::rdtsc;
-use crate::os::{pci, ui};
+use crate::os::{pci, raw_fb, ui};
 
 pub mod e1000e;
 mod interface;
@@ -53,7 +53,20 @@ pub(super) fn init() {
     let pci_devices = pci::scan_pci();
     let mut nics: Vec<KernelNic> = Vec::new();
 
+    let mut w = raw_fb::StackWriter::<128>::new();
+    let _ = core::write!(w, "[NET] Scanning {} PCI devices for network adapters...", pci_devices.len());
+    raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+
     for dev in &pci_devices {
+        if dev.class_code == 0x02 {
+            w.clear();
+            let _ = core::write!(
+                w,
+                "[NET] Found NET {:02x}:{:02x}.{:x} ID {:04x}:{:04x} class {:02x}:{:02x}",
+                dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, dev.class_code, dev.subclass
+            );
+            raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
+        }
         if e1000e::probe(dev) {
             log::info!(
                 "Found Intel Ethernet controller at {:02x}:{:02x}.{:x} (vendor: {:04x}, device: {:04x})",
@@ -63,9 +76,20 @@ pub(super) fn init() {
                 dev.vendor_id,
                 dev.device_id
             );
+            w.clear();
+            let _ = core::write!(w, "[NET] Calling e1000e::E1000Device::new on {:04x}:{:04x}...", dev.vendor_id, dev.device_id);
+            raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
             match e1000e::E1000Device::new(*dev) {
-                Ok(nic) => nics.push(KernelNic::E1000(nic)),
-                Err(err) => log::error!("Failed to initialize Intel NIC: {err}"),
+                Ok(nic) => {
+                    raw_fb::print("[NET] Added Intel e1000e NIC OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+                    nics.push(KernelNic::E1000(nic));
+                }
+                Err(err) => {
+                    log::error!("Failed to initialize Intel NIC: {err}");
+                    w.clear();
+                    let _ = core::write!(w, "[NET] Failed Intel NIC: {err}");
+                    raw_fb::print(w.as_str(), raw_fb::COLOR_RED, raw_fb::COLOR_DARK_BLUE);
+                }
             }
         } else if rtl8169::probe(dev) {
             log::info!(
@@ -76,9 +100,20 @@ pub(super) fn init() {
                 dev.vendor_id,
                 dev.device_id
             );
+            w.clear();
+            let _ = core::write!(w, "[NET] Calling rtl8169::Rtl8169Device::new on {:04x}:{:04x}...", dev.vendor_id, dev.device_id);
+            raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
             match rtl8169::Rtl8169Device::new(*dev) {
-                Ok(nic) => nics.push(KernelNic::Rtl8169(nic)),
-                Err(err) => log::error!("Failed to initialize Realtek NIC: {err}"),
+                Ok(nic) => {
+                    raw_fb::print("[NET] Added Realtek NIC OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+                    nics.push(KernelNic::Rtl8169(nic));
+                }
+                Err(err) => {
+                    log::error!("Failed to initialize Realtek NIC: {err}");
+                    w.clear();
+                    let _ = core::write!(w, "[NET] Failed Realtek NIC: {err}");
+                    raw_fb::print(w.as_str(), raw_fb::COLOR_RED, raw_fb::COLOR_DARK_BLUE);
+                }
             }
         }
     }
@@ -102,9 +137,13 @@ pub(super) fn init() {
         "Checking link status across {} detected NIC(s)...",
         nics.len()
     );
+    w.clear();
+    let _ = core::write!(w, "[NET] Found {} NIC(s). Polling link status...", nics.len());
+    raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+
     let mut selected_idx = None;
 
-    for _ in 0..50 {
+    for step in 0..50 {
         for (idx, nic) in nics.iter().enumerate() {
             if nic.is_link_up() {
                 selected_idx = Some(idx);
@@ -114,15 +153,23 @@ pub(super) fn init() {
         if selected_idx.is_some() {
             break;
         }
-        // Wait 100ms
+        if step % 10 == 0 {
+            w.clear();
+            let _ = core::write!(w, "[NET] Waiting for Ethernet link... (step {})", step);
+            raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
+        }
+        // Wait 100ms with bounded spin loop
         let start = Timer::micros();
-        while Timer::micros() - start < 100_000 {
+        let mut iters = 0;
+        while iters < 500_000 && (Timer::micros() - start) < 100_000 {
             core::hint::spin_loop();
+            iters += 1;
         }
     }
 
     let selected_idx = selected_idx.unwrap_or_else(|| {
         log::warn!("No interface reported link up within 5s; falling back to interface 0");
+        raw_fb::print("[NET] Warning: Link down after 5s; defaulting to NIC 0", raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
         0
     });
 
@@ -138,6 +185,14 @@ pub(super) fn init() {
         mac[5],
         selected_nic.is_link_up()
     );
+    w.clear();
+    let _ = core::write!(
+        w,
+        "[NET] Selected MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (link up: {})",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+        selected_nic.is_link_up()
+    );
+    raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
 
     let hw_addr = HardwareAddress::Ethernet(smoltcp::wire::EthernetAddress::from_bytes(&mac));
     let mut device = KernelNicDevice::new(selected_nic);
@@ -160,6 +215,7 @@ pub(super) fn init() {
         socket_set,
         dhcp_socket_handle,
     });
+    raw_fb::print("[NET] Smoltcp interface & DHCP socket configured OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
 
     Executor::spawn("[net_poll]", async {
         loop {

@@ -1,8 +1,10 @@
 use alloc::vec::Vec;
+use core::fmt::Write;
 use core::sync::atomic::{Ordering, compiler_fence};
 
 use crate::os::memory;
 use crate::os::pci::{Bar, PciDevice};
+use crate::os::raw_fb;
 
 const NUM_RX_DESC: usize = 1024;
 const NUM_TX_DESC: usize = 256;
@@ -95,6 +97,18 @@ pub struct E1000Device {
 
 impl E1000Device {
     pub fn new(pci: PciDevice) -> Result<Self, &'static str> {
+        let mut w = raw_fb::StackWriter::<128>::new();
+        let _ = core::write!(
+            w,
+            "[E1000] Init dev {:02x}:{:02x}.{:x} ({:04x}:{:04x})...",
+            pci.bus,
+            pci.dev,
+            pci.func,
+            pci.vendor_id,
+            pci.device_id
+        );
+        raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+
         pci.enable_bus_mastering();
 
         let bar0 = pci.read_bar(0).ok_or("Failed to read BAR0")?;
@@ -102,11 +116,18 @@ impl E1000Device {
             Bar::Memory { base, .. } if base != 0 => base,
             _ => return Err("BAR0 is not valid MMIO"),
         };
+        w.clear();
+        let _ = core::write!(w, "[E1000] MMIO BAR0 = 0x{:X}", mmio_base);
+        raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
 
         // 1. Read MAC address before resetting the chip
         let mut mac = [0u8; 6];
         let ral = unsafe { Self::mmio_read(mmio_base, REG_RAL) };
         let rah = unsafe { Self::mmio_read(mmio_base, REG_RAH) };
+        w.clear();
+        let _ = core::write!(w, "[E1000] RAL=0x{:08X}, RAH=0x{:08X}", ral, rah);
+        raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+
         if ral != 0 && ral != 0xFFFF_FFFF {
             mac[0] = (ral & 0xFF) as u8;
             mac[1] = ((ral >> 8) & 0xFF) as u8;
@@ -116,8 +137,10 @@ impl E1000Device {
             mac[5] = ((rah >> 8) & 0xFF) as u8;
         }
 
-        if mac == [0; 6] {
-            // Fall back to reading from EEPROM
+        if mac == [0; 6] || mac == [0xFF; 6] {
+            w.clear();
+            let _ = core::write!(w, "[E1000] Attempting EEPROM MAC read...");
+            raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
             for i in 0..3 {
                 let word = Self::read_eeprom(mmio_base, i as u8);
                 mac[i * 2] = (word & 0xFF) as u8;
@@ -125,13 +148,29 @@ impl E1000Device {
             }
         }
 
-        if mac == [0; 6] {
+        if mac == [0; 6] || mac == [0xFF; 6] {
             if let Some(info) = *crate::os::boot_info::BOOT_INFO.lock() {
                 if let Some(uefi_mac) = info.uefi_mac {
                     mac = uefi_mac;
+                    w.clear();
+                    let _ = core::write!(w, "[E1000] Fallback to UEFI PXE MAC");
+                    raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
                 }
             }
         }
+
+        w.clear();
+        let _ = core::write!(
+            w,
+            "[E1000] MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac[0],
+            mac[1],
+            mac[2],
+            mac[3],
+            mac[4],
+            mac[5]
+        );
+        raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
 
         // 2. Disable interrupts
         unsafe {
@@ -140,18 +179,28 @@ impl E1000Device {
         }
 
         // 3. Reset device
+        raw_fb::print(
+            "[E1000] Resetting device (CTRL_RST)...",
+            raw_fb::COLOR_CYAN,
+            raw_fb::COLOR_DARK_BLUE,
+        );
         let ctrl = unsafe { Self::mmio_read(mmio_base, REG_CTRL) };
         unsafe {
             Self::mmio_write(mmio_base, REG_CTRL, ctrl | CTRL_RST);
         }
         let reset_start = crate::os::timer::Timer::micros();
-        while (crate::os::timer::Timer::micros() - reset_start) < 50_000 {
+        let mut iters = 0;
+        while iters < 200_000 && (crate::os::timer::Timer::micros() - reset_start) < 50_000 {
             let c = unsafe { Self::mmio_read(mmio_base, REG_CTRL) };
             if (c & CTRL_RST) == 0 {
                 break;
             }
+            iters += 1;
             core::hint::spin_loop();
         }
+        w.clear();
+        let _ = core::write!(w, "[E1000] Reset done (iters: {})", iters);
+        raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
 
         // 4. Disable interrupts again post-reset
         unsafe {
@@ -411,5 +460,13 @@ impl E1000Device {
 }
 
 pub fn probe(pci: &PciDevice) -> bool {
-    pci.vendor_id == 0x8086 && pci.class_code == 0x02 && pci.subclass == 0x00
+    // Must be Intel, Network Controller (0x02), and Ethernet (0x00)
+    if pci.vendor_id != 0x8086 || pci.class_code != 0x02 || pci.subclass != 0x00 {
+        return false;
+    }
+    // Explicitly exclude known Intel Wireless Wi-Fi device IDs (e.g. 0x24F3 Wireless 8260)
+    if pci.device_id == 0x24f3 || pci.device_id == 0x24f4 || (pci.device_id & 0xFF00 == 0x2400) {
+        return false;
+    }
+    true
 }
