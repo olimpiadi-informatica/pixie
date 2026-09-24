@@ -187,9 +187,9 @@ where
         );
     }
 
-    let open_gop = |handle: uefi::Handle| -> Option<uefi::boot::ScopedProtocol<GraphicsOutput>> {
+    let open_gop = |handle: uefi::Handle| -> Option<core::mem::ManuallyDrop<uefi::boot::ScopedProtocol<GraphicsOutput>>> {
         if let Ok(gop) = uefi::boot::open_protocol_exclusive::<GraphicsOutput>(handle) {
-            return Some(gop);
+            return Some(core::mem::ManuallyDrop::new(gop));
         }
         let params = uefi::boot::OpenProtocolParams {
             handle,
@@ -202,12 +202,15 @@ where
                 uefi::boot::OpenProtocolAttributes::GetProtocol,
             )
             .ok()
+            .map(core::mem::ManuallyDrop::new)
         }
     };
 
     // Print diagnostic info for each GOP handle
     for (idx, &handle) in gop_handles.iter().enumerate() {
+        uefi::println!("[DBG 3.{}] Opening GOP handle {:?}", idx, handle);
         if let Some(mut gop) = open_gop(handle) {
+            uefi::println!("[DBG 3.{}] GOP handle opened successfully", idx);
             let cur = gop.current_mode_info();
             let (cw, ch) = cur.resolution();
             let mode_count = gop.modes().count();
@@ -219,7 +222,7 @@ where
                 (fb.as_mut_ptr() as u64, fb.size())
             };
             uefi::println!(
-                "GOP[{}]: cur={}x{} stride={} FB=0x{:X} ({}K, blt_only={}) modes={}",
+                "[DBG 3.{}] cur={}x{} stride={} FB=0x{:X} ({}K, blt_only={}) modes={}",
                 idx,
                 cw,
                 ch,
@@ -245,25 +248,30 @@ where
             if let Some(m) = best_mode {
                 let (bw, bh) = m.info().resolution();
                 uefi::println!(
-                    "  -> Best Mode: {}x{} (score: {})",
+                    "[DBG 3.{}] Best Mode: {}x{} (score: {})",
+                    idx,
                     bw,
                     bh,
                     score_mode(bw, bh, Some((cw, ch)))
                 );
             } else {
-                uefi::println!("  -> No direct framebuffer mode >= 640x480 found");
+                uefi::println!("[DBG 3.{}] No direct framebuffer mode >= 640x480 found", idx);
             }
+            uefi::println!("[DBG 3.{}] Finished inspecting handle {:?}", idx, handle);
         } else {
-            uefi::println!("GOP[{}]: OpenProtocol FAILED", idx);
+            uefi::println!("[DBG 3.{}] OpenProtocol FAILED", idx);
         }
     }
+    uefi::println!("[DBG 4] GOP handle inspection complete");
 
     // 2. Network SNP handles
+    uefi::println!("[DBG 5] Discovering SNP network handles...");
     let snp_handles =
         uefi::boot::find_handles::<uefi::proto::network::snp::SimpleNetwork>().unwrap_or_default();
-    uefi::println!("SNP Network: {} handle(s)", snp_handles.len());
+    uefi::println!("[DBG 5] SNP Network: {} handle(s) found", snp_handles.len());
     let mut uefi_mac = None;
-    for &h in &snp_handles {
+    for (i, &h) in snp_handles.iter().enumerate() {
+        uefi::println!("[DBG 5.{}] Inspecting SNP handle {:?}", i, h);
         let params = uefi::boot::OpenProtocolParams {
             handle: h,
             agent: uefi::boot::image_handle(),
@@ -275,6 +283,7 @@ where
                 uefi::boot::OpenProtocolAttributes::GetProtocol,
             )
         } {
+            let snp = core::mem::ManuallyDrop::new(snp);
             let raw_snp =
                 &*snp as *const _ as *const uefi_raw::protocol::network::snp::SimpleNetworkProtocol;
             if unsafe { !(*raw_snp).mode.is_null() } {
@@ -285,7 +294,8 @@ where
                     mac_arr.copy_from_slice(mac);
                     uefi_mac = Some(mac_arr);
                     uefi::println!(
-                        "  -> MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (media_present: {:?})",
+                        "[DBG 5.{}] Captured MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (media: {:?})",
+                        i,
                         mac[0],
                         mac[1],
                         mac[2],
@@ -297,12 +307,16 @@ where
                     break;
                 }
             } else {
-                uefi::println!("  -> SNP mode pointer is null (uninitialized), skipping");
+                uefi::println!("[DBG 5.{}] SNP mode pointer is null, skipping", i);
             }
+        } else {
+            uefi::println!("[DBG 5.{}] OpenProtocol failed for SNP handle", i);
         }
     }
+    uefi::println!("[DBG 6] SNP network discovery complete");
 
     // 3. Locate ACPI RSDP pointer
+    uefi::println!("[DBG 7] Locating ACPI RSDP pointer...");
     let rsdp_addr = uefi::system::with_config_table(|entries| {
         for entry in entries {
             if entry.guid == uefi::table::cfg::ConfigTableEntry::ACPI2_GUID
@@ -313,22 +327,24 @@ where
         }
         None
     });
-    uefi::println!("ACPI RSDP Address: 0x{:X}", rsdp_addr.unwrap_or(0));
+    uefi::println!("[DBG 7] ACPI RSDP Address: 0x{:X}", rsdp_addr.unwrap_or(0));
 
     // 4. Calibrate TSC
+    uefi::println!("[DBG 8] Calibrating TSC against ACPI/PIT...");
     Timer::ensure_init();
     let tsc_ticks_per_micro = Timer::ticks_per_micro();
-    uefi::println!("TSC Calibrated: {} ticks/us", tsc_ticks_per_micro);
+    uefi::println!("[DBG 8] TSC Calibrated: {} ticks/us", tsc_ticks_per_micro);
 
     // 5. Interactive Debug Busy-Wait
-    uefi::println!("----------------------------------------------------------------------");
-
+    uefi::println!("[DBG 9] Testing stdin availability...");
     let stdin_available = if let Some(st_ptr) = uefi::table::system_table_raw() {
         unsafe { !st_ptr.as_ref().stdin.is_null() }
     } else {
         false
     };
+    uefi::println!("[DBG 9] stdin available: {}", stdin_available);
 
+    uefi::println!("----------------------------------------------------------------------");
     if stdin_available {
         uefi::println!("DEBUG PAUSE: Press SPACE to PAUSE indefinitely. Any other key to resume.");
         // Drain any stale keystrokes (e.g. Enter from boot menu)
@@ -363,19 +379,21 @@ where
         }
 
         if !paused {
-            uefi::println!("Auto-continuing in {}s...", remaining);
+            uefi::println!("[PAUSE] Continuing in {}s...", remaining);
             remaining -= 1;
         }
 
         uefi::boot::stall(Duration::from_secs(1));
     }
-    uefi::println!("*** Continuing boot process... ***");
+    uefi::println!("[DBG 10] Debug pause finished, transitioning to GOP mode...");
 
     // 6. Transition to selected GOP framebuffer
     let mut selected_fb = None;
     let mut _active_gop = None;
 
-    for &handle in &gop_handles {
+    uefi::println!("[DBG 11] Entering final GOP mode switch loop...");
+    for (idx, &handle) in gop_handles.iter().enumerate() {
+        uefi::println!("[DBG 11.{}] Re-opening handle {:?} for final mode set...", idx, handle);
         if let Some(mut gop) = open_gop(handle) {
             let current_res = {
                 let info = gop.current_mode_info();
@@ -401,15 +419,17 @@ where
 
             if let Some(mode) = best_mode {
                 let (bw, bh) = mode.info().resolution();
-                uefi::println!("[1/4] Applying GOP mode {}x{} on handle {:?}...", bw, bh, handle);
+                uefi::println!("[DBG 11.{}] Applying GOP mode {}x{} on handle {:?}...", idx, bw, bh, handle);
                 let res = gop.set_mode(&mode);
-                uefi::println!("      set_mode result: {:?}", res);
+                uefi::println!("[DBG 11.{}] set_mode result: {:?}", idx, res);
                 uefi::boot::stall(Duration::from_secs(1));
+            } else {
+                uefi::println!("[DBG 11.{}] No acceptable mode found", idx);
             }
 
             let mode_info = gop.current_mode_info();
             if mode_info.pixel_format() == PixelFormat::BltOnly {
-                uefi::println!("      Current mode is BltOnly, skipping handle.");
+                uefi::println!("[DBG 11.{}] Mode is BltOnly, skipping", idx);
                 continue;
             }
             let (fb_width, fb_height) = mode_info.resolution();
@@ -417,6 +437,10 @@ where
             let mut fb = gop.frame_buffer();
             let fb_ptr = fb.as_mut_ptr();
             let fb_size = fb.size();
+            uefi::println!(
+                "[DBG 11.{}] Framebuffer active: {}x{} stride={} base=0x{:X} size={}K",
+                idx, fb_width, fb_height, fb_stride, fb_ptr as usize, fb_size / 1024
+            );
             if fb_width > 0 && fb_height > 0 && !fb_ptr.is_null() && fb_size > 0 {
                 selected_fb = Some((
                     fb_ptr as u64,
@@ -430,28 +454,30 @@ where
             }
         }
     }
+    uefi::println!("[DBG 12] Final GOP mode selection complete. Has FB: {}", selected_fb.is_some());
 
-    // Fallback: If GOP is absent, use standard VGA text mode buffer at physical 0xB8000 (80x25)
+    // Step 2: Switch ConsoleControl if GOP is active
     let (fb_base, fb_size, fb_width, fb_height, fb_stride) = match selected_fb {
         Some(fb) => fb,
         None => (0xB8000, 80 * 25 * 2, 80, 25, 80),
     };
 
-    // Step 2: Switch ConsoleControl if GOP is active
     if let Some(mut cc) = cc_protocol {
         if selected_fb.is_some() {
-            uefi::println!("[2/4] Switching ConsoleControl to Graphics mode (1)...");
+            uefi::println!("[DBG 13] Switching ConsoleControl to Graphics mode (1)...");
             let res = unsafe { (cc.set_mode)(&mut *cc, 1) };
-            uefi::println!("      ConsoleControl set_mode result: {:?}", res);
+            uefi::println!("[DBG 13] ConsoleControl set_mode result: {:?}", res);
             uefi::boot::stall(Duration::from_secs(1));
         } else {
-            uefi::println!("[2/4] GOP is NOT active; leaving ConsoleControl in Text mode!");
+            uefi::println!("[DBG 13] GOP is NOT active; leaving ConsoleControl in Text mode!");
             uefi::boot::stall(Duration::from_secs(1));
         }
+    } else {
+        uefi::println!("[DBG 13] ConsoleControl not present");
     }
 
     // Step 3: Save BootInfo
-    uefi::println!("[3/4] Storing BootInfo (fb_base=0x{:X}, size={}K)...", fb_base, fb_size / 1024);
+    uefi::println!("[DBG 14] Storing BootInfo (fb_base=0x{:X}, size={}K)...", fb_base, fb_size / 1024);
     let boot_info = BootInfo {
         framebuffer_base: fb_base,
         framebuffer_size: fb_size,
@@ -463,10 +489,11 @@ where
         uefi_mac,
     };
     boot_info::set_boot_info(boot_info);
+    uefi::println!("[DBG 14] BootInfo stored successfully");
 
     // Step 4: Exit Boot Services
-    uefi::println!("[4/4] Calling exit_boot_services (transferring to bare metal)...");
-    uefi::println!("      (If system halts here, exit_boot_services or arch::init faulted)");
+    uefi::println!("[DBG 15] Calling exit_boot_services in 2 seconds...");
+    uefi::println!("         (Text console and Boot Services will terminate at this point)");
     uefi::boot::stall(Duration::from_secs(2));
 
     let memory_map = unsafe { uefi::boot::exit_boot_services(None) };
