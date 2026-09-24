@@ -529,7 +529,7 @@ where
 
     raw_fb::print("[POST-EBS 8] Starting APIC Timer & STI...", raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
     unsafe {
-        arch::apic::start_periodic_timer(32, 1_000);
+        arch::apic::start_periodic_timer(32, 100);
         arch::io::sti();
     }
     raw_fb::print("[POST-EBS 8] Timer running & interrupts enabled OK", raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);

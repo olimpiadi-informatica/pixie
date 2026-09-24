@@ -208,7 +208,7 @@ impl Executor {
         Self::spawn("[show_tasks]", Self::draw_tasks());
 
         // Maximum amount of microseconds between wakeups of interrupt-based wakers.
-        const INTERRUPT_MICROS: i64 = 500;
+        const INTERRUPT_MICROS: i64 = 50;
 
         let mut last_interrupt_wakeup = Timer::micros();
 

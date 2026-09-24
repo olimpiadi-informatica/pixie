@@ -227,7 +227,7 @@ pub(super) fn init() {
                 None => {
                     Executor::wait_for_interrupt().await;
                 }
-                Some(wait) if wait < 200 => {
+                Some(wait) if wait < 50 => {
                     // Immediately wake if we want to call poll() again in a very short time.
                     Executor::sched_yield().await;
                 }
@@ -338,5 +338,5 @@ fn poll() -> Option<u64> {
     interface
         .poll_delay(now, socket_set)
         .map(|x| x.micros())
-        .min(Some(1000))
+        .min(Some(100))
 }
