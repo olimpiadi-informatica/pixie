@@ -47,7 +47,7 @@ impl KernelNic {
         }
     }
 
-    pub fn can_transmit(&self) -> bool {
+    pub fn can_transmit(&mut self) -> bool {
         match self {
             KernelNic::E1000(d) => d.can_transmit(),
             KernelNic::Rtl8169(d) => d.can_transmit(),

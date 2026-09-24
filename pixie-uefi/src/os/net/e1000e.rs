@@ -103,6 +103,7 @@ pub struct E1000Device {
     tx_descs: &'static mut [TxDesc],
     tx_bufs: Vec<u64>,
     tx_cur: usize,
+    tx_clean: usize,
 }
 
 impl E1000Device {
@@ -361,6 +362,8 @@ impl E1000Device {
             txdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16)); // clear PTHRESH, HTHRESH, WTHRESH
             txdctl |= TXDCTL_FULL_TX_DESC_WB | TXDCTL_COUNT_DESC | TXDCTL_ENABLE;
             Self::mmio_write(mmio_base, REG_TXDCTL, txdctl);
+            // Erratum workaround: mirror TXDCTL to queue 1
+            Self::mmio_write(mmio_base, REG_TXDCTL + 0x100, txdctl);
         }
 
         for _ in 0..10_000 {
@@ -405,6 +408,7 @@ impl E1000Device {
             tx_descs,
             tx_bufs,
             tx_cur: 0,
+            tx_clean: 0,
         })
     }
 
@@ -417,19 +421,42 @@ impl E1000Device {
         (status & (1 << 1)) != 0
     }
 
+    fn clean_tx(&mut self) {
+        while self.tx_clean != self.tx_cur {
+            let desc = &self.tx_descs[self.tx_clean];
+            let status = unsafe { core::ptr::read_volatile(&desc.status) };
+            if (status & 1) != 0 {
+                self.tx_clean = (self.tx_clean + 1) % NUM_TX_DESC;
+            } else {
+                let tdh = (unsafe { Self::mmio_read(self.mmio_base, REG_TDH) } as usize) % NUM_TX_DESC;
+                let advanced = if self.tx_cur >= self.tx_clean {
+                    tdh > self.tx_clean && tdh <= self.tx_cur
+                } else {
+                    tdh > self.tx_clean || tdh <= self.tx_cur
+                };
+                if advanced {
+                    self.tx_clean = tdh;
+                }
+                break;
+            }
+        }
+    }
+
     pub fn transmit(&mut self, packet: &[u8]) {
         assert!(packet.len() <= BUFFER_SIZE);
-        let desc = &mut self.tx_descs[self.tx_cur];
 
+        self.clean_tx();
         let start = crate::os::timer::Timer::micros();
-        while (unsafe { core::ptr::read_volatile(&desc.status) } & 1) == 0 {
+        while (self.tx_cur + 1) % NUM_TX_DESC == self.tx_clean {
             core::hint::spin_loop();
+            self.clean_tx();
             if (crate::os::timer::Timer::micros() - start) > 50_000 {
                 let tdh = unsafe { Self::mmio_read(self.mmio_base, REG_TDH) };
                 let tdt = unsafe { Self::mmio_read(self.mmio_base, REG_TDT) };
                 log::error!(
-                    "[E1000] Transmit timeout waiting for desc {} (TDH={}, TDT={})",
+                    "[E1000] Transmit timeout queue full (cur={}, clean={}, TDH={}, TDT={})",
                     self.tx_cur,
+                    self.tx_clean,
                     tdh,
                     tdt
                 );
@@ -437,6 +464,7 @@ impl E1000Device {
             }
         }
 
+        let desc = &mut self.tx_descs[self.tx_cur];
         let buf_ptr = self.tx_bufs[self.tx_cur] as *mut u8;
         unsafe {
             core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
@@ -507,10 +535,9 @@ impl E1000Device {
         (status & 1) != 0
     }
 
-    pub fn can_transmit(&self) -> bool {
-        let desc = &self.tx_descs[self.tx_cur];
-        let status = unsafe { core::ptr::read_volatile(&desc.status) };
-        (status & 1) != 0
+    pub fn can_transmit(&mut self) -> bool {
+        self.clean_tx();
+        (self.tx_cur + 1) % NUM_TX_DESC != self.tx_clean
     }
 
     unsafe fn mmio_read(base: u64, offset: usize) -> u32 {
