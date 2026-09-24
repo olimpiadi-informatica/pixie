@@ -311,43 +311,54 @@ where
 
     // 5. Interactive Debug Busy-Wait
     uefi::println!("----------------------------------------------------------------------");
-    uefi::println!("DEBUG PAUSE: Press SPACE to PAUSE indefinitely. Any other key to resume.");
-    uefi::print!("Auto-continuing in: ");
 
-    let mut remaining = 20; // 20 seconds
+    let stdin_available = if let Some(st_ptr) = uefi::table::system_table_raw() {
+        unsafe { !st_ptr.as_ref().stdin.is_null() }
+    } else {
+        false
+    };
+
+    if stdin_available {
+        uefi::println!("DEBUG PAUSE: Press SPACE to PAUSE indefinitely. Any other key to resume.");
+        // Drain any stale keystrokes (e.g. Enter from boot menu)
+        while uefi::system::with_stdin(|stdin| stdin.read_key().ok().flatten()).is_some() {}
+    } else {
+        uefi::println!("DEBUG PAUSE: (No UEFI stdin keyboard detected - auto-countdown)");
+    }
+
+    let mut remaining = 10;
     let mut paused = false;
 
-    loop {
-        let key = uefi::system::with_stdin(|stdin| stdin.read_key().ok().flatten());
-        if let Some(key) = key {
-            match key {
-                uefi::proto::console::text::Key::Printable(c) if u16::from(c) == b' ' as u16 => {
-                    paused = !paused;
-                    if paused {
-                        uefi::println!("\n*** PAUSED by user. Press any key to resume... ***");
-                    } else {
-                        uefi::println!("\n*** RESUMING... ***");
+    while remaining > 0 || paused {
+        if stdin_available {
+            let key = uefi::system::with_stdin(|stdin| stdin.read_key().ok().flatten());
+            if let Some(key) = key {
+                match key {
+                    uefi::proto::console::text::Key::Printable(c) if u16::from(c) == b' ' as u16 => {
+                        paused = !paused;
+                        if paused {
+                            uefi::println!("*** PAUSED by user. Press any key to resume... ***");
+                        } else {
+                            uefi::println!("*** RESUMING... ***");
+                            break;
+                        }
+                    }
+                    _ => {
+                        uefi::println!("*** Key pressed: continuing immediately! ***");
                         break;
                     }
-                }
-                _ => {
-                    uefi::println!("\n*** Key pressed: continuing immediately! ***");
-                    break;
                 }
             }
         }
 
         if !paused {
-            uefi::print!("{}s ", remaining);
-            if remaining == 0 {
-                uefi::println!("\n*** Timeout: continuing now. ***");
-                break;
-            }
+            uefi::println!("Auto-continuing in {}s...", remaining);
             remaining -= 1;
         }
 
         uefi::boot::stall(Duration::from_secs(1));
     }
+    uefi::println!("*** Continuing boot process... ***");
 
     // 6. Transition to selected GOP framebuffer
     let mut selected_fb = None;

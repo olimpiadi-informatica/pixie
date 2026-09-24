@@ -47,6 +47,17 @@ pub fn handle_fault(reason: &str) -> ! {
     serial.write_str("\x1b[1;31m=====================================================================\x1b[0m\n\n");
     drop(serial);
 
+    if let Some(st_ptr) = uefi::table::system_table_raw() {
+        unsafe {
+            let st = st_ptr.as_ref();
+            if !st.boot_services.is_null() && !st.stdout.is_null() {
+                uefi::println!("\n\n======================= SYSTEM FAULT DETECTED =======================");
+                uefi::println!("{}", reason);
+                uefi::println!("=====================================================================\n");
+            }
+        }
+    }
+
     ui::display_fault_screen(reason);
 
     for sec in (1..=30).rev() {
