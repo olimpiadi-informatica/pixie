@@ -225,10 +225,10 @@ pub(super) fn init() {
             let wait = poll();
             match wait {
                 Some(0) => {
-                    Executor::sleep(Duration::from_micros(100)).await;
+                    Executor::sched_yield().await;
                 }
-                Some(us) if us < 1000 => {
-                    Executor::sleep(Duration::from_micros(us.max(100))).await;
+                Some(us) if us < 500 => {
+                    Executor::sched_yield().await;
                 }
                 Some(us) => {
                     Executor::sleep(Duration::from_micros(us.min(5000))).await;

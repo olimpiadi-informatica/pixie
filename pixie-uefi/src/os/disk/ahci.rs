@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{Ordering, fence};
-use core::time::Duration;
 
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
@@ -302,7 +301,7 @@ impl AhciDisk {
             if Timer::micros() > deadline {
                 return Err(Error::msg("AHCI command timeout"));
             }
-            Executor::sleep(Duration::from_micros(100)).await;
+            Executor::sched_yield().await;
         }
     }
 

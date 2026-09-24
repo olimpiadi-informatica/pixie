@@ -303,7 +303,7 @@ impl NvmeDisk {
             if Timer::micros() > deadline {
                 return Err(Error::msg("NVMe command timed out"));
             }
-            Executor::sleep(Duration::from_micros(50)).await;
+            Executor::sched_yield().await;
         }
     }
 
