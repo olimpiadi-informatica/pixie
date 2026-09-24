@@ -148,16 +148,22 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         let mut found = None;
         buf.resize(size, 0);
         for &offset in &pos {
-            disk.read(offset as u64, &mut buf).await.unwrap();
-            if blake3::hash(&buf).as_bytes() == &hash {
-                found = Some(offset);
-                break;
+            match disk.read(offset as u64, &mut buf).await {
+                Ok(()) => {
+                    if blake3::hash(&buf).as_bytes() == &hash {
+                        found = Some(offset);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Disk read at {offset} failed ({e}), skipping chunk reuse");
+                }
             }
         }
         if let Some(found) = found {
             for &offset in &pos {
                 if offset != found {
-                    disk.write(offset as u64, &buf).await.unwrap();
+                    disk.write(offset as u64, &buf).await?;
                 }
             }
         } else {

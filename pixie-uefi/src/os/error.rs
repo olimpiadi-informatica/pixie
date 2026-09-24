@@ -1,4 +1,3 @@
-use alloc::borrow::ToOwned;
 use alloc::string::String;
 use core::fmt::{Display, Formatter};
 
@@ -10,8 +9,15 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 pub struct Error(pub String);
 
 impl Error {
-    pub fn msg(s: &str) -> Error {
-        Self(s.to_owned())
+    pub fn msg(s: impl core::fmt::Display) -> Error {
+        use alloc::string::ToString;
+        Self(s.to_string())
+    }
+}
+
+impl From<String> for Error {
+    fn from(value: String) -> Self {
+        Self(value)
     }
 }
 

@@ -5,6 +5,8 @@ pub async fn export() {
 
     let mut coverage = vec![];
     // SAFETY: we never create threads anyway.
-    unsafe { minicov::capture_coverage(&mut coverage).unwrap() };
-    disk.write_sync(0, &coverage).unwrap();
+    let _ = unsafe { minicov::capture_coverage(&mut coverage) };
+    if let Err(e) = disk.write_sync(0, &coverage) {
+        log::warn!("Failed to export coverage to disk: {e}");
+    }
 }
