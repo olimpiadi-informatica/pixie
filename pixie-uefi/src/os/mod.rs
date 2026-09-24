@@ -577,5 +577,12 @@ where
         }
     });
 
+    Executor::spawn("[keyboard]", async move {
+        loop {
+            input::poll_background();
+            Executor::sleep(Duration::from_millis(10)).await;
+        }
+    });
+
     Executor::run()
 }

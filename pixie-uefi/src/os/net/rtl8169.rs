@@ -455,26 +455,20 @@ pub fn probe(pci: &PciDevice) -> bool {
         return false;
     }
     if pci.vendor_id == 0x10EC {
-        // Realtek Ethernet controllers (RTL8169, RTL8168, RTL8125, etc.)
-        // Excludes all Realtek Wi-Fi / wireless controllers (e.g. 0x8821, 0x8822, 0x8852, 0x8176, 0x8178, 0xB723, etc.)
-        matches!(
-            pci.device_id,
-            0x8168
-                | 0x8169
-                | 0x8167
-                | 0x8161
-                | 0x8162
-                | 0x8136
-                | 0x8125
-                | 0x8126
-                | 0x8127
-                | 0x8129
-                | 0x2502
-                | 0x2600
-                | 0x3000
-                | 0x5000
-                | 0x0E10
-        )
+        // Exclude legacy 10/100 RTL8139 and known Realtek Wireless (Wi-Fi) chip IDs
+        if pci.device_id == 0x8139
+            || (pci.device_id >= 0x8170 && pci.device_id <= 0x8199 && pci.device_id != 0x8168 && pci.device_id != 0x8169 && pci.device_id != 0x8167 && pci.device_id != 0x8161 && pci.device_id != 0x8162)
+            || (pci.device_id & 0xF000 == 0xC000)
+            || (pci.device_id & 0xF000 == 0xB000)
+            || (pci.device_id & 0xF000 == 0xD000)
+            || pci.device_id == 0x8852
+            || pci.device_id == 0x8821
+            || pci.device_id == 0x8822
+            || pci.device_id == 0x8812
+        {
+            return false;
+        }
+        true
     } else if pci.vendor_id == 0x1186 {
         // D-Link Gigabit Ethernet (RTL8169 based)
         pci.device_id == 0x4300 || pci.device_id == 0x4302

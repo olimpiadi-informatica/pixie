@@ -60,8 +60,6 @@ const TCTL_CT_SHIFT: u32 = 4; // Collision Threshold
 const TCTL_COLD_SHIFT: u32 = 12; // Collision Distance
 
 // Transmit Descriptor Control Bits
-const TXDCTL_FULL_TX_DESC_WB: u32 = (1 << 24) | (1 << 16); // GRAN=1 (descriptors) | WTHRESH=1
-const TXDCTL_COUNT_DESC: u32 = 1 << 22;
 const TXDCTL_ENABLE: u32 = 1 << 25; // Queue Enable
 
 // Transmit Command Bits
@@ -355,15 +353,12 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_TDT, 0);
             Self::mmio_write(mmio_base, REG_TIPG, 10 | (8 << 10) | (6 << 20));
 
-            // Configure TXDCTL: descriptor granularity (GRAN=1), write-back threshold WTHRESH=1,
-            // queue enable (bit 25). This ensures the hardware writes back DD=1 immediately
-            // for completed packets rather than buffering writebacks.
+            // Configure TXDCTL: queue enable (bit 25). WTHRESH=0 ensures immediate writeback
+            // upon packet completion without buffering descriptors.
             let mut txdctl = Self::mmio_read(mmio_base, REG_TXDCTL);
-            txdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16)); // clear PTHRESH, HTHRESH, WTHRESH
-            txdctl |= TXDCTL_FULL_TX_DESC_WB | TXDCTL_COUNT_DESC | TXDCTL_ENABLE;
+            txdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16)); // clear PTHRESH, HTHRESH, WTHRESH (WTHRESH=0)
+            txdctl |= TXDCTL_ENABLE;
             Self::mmio_write(mmio_base, REG_TXDCTL, txdctl);
-            // Erratum workaround: mirror TXDCTL to queue 1
-            Self::mmio_write(mmio_base, REG_TXDCTL + 0x100, txdctl);
         }
 
         for _ in 0..10_000 {
@@ -428,15 +423,6 @@ impl E1000Device {
             if (status & 1) != 0 {
                 self.tx_clean = (self.tx_clean + 1) % NUM_TX_DESC;
             } else {
-                let tdh = (unsafe { Self::mmio_read(self.mmio_base, REG_TDH) } as usize) % NUM_TX_DESC;
-                let advanced = if self.tx_cur >= self.tx_clean {
-                    tdh > self.tx_clean && tdh <= self.tx_cur
-                } else {
-                    tdh > self.tx_clean || tdh <= self.tx_cur
-                };
-                if advanced {
-                    self.tx_clean = tdh;
-                }
                 break;
             }
         }
@@ -448,8 +434,22 @@ impl E1000Device {
         self.clean_tx();
         let start = crate::os::timer::Timer::micros();
         while (self.tx_cur + 1) % NUM_TX_DESC == self.tx_clean {
-            core::hint::spin_loop();
             self.clean_tx();
+            if (self.tx_cur + 1) % NUM_TX_DESC != self.tx_clean {
+                break;
+            }
+            // Emergency fallback: if DD writeback is delayed by hardware, check TDH
+            let tdh = (unsafe { Self::mmio_read(self.mmio_base, REG_TDH) } as usize) % NUM_TX_DESC;
+            let advanced = if self.tx_cur >= self.tx_clean {
+                tdh > self.tx_clean && tdh <= self.tx_cur
+            } else {
+                tdh > self.tx_clean || tdh <= self.tx_cur
+            };
+            if advanced {
+                self.tx_clean = tdh;
+                break;
+            }
+            core::hint::spin_loop();
             if (crate::os::timer::Timer::micros() - start) > 50_000 {
                 let tdh = unsafe { Self::mmio_read(self.mmio_base, REG_TDH) };
                 let tdt = unsafe { Self::mmio_read(self.mmio_base, REG_TDT) };
