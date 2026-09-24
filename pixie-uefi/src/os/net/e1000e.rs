@@ -31,14 +31,40 @@ const REG_TDLEN: usize = 0x3808;
 const REG_TDH: usize = 0x3810;
 const REG_TDT: usize = 0x3818;
 const REG_TXDCTL: usize = 0x3828;
+const REG_TARC0: usize = 0x3840;
 const REG_MTA: usize = 0x5200;
 const REG_RAL: usize = 0x5400;
 const REG_RAH: usize = 0x5404;
+const REG_MANC: usize = 0x5820;
+const REG_MANC2H: usize = 0x5860;
+const REG_FWSM: usize = 0x5B54;
+const REG_FEXTNVM11: usize = 0x5BBC;
 
 // Control Register Bits
-const CTRL_ASDE: u32 = 1 << 5; // Auto-Speed Detection Enable
 const CTRL_SLU: u32 = 1 << 6; // Set Link Up
 const CTRL_RST: u32 = 1 << 26; // Device Reset
+
+// Manageability and Errata Bits
+const MANC_EN_MNG2HOST: u32 = 1 << 21; // Route management packets to host RX
+const MANC_ARP_EN: u32 = 1 << 13;      // Hardware ARP interception
+const FWSM_PCIM2PCI: u32 = 1 << 24;    // ME Host CSR contention
+const FEXTNVM11_DISABLE_MULR_FIX: u32 = 1 << 13; // I219 MULR datapath hang erratum fix
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct E1000Stats {
+    pub gprc: u32,
+    pub gptc: u32,
+    pub mpc: u32,
+    pub rnbc: u32,
+    pub crcerrs: u32,
+    pub rdh: u32,
+    pub rdt: u32,
+    pub tdh: u32,
+    pub tdt: u32,
+    pub status: u32,
+    pub tctl: u32,
+    pub txdctl: u32,
+}
 
 // Receive Control Bits
 const RCTL_EN: u32 = 1 << 1; // Receiver Enable
@@ -58,9 +84,17 @@ const TCTL_EN: u32 = 1 << 1; // Transmit Enable
 const TCTL_PSP: u32 = 1 << 3; // Pad Short Packets
 const TCTL_CT_SHIFT: u32 = 4; // Collision Threshold
 const TCTL_COLD_SHIFT: u32 = 12; // Collision Distance
+const TCTL_MULR: u32 = 1 << 28; // Multiple Request Support
 
 // Transmit Descriptor Control Bits
+const TXDCTL_PTHRESH_31: u32 = 0x1F; // Prefetch threshold: 31 descriptors
+const TXDCTL_HTHRESH_1: u32 = 1 << 8; // Host threshold: 1 descriptor
+const TXDCTL_WTHRESH_1: u32 = 1 << 16; // Writeback threshold: 1 descriptor
+const TXDCTL_COUNT_DESC: u32 = 1 << 22; // Count descriptors
+const TXDCTL_GRAN: u32 = 1 << 24; // Granularity = 1 (descriptors)
 const TXDCTL_ENABLE: u32 = 1 << 25; // Queue Enable
+const TXDCTL_DMA_BURST: u32 =
+    TXDCTL_PTHRESH_31 | TXDCTL_HTHRESH_1 | TXDCTL_WTHRESH_1 | TXDCTL_COUNT_DESC | TXDCTL_GRAN;
 
 // Transmit Command Bits
 const CMD_EOP: u8 = 1 << 0; // End of Packet
@@ -137,16 +171,25 @@ impl E1000Device {
         let _ = core::write!(w, "[E1000] RAL=0x{:08X}, RAH=0x{:08X}", ral, rah);
         raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
 
-        if ral != 0 && ral != 0xFFFF_FFFF {
-            mac[0] = (ral & 0xFF) as u8;
-            mac[1] = ((ral >> 8) & 0xFF) as u8;
-            mac[2] = ((ral >> 16) & 0xFF) as u8;
-            mac[3] = ((ral >> 24) & 0xFF) as u8;
-            mac[4] = (rah & 0xFF) as u8;
-            mac[5] = ((rah >> 8) & 0xFF) as u8;
+        let is_valid_mac = |m: &[u8; 6]| {
+            *m != [0; 6] && *m != [0xFF; 6] && (m[0] & 1) == 0
+        };
+
+        if ral != 0 && ral != 0xFFFF_FFFF && (rah & (1 << 31)) != 0 {
+            let candidate = [
+                (ral & 0xFF) as u8,
+                ((ral >> 8) & 0xFF) as u8,
+                ((ral >> 16) & 0xFF) as u8,
+                ((ral >> 24) & 0xFF) as u8,
+                (rah & 0xFF) as u8,
+                ((rah >> 8) & 0xFF) as u8,
+            ];
+            if is_valid_mac(&candidate) {
+                mac = candidate;
+            }
         }
 
-        if mac == [0; 6] || mac == [0xFF; 6] {
+        if !is_valid_mac(&mac) {
             w.clear();
             let _ = core::write!(w, "[E1000] Attempting EEPROM MAC read...");
             raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
@@ -157,15 +200,14 @@ impl E1000Device {
             }
         }
 
-        if mac == [0; 6] || mac == [0xFF; 6] {
-            if let Some(info) = *crate::os::boot_info::BOOT_INFO.lock() {
-                if let Some(uefi_mac) = info.uefi_mac {
-                    mac = uefi_mac;
-                    w.clear();
-                    let _ = core::write!(w, "[E1000] Fallback to UEFI PXE MAC");
-                    raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
-                }
-            }
+        if !is_valid_mac(&mac)
+            && let Some(info) = *crate::os::boot_info::BOOT_INFO.lock()
+            && let Some(uefi_mac) = info.uefi_mac
+        {
+            mac = uefi_mac;
+            w.clear();
+            let _ = core::write!(w, "[E1000] Fallback to UEFI PXE MAC");
+            raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
         }
 
         w.clear();
@@ -187,6 +229,25 @@ impl E1000Device {
             let _ = Self::mmio_read(mmio_base, REG_ICR);
         }
 
+        // Diagnostic: log initial hardware state before stopping RX/TX
+        let status_init = unsafe { Self::mmio_read(mmio_base, REG_STATUS) };
+        let _rctl_init = unsafe { Self::mmio_read(mmio_base, REG_RCTL) };
+        let _manc_init = unsafe { Self::mmio_read(mmio_base, REG_MANC) };
+        let tctl_init = unsafe { Self::mmio_read(mmio_base, REG_TCTL) };
+        let txdctl_init = unsafe { Self::mmio_read(mmio_base, REG_TXDCTL) };
+        let tarc0_init = unsafe { Self::mmio_read(mmio_base, REG_TARC0) };
+        let tipg_init = unsafe { Self::mmio_read(mmio_base, REG_TIPG) };
+        w.clear();
+        let _ = core::write!(
+            w,
+            "[E1000] Init STAT:0x{:X} TCTL:0x{:X} TXD:0x{:X} TARC0:0x{:X}",
+            status_init,
+            tctl_init,
+            txdctl_init,
+            tarc0_init
+        );
+        raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+
         // 3. Stop RX and TX units cleanly before setting up rings
         // NOTE: We deliberately do NOT assert CTRL_RST. On Intel PCH LAN controllers (I217/I218/I219),
         // asserting CTRL_RST causes internal interconnect stalls (hanging any subsequent MMIO read),
@@ -205,12 +266,12 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_RDBAL, 0);
             Self::mmio_write(mmio_base, REG_RDLEN, 0);
             Self::mmio_write(mmio_base, REG_RDH, 0);
-            Self::mmio_write(mmio_base, REG_RDT, 0);
+            Self::safe_write_tail(mmio_base, REG_RDT, 0);
             Self::mmio_write(mmio_base, REG_TDBAH, 0);
             Self::mmio_write(mmio_base, REG_TDBAL, 0);
             Self::mmio_write(mmio_base, REG_TDLEN, 0);
             Self::mmio_write(mmio_base, REG_TDH, 0);
-            Self::mmio_write(mmio_base, REG_TDT, 0);
+            Self::safe_write_tail(mmio_base, REG_TDT, 0);
         }
         raw_fb::print(
             "[E1000] Stopped RX/TX units OK",
@@ -224,13 +285,46 @@ impl E1000Device {
             let _ = Self::mmio_read(mmio_base, REG_ICR);
         }
 
-        // 5. Enable auto-speed detection and force link up
+        // Apply I219 MULR datapath hang errata fix (FEXTNVM11 and TARC0/TARC1)
+        let fextnvm11 = unsafe { Self::mmio_read(mmio_base, REG_FEXTNVM11) };
+        if fextnvm11 != 0xFFFF_FFFF {
+            unsafe {
+                Self::mmio_write(
+                    mmio_base,
+                    REG_FEXTNVM11,
+                    fextnvm11 | FEXTNVM11_DISABLE_MULR_FIX,
+                );
+            }
+        }
+        let tarc0 = unsafe { Self::mmio_read(mmio_base, REG_TARC0) };
+        if tarc0 != 0xFFFF_FFFF {
+            let tarc_val = (tarc0 & 0xCFFF_FFFF) | 0x2000_0000;
+            unsafe {
+                Self::mmio_write(mmio_base, REG_TARC0, tarc_val);
+                Self::mmio_write(mmio_base, REG_TARC0 + 0x100, tarc_val);
+            }
+        }
+
+        // Configure Intel AMT / ME packet forwarding so host RX ring receives DHCP and ARP packets
+        let manc = unsafe { Self::mmio_read(mmio_base, REG_MANC) };
+        if manc != 0xFFFF_FFFF {
+            let new_manc = (manc | MANC_EN_MNG2HOST) & !MANC_ARP_EN;
+            unsafe {
+                Self::mmio_write(mmio_base, REG_MANC, new_manc);
+                Self::mmio_write(mmio_base, REG_MANC2H, 0xFFFF_FFFF);
+            }
+            w.clear();
+            let _ = core::write!(w, "[E1000] Configured MANC: 0x{:08X}", new_manc);
+            raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+        }
+
+        // 5. Force link up and preserve control bits (do NOT set CTRL_ASDE on PCIe/PCH)
         let ctrl2 = unsafe { Self::mmio_read(mmio_base, REG_CTRL) };
         unsafe {
             Self::mmio_write(
                 mmio_base,
                 REG_CTRL,
-                (ctrl2 & !CTRL_RST) | CTRL_ASDE | CTRL_SLU,
+                (ctrl2 & !CTRL_RST) | CTRL_SLU,
             );
         }
 
@@ -292,15 +386,17 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_RDBAL, (rx_ring_phys & 0xFFFF_FFFF) as u32);
             Self::mmio_write(mmio_base, REG_RDLEN, rx_ring_bytes as u32);
             Self::mmio_write(mmio_base, REG_RDH, 0);
-            Self::mmio_write(mmio_base, REG_RDT, (NUM_RX_DESC - 1) as u32);
+            Self::safe_write_tail(mmio_base, REG_RDT, (NUM_RX_DESC - 1) as u32);
         }
 
         let rctl = RCTL_EN | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SZ_2048 | RCTL_SECRC;
         unsafe {
             Self::mmio_write(mmio_base, REG_RCTL, rctl);
             let mut rxdctl = Self::mmio_read(mmio_base, REG_RXDCTL);
-            rxdctl |= RXDCTL_ENABLE;
+            rxdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16));
+            rxdctl |= (8) | (8 << 8) | (4 << 16) | RXDCTL_ENABLE;
             Self::mmio_write(mmio_base, REG_RXDCTL, rxdctl);
+            Self::mmio_write(mmio_base, REG_RXDCTL + 0x100, rxdctl);
         }
         for _ in 0..10_000 {
             if (unsafe { Self::mmio_read(mmio_base, REG_RXDCTL) } & RXDCTL_ENABLE) != 0 {
@@ -350,15 +446,25 @@ impl E1000Device {
             Self::mmio_write(mmio_base, REG_TDBAL, (tx_ring_phys & 0xFFFF_FFFF) as u32);
             Self::mmio_write(mmio_base, REG_TDLEN, tx_ring_bytes as u32);
             Self::mmio_write(mmio_base, REG_TDH, 0);
-            Self::mmio_write(mmio_base, REG_TDT, 0);
-            Self::mmio_write(mmio_base, REG_TIPG, 10 | (8 << 10) | (6 << 20));
+            Self::safe_write_tail(mmio_base, REG_TDT, 0);
 
-            // Configure TXDCTL: queue enable (bit 25). WTHRESH=0 ensures immediate writeback
-            // upon packet completion without buffering descriptors.
+            let tipg_val = if tipg_init != 0 && tipg_init != 0xFFFF_FFFF {
+                tipg_init
+            } else {
+                10 | (8 << 10) | (6 << 20)
+            };
+            Self::mmio_write(mmio_base, REG_TIPG, tipg_val);
+
+            // Configure TXDCTL: prefetch threshold PTHRESH=31 (0x1F), host threshold HTHRESH=1,
+            // writeback threshold WTHRESH=1, count descriptors (COUNT_DESC=1), granularity (GRAN=1),
+            // and queue enable (bit 25).
+            // Crucial: When PTHRESH=0, hardware prefetch is disabled and descriptors in RAM are never
+            // fetched, causing transmit to freeze (TDH=0, GPTC=0).
             let mut txdctl = Self::mmio_read(mmio_base, REG_TXDCTL);
-            txdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16)); // clear PTHRESH, HTHRESH, WTHRESH (WTHRESH=0)
-            txdctl |= TXDCTL_ENABLE;
+            txdctl &= !(0x3F | (0x3F << 8) | (0x3F << 16));
+            txdctl |= TXDCTL_DMA_BURST | TXDCTL_ENABLE;
             Self::mmio_write(mmio_base, REG_TXDCTL, txdctl);
+            Self::mmio_write(mmio_base, REG_TXDCTL + 0x100, txdctl);
         }
 
         for _ in 0..10_000 {
@@ -368,18 +474,46 @@ impl E1000Device {
             core::hint::spin_loop();
         }
 
-        let tctl = TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT);
+        // Configure TCTL: preserve UEFI PXE configuration if present, or set standard gigabit full-duplex
+        let tctl = if tctl_init != 0 && tctl_init != 0xFFFF_FFFF {
+            tctl_init | TCTL_EN | TCTL_PSP
+        } else {
+            TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT) | TCTL_MULR
+        };
         unsafe {
             Self::mmio_write(mmio_base, REG_TCTL, tctl);
         }
+        let tctl_cur = unsafe { Self::mmio_read(mmio_base, REG_TCTL) };
+        let txdctl_cur = unsafe { Self::mmio_read(mmio_base, REG_TXDCTL) };
+        w.clear();
+        let _ = core::write!(
+            w,
+            "[E1000] TX enabled (TCTL:0x{:X} TXDCTL:0x{:X})",
+            tctl_cur,
+            txdctl_cur
+        );
         raw_fb::print(
-            "[E1000] TX ring configured & TCTL enabled OK",
+            w.as_str(),
             raw_fb::COLOR_GREEN,
             raw_fb::COLOR_DARK_BLUE,
         );
 
-        let status = unsafe { Self::mmio_read(mmio_base, REG_STATUS) };
-        let link_up = (status & (1 << 1)) != 0;
+        let mut status = unsafe { Self::mmio_read(mmio_base, REG_STATUS) };
+        let mut link_up = (status & (1 << 1)) != 0;
+        if !link_up {
+            // Allow up to 1s for hardware to latch link status (STATUS.LU)
+            for _ in 0..20 {
+                let start = crate::os::timer::Timer::micros();
+                while (crate::os::timer::Timer::micros() - start) < 50_000 {
+                    core::hint::spin_loop();
+                }
+                status = unsafe { Self::mmio_read(mmio_base, REG_STATUS) };
+                if (status & (1 << 1)) != 0 {
+                    link_up = true;
+                    break;
+                }
+            }
+        }
         w.clear();
         let _ = core::write!(
             w,
@@ -480,7 +614,7 @@ impl E1000Device {
 
         self.tx_cur = (self.tx_cur + 1) % NUM_TX_DESC;
         unsafe {
-            Self::mmio_write(self.mmio_base, REG_TDT, self.tx_cur as u32);
+            Self::safe_write_tail(self.mmio_base, REG_TDT, self.tx_cur as u32);
         }
     }
 
@@ -504,7 +638,7 @@ impl E1000Device {
             let old_cur = self.rx_cur;
             self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
             unsafe {
-                Self::mmio_write(self.mmio_base, REG_RDT, old_cur as u32);
+                Self::safe_write_tail(self.mmio_base, REG_RDT, old_cur as u32);
             }
             return None;
         }
@@ -523,7 +657,7 @@ impl E1000Device {
         let old_cur = self.rx_cur;
         self.rx_cur = (self.rx_cur + 1) % NUM_RX_DESC;
         unsafe {
-            Self::mmio_write(self.mmio_base, REG_RDT, old_cur as u32);
+            Self::safe_write_tail(self.mmio_base, REG_RDT, old_cur as u32);
         }
 
         Some(copy_len)
@@ -538,6 +672,57 @@ impl E1000Device {
     pub fn can_transmit(&mut self) -> bool {
         self.clean_tx();
         (self.tx_cur + 1) % NUM_TX_DESC != self.tx_clean
+    }
+
+    pub fn read_stats(&self) -> E1000Stats {
+        const REG_CRCERRS: usize = 0x4000;
+        const REG_MPC: usize = 0x4010;
+        const REG_GPRC: usize = 0x4074;
+        const REG_GPTC: usize = 0x4080;
+        const REG_RNBC: usize = 0x40A0;
+
+        unsafe {
+            E1000Stats {
+                gprc: Self::mmio_read(self.mmio_base, REG_GPRC),
+                gptc: Self::mmio_read(self.mmio_base, REG_GPTC),
+                mpc: Self::mmio_read(self.mmio_base, REG_MPC),
+                rnbc: Self::mmio_read(self.mmio_base, REG_RNBC),
+                crcerrs: Self::mmio_read(self.mmio_base, REG_CRCERRS),
+                rdh: Self::mmio_read(self.mmio_base, REG_RDH),
+                rdt: Self::mmio_read(self.mmio_base, REG_RDT),
+                tdh: Self::mmio_read(self.mmio_base, REG_TDH),
+                tdt: Self::mmio_read(self.mmio_base, REG_TDT),
+                status: Self::mmio_read(self.mmio_base, REG_STATUS),
+                tctl: Self::mmio_read(self.mmio_base, REG_TCTL),
+                txdctl: Self::mmio_read(self.mmio_base, REG_TXDCTL),
+            }
+        }
+    }
+
+    unsafe fn safe_write_tail(base: u64, reg: usize, val: u32) {
+        // Wait for ME firmware to release CSR access (FWSM bit 24)
+        for _ in 0..2000 {
+            if unsafe { (Self::mmio_read(base, REG_FWSM) & FWSM_PCIM2PCI) == 0 } {
+                break;
+            }
+            let start = crate::os::timer::Timer::micros();
+            while (crate::os::timer::Timer::micros() - start) < 50 {
+                core::hint::spin_loop();
+            }
+        }
+
+        unsafe {
+            Self::mmio_write(base, reg, val);
+
+            // Verify write was accepted, retrying if necessary (as done in Linux e1000e_update_rdt_wa)
+            for _ in 0..1000 {
+                if Self::mmio_read(base, reg) == val {
+                    return;
+                }
+                Self::mmio_write(base, reg, val);
+                core::hint::spin_loop();
+            }
+        }
     }
 
     unsafe fn mmio_read(base: u64, offset: usize) -> u32 {
@@ -573,6 +758,33 @@ impl E1000Device {
             core::hint::spin_loop();
         }
         0
+    }
+}
+
+impl Drop for E1000Device {
+    fn drop(&mut self) {
+        unsafe {
+            // Disable RX, TX and all interrupts
+            Self::mmio_write(self.mmio_base, REG_RCTL, 0);
+            Self::mmio_write(self.mmio_base, REG_TCTL, 0);
+            Self::mmio_write(self.mmio_base, REG_IMC, 0xFFFF_FFFF);
+            let _ = Self::mmio_read(self.mmio_base, REG_ICR);
+        }
+
+        let rx_ring_bytes = NUM_RX_DESC * core::mem::size_of::<RxDesc>();
+        let rx_ring_pages = rx_ring_bytes.div_ceil(memory::PAGE_SIZE as usize);
+        memory::free_contiguous(self.rx_descs.as_mut_ptr() as u64, rx_ring_pages);
+
+        let tx_ring_bytes = NUM_TX_DESC * core::mem::size_of::<TxDesc>();
+        let tx_ring_pages = tx_ring_bytes.div_ceil(memory::PAGE_SIZE as usize);
+        memory::free_contiguous(self.tx_descs.as_mut_ptr() as u64, tx_ring_pages);
+
+        for &page in self.rx_bufs.iter().step_by(2) {
+            memory::free_page(page);
+        }
+        for &page in self.tx_bufs.iter().step_by(2) {
+            memory::free_page(page);
+        }
     }
 }
 

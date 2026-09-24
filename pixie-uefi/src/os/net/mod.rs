@@ -16,6 +16,7 @@ use super::timer::Timer;
 use crate::os::executor::Executor;
 use crate::os::executor::event::{Event as ExecutorEvent, EventTrigger};
 use crate::os::net::interface::{KernelNic, KernelNicDevice};
+pub use crate::os::net::interface::packet_counts;
 pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
 use crate::os::timer::rdtsc;
@@ -46,6 +47,11 @@ static WAITING_FOR_IP: Mutex<Vec<EventTrigger>> = Mutex::new(vec![]);
 fn with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> T {
     let mut mg = NETWORK_DATA.try_lock().expect("Network is locked");
     f(mg.as_mut().expect("Network is not initialized"))
+}
+
+fn try_with_net<T, F: FnOnce(&mut NetworkData) -> T>(f: F) -> Option<T> {
+    let mut mg = NETWORK_DATA.try_lock()?;
+    mg.as_mut().map(f)
 }
 
 pub(super) fn init() {
@@ -141,38 +147,88 @@ pub(super) fn init() {
     let _ = core::write!(w, "[NET] Found {} NIC(s). Polling link status...", nics.len());
     raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
 
+    for (idx, nic) in nics.iter().enumerate() {
+        let m = nic.mac_address();
+        w.clear();
+        let _ = core::write!(
+            w,
+            "[NET] NIC #{}: MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (link: {})",
+            idx,
+            m[0],
+            m[1],
+            m[2],
+            m[3],
+            m[4],
+            m[5],
+            if nic.is_link_up() { "UP" } else { "DOWN" }
+        );
+        raw_fb::print(w.as_str(), raw_fb::COLOR_CYAN, raw_fb::COLOR_DARK_BLUE);
+    }
+
+    let uefi_mac = crate::os::boot_info::BOOT_INFO
+        .lock()
+        .and_then(|info| info.uefi_mac);
     let mut selected_idx = None;
 
-    for step in 0..50 {
+    // First priority: if we booted via PXE and captured uefi_mac, check if a NIC matches it directly
+    if let Some(pxe_mac) = uefi_mac {
         for (idx, nic) in nics.iter().enumerate() {
-            if nic.is_link_up() {
+            if nic.mac_address() == pxe_mac {
                 selected_idx = Some(idx);
                 w.clear();
-                let _ = core::write!(w, "[NET] Link UP detected on NIC {} (step {})", idx, step);
+                let _ = core::write!(
+                    w,
+                    "[NET] Matched UEFI PXE boot NIC {} ({:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})",
+                    idx,
+                    pxe_mac[0],
+                    pxe_mac[1],
+                    pxe_mac[2],
+                    pxe_mac[3],
+                    pxe_mac[4],
+                    pxe_mac[5]
+                );
                 raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
                 break;
             }
         }
-        if selected_idx.is_some() {
-            break;
-        }
-        if step % 10 == 0 {
-            w.clear();
-            let _ = core::write!(w, "[NET] Waiting for Ethernet link... (step {})", step);
-            raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
-        }
-        // Wait 100ms with bounded spin loop
-        let start = Timer::micros();
-        let mut iters = 0;
-        while iters < 500_000 && (Timer::micros() - start) < 100_000 {
-            core::hint::spin_loop();
-            iters += 1;
+    }
+
+    if selected_idx.is_none() {
+        for step in 0..50 {
+            for (idx, nic) in nics.iter().enumerate() {
+                if nic.is_link_up() {
+                    selected_idx = Some(idx);
+                    w.clear();
+                    let _ = core::write!(w, "[NET] Link UP detected on NIC {} (step {})", idx, step);
+                    raw_fb::print(w.as_str(), raw_fb::COLOR_GREEN, raw_fb::COLOR_DARK_BLUE);
+                    break;
+                }
+            }
+            if selected_idx.is_some() {
+                break;
+            }
+            if step % 10 == 0 {
+                w.clear();
+                let _ = core::write!(w, "[NET] Waiting for Ethernet link... (step {})", step);
+                raw_fb::print(w.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
+            }
+            // Wait 100ms with bounded spin loop
+            let start = Timer::micros();
+            let mut iters = 0;
+            while iters < 500_000 && (Timer::micros() - start) < 100_000 {
+                core::hint::spin_loop();
+                iters += 1;
+            }
         }
     }
 
     let selected_idx = selected_idx.unwrap_or_else(|| {
         log::warn!("No interface reported link up within 5s; falling back to interface 0");
-        raw_fb::print("[NET] Warning: Link down after 5s; defaulting to NIC 0", raw_fb::COLOR_YELLOW, raw_fb::COLOR_DARK_BLUE);
+        raw_fb::print(
+            "[NET] Warning: Link down after 5s; defaulting to NIC 0",
+            raw_fb::COLOR_YELLOW,
+            raw_fb::COLOR_DARK_BLUE,
+        );
         0
     });
 
@@ -244,6 +300,7 @@ pub(super) fn init() {
 
     Executor::spawn("[show_ip]", async {
         let mut draw_area = ui::DrawArea::ip();
+        let mut ticks: usize = 0;
         loop {
             draw_area.clear();
             let ip = ip();
@@ -252,7 +309,22 @@ pub(super) fn init() {
                 write!(draw_area, "IP: {ip:>0$}", w.saturating_sub(4)).unwrap();
                 Executor::sleep(Duration::from_secs(10)).await
             } else {
-                draw_area.write_with_color("DHCP...", Color::Yellow, Color::Black);
+                let (tx, rx) = packet_counts();
+                let mut msg = raw_fb::StackWriter::<32>::new();
+                let _ = core::write!(msg, "DHCP... (tx:{} rx:{})", tx, rx);
+                draw_area.write_with_color(msg.as_str(), Color::Yellow, Color::Black);
+
+                ticks = ticks.wrapping_add(1);
+                if ticks.is_multiple_of(20) {
+                    // Periodic log of stats during DHCP polling (every ~2s)
+                    if let Some(stats) = try_with_net(|n| n.device.nic.get_e1000_stats()).flatten() {
+                        log::info!(
+                            "[NET STATS] TX:{} (hw GPTC:{}), RX:{} (hw GPRC:{}), MPC:{}, RNBC:{}, CRC:{}, RDH:{}, RDT:{}, TDH:{}, TDT:{}, STATUS:0x{:X}, TCTL:0x{:X}, TXDCTL:0x{:X}",
+                            tx, stats.gptc, rx, stats.gprc, stats.mpc, stats.rnbc, stats.crcerrs,
+                            stats.rdh, stats.rdt, stats.tdh, stats.tdt, stats.status, stats.tctl, stats.txdctl
+                        );
+                    }
+                }
                 Executor::sleep(Duration::from_millis(100)).await
             }
         }
@@ -271,7 +343,7 @@ pub async fn wait_for_ip() {
 }
 
 fn ip() -> Option<Ipv4Addr> {
-    with_net(|n| n.interface.ipv4_addr())
+    try_with_net(|n| n.interface.ipv4_addr()).flatten()
 }
 
 fn get_ephemeral_port() -> u16 {
@@ -309,6 +381,7 @@ fn poll() -> Option<u64> {
     if let Some(dhcp_status) = dhcp_status {
         if let Event::Configured(config) = dhcp_status {
             interface.update_ip_addrs(|a| {
+                a.clear();
                 a.push(IpCidr::Ipv4(config.address)).unwrap();
             });
             if let Some(router) = config.router {
