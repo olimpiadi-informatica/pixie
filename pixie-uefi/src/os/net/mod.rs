@@ -295,16 +295,7 @@ fn poll() -> Option<u64> {
         dhcp_socket_handle,
     } = data.as_mut().unwrap();
 
-    let mut num_egress = 0;
-    while device.nic.can_transmit()
-        && interface.poll_egress(now, device, socket_set) != PollResult::None
-    {
-        num_egress += 1;
-        if num_egress >= 64 {
-            break;
-        }
-    }
-
+    let status_out = interface.poll_egress(now, device, socket_set);
     let mut num_ingress = 0;
     while interface.poll_ingress_single(now, device, socket_set) != PollIngressSingleResult::None {
         num_ingress += 1;
@@ -340,12 +331,7 @@ fn poll() -> Option<u64> {
         }
     }
 
-    let has_pending_tx = socket_set.iter().any(|(_, socket)| match socket {
-        smoltcp::socket::Socket::Tcp(s) => s.send_queue() > 0,
-        _ => false,
-    });
-
-    if num_ingress > 0 || num_egress > 0 || has_pending_tx || device.nic.has_packets() {
+    if num_ingress > 0 || status_out != PollResult::None || device.nic.has_packets() {
         return Some(0);
     }
 
