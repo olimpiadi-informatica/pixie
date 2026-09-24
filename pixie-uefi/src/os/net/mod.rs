@@ -224,17 +224,19 @@ pub(super) fn init() {
         loop {
             let wait = poll();
             match wait {
-                Some(0) => {
-                    Executor::sleep(Duration::from_micros(100)).await;
-                }
-                Some(us) if us < 1000 => {
-                    Executor::sleep(Duration::from_micros(us.max(100))).await;
-                }
-                Some(us) => {
-                    Executor::sleep(Duration::from_micros(us.min(5000))).await;
-                }
                 None => {
-                    Executor::sleep(Duration::from_millis(2)).await;
+                    Executor::wait_for_interrupt().await;
+                }
+                Some(wait) if wait < 50 => {
+                    // Immediately wake if we want to call poll() again in a very short time.
+                    Executor::sched_yield().await;
+                }
+                Some(wait) => {
+                    futures::future::select(
+                        Executor::wait_for_interrupt(),
+                        Executor::sleep(Duration::from_micros(wait)),
+                    )
+                    .await;
                 }
             }
         }
@@ -334,5 +336,4 @@ fn poll() -> Option<u64> {
     interface
         .poll_delay(now, socket_set)
         .map(|x| x.micros())
-        .min(Some(1000))
 }
