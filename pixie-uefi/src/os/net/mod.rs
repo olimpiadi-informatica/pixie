@@ -224,17 +224,21 @@ pub(super) fn init() {
         loop {
             let wait = poll();
             match wait {
-                Some(0) => {
-                    Executor::sched_yield().await;
-                }
-                Some(us) if us < 500 => {
-                    Executor::sched_yield().await;
-                }
-                Some(us) => {
-                    Executor::sleep(Duration::from_micros(us.min(5000))).await;
-                }
                 None => {
-                    Executor::sleep(Duration::from_millis(2)).await;
+                    Executor::wait_for_interrupt().await;
+                }
+                Some(wait) if wait < 200 => {
+                    // Immediately wake if we want to call poll() again in a very short time.
+                    Executor::sched_yield().await;
+                }
+                Some(wait) => {
+                    futures::future::select(
+                        Executor::wait_for_interrupt(),
+                        // Halve the waiting time, to try to ensure that we don't exceed the suggested
+                        // waiting time.
+                        Executor::sleep(Duration::from_micros(wait / 2)),
+                    )
+                    .await;
                 }
             }
         }

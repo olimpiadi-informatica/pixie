@@ -230,8 +230,12 @@ impl Executor {
             }
             // Since we don't notice interrupts that happened while we are not hlt-ing,
             // make sure that we wake up all the interrupt-based waiting tasks every at
-            // most INTERRUPT_MICROS micros to make it unlikely to miss interrupts.
-            if last_interrupt_wakeup + INTERRUPT_MICROS <= Timer::micros() || force_interrupt_wake {
+            // most INTERRUPT_MICROS micros, or immediately when IRQ_FLAGS is set.
+            let irq = crate::os::arch::idt::IRQ_FLAGS.swap(0, Ordering::AcqRel);
+            if irq != 0
+                || last_interrupt_wakeup + INTERRUPT_MICROS <= Timer::micros()
+                || force_interrupt_wake
+            {
                 last_interrupt_wakeup = Timer::micros();
                 let to_wake = core::mem::take(&mut EXECUTOR.lock().wake_on_interrupt);
                 for e in to_wake {
@@ -288,7 +292,7 @@ impl Executor {
     }
 
     // Wakes a task as soon as *any* interrupt is received.
-    pub fn wait_for_interrupt() -> impl Future<Output = ()> {
+    pub fn wait_for_interrupt() -> Event {
         let event = Event::new();
         EXECUTOR.lock().wake_on_interrupt.push(event.trigger());
         event
@@ -296,7 +300,7 @@ impl Executor {
 
     // Note: there are no guarantees on whether the amount of time we will sleep for
     // will be exceeded.
-    pub fn sleep(time: Duration) -> impl Future<Output = ()> {
+    pub fn sleep(time: Duration) -> Event {
         let tgt = Timer::micros() + time.as_micros() as i64;
         let event = Event::new();
         EXECUTOR.lock().timed_wait.push(TimedWait {

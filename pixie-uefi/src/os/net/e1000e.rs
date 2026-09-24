@@ -460,6 +460,12 @@ impl E1000Device {
         (status & 1) != 0
     }
 
+    pub fn can_transmit(&self) -> bool {
+        let desc = &self.tx_descs[self.tx_cur];
+        let status = unsafe { core::ptr::read_volatile(&desc.status) };
+        (status & 1) != 0
+    }
+
     unsafe fn mmio_read(base: u64, offset: usize) -> u32 {
         unsafe { core::ptr::read_volatile((base + offset as u64) as *const u32) }
     }

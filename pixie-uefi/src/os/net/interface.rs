@@ -46,6 +46,13 @@ impl KernelNic {
             KernelNic::Rtl8169(d) => d.has_packets(),
         }
     }
+
+    pub fn can_transmit(&self) -> bool {
+        match self {
+            KernelNic::E1000(d) => d.can_transmit(),
+            KernelNic::Rtl8169(d) => d.can_transmit(),
+        }
+    }
 }
 
 pub struct KernelNicDevice {
@@ -121,6 +128,9 @@ impl Device for KernelNicDevice {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        if !self.nic.can_transmit() {
+            return None;
+        }
         Some(KernelTxToken {
             nic: &mut self.nic,
             buf: &mut self.tx_buf,

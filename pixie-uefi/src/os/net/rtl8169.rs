@@ -442,6 +442,12 @@ impl Rtl8169Device {
         let opts1 = unsafe { core::ptr::read_volatile(&desc.opts1) };
         (opts1 & DESC_OWN) == 0
     }
+
+    pub fn can_transmit(&self) -> bool {
+        let desc = &self.tx_descs[self.tx_cur];
+        let opts1 = unsafe { core::ptr::read_volatile(&desc.opts1) };
+        (opts1 & DESC_OWN) == 0
+    }
 }
 
 pub fn probe(pci: &PciDevice) -> bool {
