@@ -26,11 +26,11 @@ impl ChunkInfo {
         if size == 0 {
             return;
         }
-        if let Some(last) = chunks.last_mut() {
-            if last.start + last.size == start {
-                last.size += size;
-                return;
-            }
+        if let Some(last) = chunks.last_mut()
+            && last.start + last.size == start
+        {
+            last.size += size;
+            return;
         }
         chunks.push(ChunkInfo { start, size });
     }

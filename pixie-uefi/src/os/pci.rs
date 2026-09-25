@@ -110,6 +110,9 @@ impl PciDevice {
         let is_64bit = ((orig >> 1) & 0x03) == 0x02;
 
         let base = if is_64bit {
+            if bar_idx >= 5 {
+                return None;
+            }
             let orig_high = self.read_u32(offset + 4);
             ((orig_high as u64) << 32) | ((orig as u64) & 0xFFFF_FFF0)
         } else {

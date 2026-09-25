@@ -34,10 +34,10 @@ impl Future for Event {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.inner.triggered.load(Ordering::Relaxed) {
+        self.inner.waker.register(cx.waker());
+        if self.inner.triggered.load(Ordering::Acquire) {
             Poll::Ready(())
         } else {
-            self.inner.waker.register(cx.waker());
             Poll::Pending
         }
     }
@@ -50,7 +50,7 @@ pub struct EventTrigger {
 impl EventTrigger {
     pub fn trigger(&self) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.triggered.store(true, Ordering::Relaxed);
+            inner.triggered.store(true, Ordering::Release);
             inner.waker.wake();
         }
     }

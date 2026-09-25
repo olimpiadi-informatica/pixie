@@ -1,9 +1,21 @@
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
 use super::ETH_PACKET_SIZE;
-use super::e1000e::E1000Device;
+use super::e1000e::{E1000Device, E1000Stats};
 use super::rtl8169::Rtl8169Device;
+
+pub static TX_PACKETS: AtomicU64 = AtomicU64::new(0);
+pub static RX_PACKETS: AtomicU64 = AtomicU64::new(0);
+
+pub fn packet_counts() -> (u64, u64) {
+    (
+        TX_PACKETS.load(Ordering::Relaxed),
+        RX_PACKETS.load(Ordering::Relaxed),
+    )
+}
 
 #[allow(clippy::large_enum_variant)]
 pub enum KernelNic {
@@ -23,6 +35,13 @@ impl KernelNic {
         match self {
             KernelNic::E1000(d) => d.is_link_up(),
             KernelNic::Rtl8169(d) => d.is_link_up(),
+        }
+    }
+
+    pub fn get_e1000_stats(&self) -> Option<E1000Stats> {
+        match self {
+            KernelNic::E1000(d) => Some(d.read_stats()),
+            KernelNic::Rtl8169(_) => None,
         }
     }
 
@@ -98,6 +117,7 @@ impl<'a> TxToken for KernelTxToken<'a> {
         let payload = &mut self.buf[..len];
         let ret = f(payload);
         self.nic.transmit(payload);
+        TX_PACKETS.fetch_add(1, Ordering::Relaxed);
         ret
     }
 }
@@ -115,6 +135,7 @@ impl Device for KernelNicDevice {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let rec = self.nic.receive(&mut self.rx_buf);
         rec.map(|len| {
+            RX_PACKETS.fetch_add(1, Ordering::Relaxed);
             (
                 KernelRxToken {
                     packet: &mut self.rx_buf[..len],

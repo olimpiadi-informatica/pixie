@@ -16,11 +16,9 @@ use crate::os::net::with_net;
 
 pub struct TcpStream {
     handle: SocketHandle,
+    closed: core::cell::Cell<bool>,
 }
 
-// TODO(veluca): we may leak a fair bit of sockets here. It doesn't really matter, as we won't
-// create that many, but still it would be nice to fix eventually.
-// Also, trying to use a closed connection may result in panics.
 impl TcpStream {
     pub async fn connect(addr: SocketAddrV4) -> Result<TcpStream> {
         super::wait_for_ip().await;
@@ -46,7 +44,10 @@ impl TcpStream {
             Ok::<_, Error>(net.socket_set.add(tcp_socket))
         })?;
 
-        let ret = TcpStream { handle };
+        let ret = TcpStream {
+            handle,
+            closed: core::cell::Cell::new(false),
+        };
 
         ret.wait_for_state(|state| match state {
             State::Established => Poll::Ready(Ok(())),
@@ -77,6 +78,9 @@ impl TcpStream {
     }
 
     async fn wait_until_closed(&self) {
+        if self.closed.get() {
+            return;
+        }
         self.wait_for_state(|s| {
             if s == State::Closed {
                 Poll::Ready(())
@@ -85,6 +89,7 @@ impl TcpStream {
             }
         })
         .await;
+        self.closed.set(true);
         with_net(|n| n.socket_set.remove(self.handle));
     }
 
@@ -184,7 +189,23 @@ impl TcpStream {
     }
 
     pub async fn force_close(self) {
-        with_net(|n| n.socket_set.get_mut::<TcpSocket>(self.handle).abort());
-        self.wait_until_closed().await;
+        if !self.closed.get() {
+            with_net(|n| n.socket_set.get_mut::<TcpSocket>(self.handle).abort());
+            self.wait_until_closed().await;
+        }
+    }
+}
+
+impl Drop for TcpStream {
+    fn drop(&mut self) {
+        if !self.closed.get() {
+            self.closed.set(true);
+            if let Some(mut net) = super::NETWORK_DATA.try_lock()
+                && let Some(net) = net.as_mut()
+            {
+                net.socket_set.get_mut::<TcpSocket>(self.handle).abort();
+                net.socket_set.remove(self.handle);
+            }
+        }
     }
 }

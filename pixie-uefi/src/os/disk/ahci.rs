@@ -26,6 +26,7 @@ const PORT_REG_CMD: usize = 0x18;
 const PORT_REG_TFD: usize = 0x20;
 const PORT_REG_SIG: usize = 0x24;
 const PORT_REG_SSTS: usize = 0x28;
+const PORT_REG_SCTL: usize = 0x2C;
 const PORT_REG_SERR: usize = 0x30;
 const PORT_REG_CI: usize = 0x38;
 
@@ -208,28 +209,65 @@ impl AhciDisk {
         Ok(disk)
     }
 
-    fn recover_port(&self) {
-        // Clear ST to halt command processing
-        let cmd = self.port_read32(PORT_REG_CMD) & 0x0FFF_FFFF;
-        self.port_write32(PORT_REG_CMD, cmd & !1);
+    fn reset_port(&self) -> Result<()> {
+        // 1. Stop port processing
+        let _ = self.stop_port();
 
-        // Wait for CR to clear to 0
+        // 2. Perform COMRESET via PxSCTL (DET = 1 initiates COMRESET)
+        let sctl = self.port_read32(PORT_REG_SCTL);
+        self.port_write32(PORT_REG_SCTL, (sctl & !0x0F) | 0x01);
+
+        // Spec requires at least 1 millisecond for COMRESET pulse
+        let deadline = Timer::micros() + 2_000;
+        while Timer::micros() < deadline {
+            crate::os::arch::io::pause();
+        }
+
+        // Set DET = 0 to establish communication
+        let sctl = self.port_read32(PORT_REG_SCTL);
+        self.port_write32(PORT_REG_SCTL, sctl & !0x0F);
+
+        // 3. Wait for device detection in PxSSTS (DET == 3: device present & phy communication established)
         let deadline = Timer::micros() + 500_000;
-        while (self.port_read32(PORT_REG_CMD) & (1 << 15)) != 0 {
+        loop {
+            let ssts = self.port_read32(PORT_REG_SSTS);
+            if (ssts & 0x0F) == 3 {
+                break;
+            }
             if Timer::micros() > deadline {
-                log::warn!("AHCI recover_port: CR failed to clear to 0");
+                return Err(Error::msg(format!(
+                    "AHCI COMRESET timeout: device not detected (SSTS={ssts:#X})"
+                )));
+            }
+            crate::os::arch::io::pause();
+        }
+
+        // 4. Clear SERR and IS error bits
+        self.port_write32(PORT_REG_SERR, 0xFFFF_FFFF);
+        self.port_write32(PORT_REG_IS, 0xFFFF_FFFF);
+
+        Ok(())
+    }
+
+    fn recover_port(&self) {
+        log::warn!("AHCI: recovering port via COMRESET...");
+        if let Err(e) = self.reset_port() {
+            log::warn!("AHCI recover_port reset failed: {e}");
+        }
+        self.start_port();
+
+        // Wait for drive to become ready
+        let deadline = Timer::micros() + 2_000_000;
+        while (self.port_read32(PORT_REG_TFD) & 0x88) != 0 {
+            if Timer::micros() > deadline {
+                log::warn!("AHCI recover_port: drive still busy after COMRESET");
                 break;
             }
             crate::os::arch::io::pause();
         }
 
-        // Clear error and interrupt status
         self.port_write32(PORT_REG_SERR, 0xFFFF_FFFF);
         self.port_write32(PORT_REG_IS, 0xFFFF_FFFF);
-
-        // Re-enable ST
-        let cmd = self.port_read32(PORT_REG_CMD) & 0x0FFF_FFFF;
-        self.port_write32(PORT_REG_CMD, cmd | 1);
     }
 
     fn stop_port(&self) -> Result<()> {
@@ -304,7 +342,8 @@ impl AhciDisk {
     }
 
     fn init_port(&mut self) -> Result<()> {
-        self.stop_port()?;
+        // Reset SATA PHY link and device via COMRESET
+        self.reset_port()?;
 
         // Configure Command List Base and FIS Base
         self.port_write32(PORT_REG_CLB, self._cmd_list.phys() as u32);
@@ -317,6 +356,19 @@ impl AhciDisk {
         self.port_write32(PORT_REG_IS, 0xFFFF_FFFF);
 
         self.start_port();
+
+        // Wait for drive to signal readiness (BSY=0, DRQ=0)
+        let deadline = Timer::micros() + 2_000_000;
+        while (self.port_read32(PORT_REG_TFD) & 0x88) != 0 {
+            if Timer::micros() > deadline {
+                break;
+            }
+            crate::os::arch::io::pause();
+        }
+
+        self.port_write32(PORT_REG_SERR, 0xFFFF_FFFF);
+        self.port_write32(PORT_REG_IS, 0xFFFF_FFFF);
+
         Ok(())
     }
 
@@ -337,7 +389,14 @@ impl AhciDisk {
                 let ssts = self.port_read32(PORT_REG_SSTS);
                 let is = self.port_read32(PORT_REG_IS);
                 let serr = self.port_read32(PORT_REG_SERR);
+                log::warn!(
+                    "AHCI port busy before cmd {cmd:#X} (TFD={tfd:#X}, IS={is:#X}, SERR={serr:#X}, SSTS={ssts:#X}), resetting port..."
+                );
                 self.recover_port();
+                if (self.port_read32(PORT_REG_TFD) & 0x88) == 0 {
+                    log::info!("AHCI port recovered after COMRESET");
+                    break;
+                }
                 return Err(Error::msg(format!(
                     "AHCI port busy before cmd {cmd:#X}: TFD={tfd:#X}, IS={is:#X}, SERR={serr:#X}, SSTS={ssts:#X}"
                 )));
@@ -421,7 +480,8 @@ impl AhciDisk {
 
             if (ci & 1) == 0 {
                 self.port_write32(PORT_REG_IS, is);
-                if (tfd & 1) != 0 {
+                // ERR bit is only valid when BSY (bit 7) is 0
+                if (tfd & 0x80) == 0 && (tfd & 1) != 0 {
                     let serr = self.port_read32(PORT_REG_SERR);
                     self.recover_port();
                     return Err(Error::msg(format!(
@@ -431,7 +491,7 @@ impl AhciDisk {
                 return Ok(());
             }
 
-            if (is & PORT_IS_ERRORS) != 0 || (tfd & 1) != 0 {
+            if (is & PORT_IS_ERRORS) != 0 || ((tfd & 0x80) == 0 && (tfd & 1) != 0) {
                 let serr = self.port_read32(PORT_REG_SERR);
                 self.recover_port();
                 return Err(Error::msg(format!(
@@ -450,7 +510,7 @@ impl AhciDisk {
 
             if (ci & 1) == 0 {
                 self.port_write32(PORT_REG_IS, is);
-                if (tfd & 1) != 0 {
+                if (tfd & 0x80) == 0 && (tfd & 1) != 0 {
                     let serr = self.port_read32(PORT_REG_SERR);
                     self.recover_port();
                     return Err(Error::msg(format!(
@@ -460,7 +520,7 @@ impl AhciDisk {
                 return Ok(());
             }
 
-            if (is & PORT_IS_ERRORS) != 0 || (tfd & 1) != 0 {
+            if (is & PORT_IS_ERRORS) != 0 || ((tfd & 0x80) == 0 && (tfd & 1) != 0) {
                 let serr = self.port_read32(PORT_REG_SERR);
                 self.recover_port();
                 return Err(Error::msg(format!(
@@ -497,7 +557,14 @@ impl AhciDisk {
                 let ssts = self.port_read32(PORT_REG_SSTS);
                 let is = self.port_read32(PORT_REG_IS);
                 let serr = self.port_read32(PORT_REG_SERR);
+                log::warn!(
+                    "AHCI port busy before cmd {cmd:#X} (sync, TFD={tfd:#X}, IS={is:#X}, SERR={serr:#X}, SSTS={ssts:#X}), resetting port..."
+                );
                 self.recover_port();
+                if (self.port_read32(PORT_REG_TFD) & 0x88) == 0 {
+                    log::info!("AHCI port recovered after COMRESET (sync)");
+                    break;
+                }
                 return Err(Error::msg(format!(
                     "AHCI port busy before cmd {cmd:#X} (sync): TFD={tfd:#X}, IS={is:#X}, SERR={serr:#X}, SSTS={ssts:#X}"
                 )));
@@ -575,7 +642,7 @@ impl AhciDisk {
 
             if (ci & 1) == 0 {
                 self.port_write32(PORT_REG_IS, is);
-                if (tfd & 1) != 0 {
+                if (tfd & 0x80) == 0 && (tfd & 1) != 0 {
                     let serr = self.port_read32(PORT_REG_SERR);
                     self.recover_port();
                     return Err(Error::msg(format!(
@@ -585,7 +652,7 @@ impl AhciDisk {
                 return Ok(());
             }
 
-            if (is & PORT_IS_ERRORS) != 0 || (tfd & 1) != 0 {
+            if (is & PORT_IS_ERRORS) != 0 || ((tfd & 0x80) == 0 && (tfd & 1) != 0) {
                 let serr = self.port_read32(PORT_REG_SERR);
                 self.recover_port();
                 return Err(Error::msg(format!(
@@ -655,8 +722,21 @@ impl AhciDisk {
     }
 
     pub fn read_sync(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        if offset >= self.size() {
+            return Err(Error::msg(format!(
+                "AHCI read_sync out of bounds: offset {offset} >= disk size {}",
+                self.size()
+            )));
+        }
+        let max_len = (self.size() - offset) as usize;
+        let remaining = if buf.len() > max_len {
+            &mut buf[..max_len]
+        } else {
+            buf
+        };
+
         let mut cur_offset = offset;
-        let mut remaining = buf;
+        let mut remaining = remaining;
         let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         let cmd = if self.lba48 {
             ATA_CMD_READ_DMA_EXT
@@ -689,8 +769,21 @@ impl AhciDisk {
     }
 
     pub async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        if offset >= self.size() {
+            return Err(Error::msg(format!(
+                "AHCI read out of bounds: offset {offset} >= disk size {}",
+                self.size()
+            )));
+        }
+        let max_len = (self.size() - offset) as usize;
+        let remaining = if buf.len() > max_len {
+            &mut buf[..max_len]
+        } else {
+            buf
+        };
+
         let mut cur_offset = offset;
-        let mut remaining = buf;
+        let mut remaining = remaining;
         let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         let cmd = if self.lba48 {
             ATA_CMD_READ_DMA_EXT
@@ -724,8 +817,21 @@ impl AhciDisk {
     }
 
     pub fn write_sync(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        if offset >= self.size() {
+            return Err(Error::msg(format!(
+                "AHCI write_sync out of bounds: offset {offset} >= disk size {}",
+                self.size()
+            )));
+        }
+        let max_len = (self.size() - offset) as usize;
+        let remaining = if buf.len() > max_len {
+            &buf[..max_len]
+        } else {
+            buf
+        };
+
         let mut cur_offset = offset;
-        let mut remaining = buf;
+        let mut remaining = remaining;
         let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         let read_cmd = if self.lba48 {
             ATA_CMD_READ_DMA_EXT
@@ -775,8 +881,21 @@ impl AhciDisk {
     }
 
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        if offset >= self.size() {
+            return Err(Error::msg(format!(
+                "AHCI write out of bounds: offset {offset} >= disk size {}",
+                self.size()
+            )));
+        }
+        let max_len = (self.size() - offset) as usize;
+        let remaining = if buf.len() > max_len {
+            &buf[..max_len]
+        } else {
+            buf
+        };
+
         let mut cur_offset = offset;
-        let mut remaining = buf;
+        let mut remaining = remaining;
         let max_blocks = (self.data.pages * PAGE_SIZE as usize) / self.block_size as usize;
         let read_cmd = if self.lba48 {
             ATA_CMD_READ_DMA_EXT

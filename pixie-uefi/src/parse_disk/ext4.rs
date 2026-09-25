@@ -101,7 +101,10 @@ pub async fn get_ext4_chunks(
 
             for block in 0..8 * block_size as usize {
                 let is_used = bitmap[block / 8] >> (block % 8) & 1 != 0;
-                if is_used && group * blocks_per_group as usize + block < blocks_count as usize {
+                if is_used
+                    && block < blocks_per_group as usize
+                    && group * blocks_per_group as usize + block < blocks_count as usize
+                {
                     ChunkInfo::push(
                         &mut ans,
                         block_size as usize * (group * blocks_per_group as usize + block),

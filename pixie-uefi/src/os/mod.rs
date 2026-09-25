@@ -57,10 +57,11 @@ fn score_mode(w: usize, h: usize, current_res: Option<(usize, usize)>) -> i64 {
     // Prioritize highest resolution (usually the display native resolution), up to 1920x1200
     if w <= 1920 && h <= 1200 {
         let mut score = 1_000_000_i64 + (w * h) as i64;
-        if let Some((cw, ch)) = current_res {
-            if cw == w && ch == h {
-                score += 1_000;
-            }
+        if let Some((cw, ch)) = current_res
+            && cw == w
+            && ch == h
+        {
+            score += 1_000;
         }
         score
     } else {
@@ -144,19 +145,18 @@ where
                     uefi::boot::OpenProtocolAttributes::GetProtocol,
                 )
                 .is_ok()
-            } {
-                if !gop_handles.contains(&handle) {
-                    gop_handles.push(handle);
-                }
+            } && !gop_handles.contains(&handle)
+            {
+                gop_handles.push(handle);
             }
         }
     }
 
     // Fallback: If no console text handle has GOP, check the default GOP protocol handle
-    if gop_handles.is_empty() {
-        if let Ok(handle) = uefi::boot::get_handle_for_protocol::<GraphicsOutput>() {
-            gop_handles.push(handle);
-        }
+    if gop_handles.is_empty()
+        && let Ok(handle) = uefi::boot::get_handle_for_protocol::<GraphicsOutput>()
+    {
+        gop_handles.push(handle);
     }
 
     uefi::println!("[DBG 1] Found {} GOP console handle(s)", gop_handles.len());
@@ -275,7 +275,9 @@ where
                         mac[5],
                         m.media_present
                     );
-                    break;
+                    if m.media_present.into() {
+                        break;
+                    }
                 }
             } else {
                 uefi::println!("[DBG 5.{}] SNP mode pointer is null, skipping", i);
@@ -428,10 +430,8 @@ where
     uefi::println!("[DBG 12] Final GOP mode selection complete. Has FB: {}", selected_fb.is_some());
 
     // Step 2: Switch ConsoleControl if GOP is active
-    let (fb_base, fb_size, fb_width, fb_height, fb_stride) = match selected_fb {
-        Some(fb) => fb,
-        None => (0xB8000, 80 * 25 * 2, 80, 25, 80),
-    };
+    let (fb_base, fb_size, fb_width, fb_height, fb_stride) =
+        selected_fb.unwrap_or((0xB8000, 80 * 25 * 2, 80, 25, 80));
 
     if let Some(mut cc) = cc_protocol {
         if selected_fb.is_some() {

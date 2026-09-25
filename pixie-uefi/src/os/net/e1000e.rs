@@ -91,12 +91,12 @@ const TCTL_MULR: u32 = 1 << 28; // Multiple Request Support
 // Transmit Descriptor Control Bits
 const TXDCTL_PTHRESH_31: u32 = 0x1F; // Prefetch threshold: 31 descriptors
 const TXDCTL_HTHRESH_1: u32 = 1 << 8; // Host threshold: 1 descriptor
-const TXDCTL_WTHRESH_1: u32 = 1 << 16; // Writeback threshold: 1 descriptor
+const TXDCTL_WTHRESH_0: u32 = 0; // Writeback threshold: 0 (immediate writeback per descriptor)
 const TXDCTL_COUNT_DESC: u32 = 1 << 22; // Count descriptors
 const TXDCTL_GRAN: u32 = 1 << 24; // Granularity = 1 (descriptors)
 const TXDCTL_ENABLE: u32 = 1 << 25; // Queue Enable
 const TXDCTL_DMA_BURST: u32 =
-    TXDCTL_PTHRESH_31 | TXDCTL_HTHRESH_1 | TXDCTL_WTHRESH_1 | TXDCTL_COUNT_DESC | TXDCTL_GRAN;
+    TXDCTL_PTHRESH_31 | TXDCTL_HTHRESH_1 | TXDCTL_WTHRESH_0 | TXDCTL_COUNT_DESC | TXDCTL_GRAN;
 
 // Transmit Command Bits
 const CMD_EOP: u8 = 1 << 0; // End of Packet
@@ -293,14 +293,14 @@ impl E1000Device {
             let _ = Self::mmio_read(mmio_base, REG_ICR);
         }
 
-        // Apply I219 MULR datapath hang errata fix (FEXTNVM11 and TARC0/TARC1)
+        // Ensure hardware MULR fix is enabled (clear DISABLE_MULR_FIX bit)
         let fextnvm11 = unsafe { Self::mmio_read(mmio_base, REG_FEXTNVM11) };
         if fextnvm11 != 0xFFFF_FFFF {
             unsafe {
                 Self::mmio_write(
                     mmio_base,
                     REG_FEXTNVM11,
-                    fextnvm11 | FEXTNVM11_DISABLE_MULR_FIX,
+                    fextnvm11 & !FEXTNVM11_DISABLE_MULR_FIX,
                 );
             }
         }
@@ -491,11 +491,12 @@ impl E1000Device {
             core::hint::spin_loop();
         }
 
-        // Configure TCTL: preserve UEFI PXE configuration if present, or set standard gigabit full-duplex
+        // Configure TCTL: preserve UEFI PXE configuration if present, or set standard gigabit full-duplex.
+        // Deliberately clear TCTL_MULR to prevent the I219 DMA buffer overrun / Tx unit hang erratum under load.
         let tctl = if tctl_init != 0 && tctl_init != 0xFFFF_FFFF {
-            tctl_init | TCTL_EN | TCTL_PSP
+            (tctl_init & !TCTL_MULR) | TCTL_EN | TCTL_PSP
         } else {
-            TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT) | TCTL_MULR
+            TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT)
         };
         unsafe {
             Self::mmio_write(mmio_base, REG_TCTL, tctl);
@@ -567,6 +568,37 @@ impl E1000Device {
         (status & (1 << 1)) != 0
     }
 
+    pub fn reset_tx(&mut self) {
+        log::warn!("[E1000] Resetting stuck TX unit...");
+        let tx_ring_bytes = NUM_TX_DESC * core::mem::size_of::<TxDesc>();
+        let tx_ring_phys = self.tx_descs.as_ptr() as u64;
+        unsafe {
+            let tctl = Self::mmio_read(self.mmio_base, REG_TCTL);
+            Self::mmio_write(self.mmio_base, REG_TCTL, tctl & !TCTL_EN);
+
+            Self::mmio_write(
+                self.mmio_base,
+                REG_TDBAH,
+                ((tx_ring_phys >> 32) & 0xFFFF_FFFF) as u32,
+            );
+            Self::mmio_write(self.mmio_base, REG_TDBAL, (tx_ring_phys & 0xFFFF_FFFF) as u32);
+            Self::mmio_write(self.mmio_base, REG_TDLEN, tx_ring_bytes as u32);
+            Self::mmio_write(self.mmio_base, REG_TDH, 0);
+            Self::safe_write_tail(self.mmio_base, REG_TDT, 0);
+
+            for desc in self.tx_descs.iter_mut() {
+                core::ptr::write_volatile(&mut desc.status, 1);
+            }
+            fence(Ordering::SeqCst);
+
+            self.tx_cur = 0;
+            self.tx_clean = 0;
+
+            Self::mmio_write(self.mmio_base, REG_TCTL, tctl | TCTL_EN);
+        }
+        log::info!("[E1000] TX unit reset complete");
+    }
+
     fn clean_tx(&mut self) {
         while self.tx_clean != self.tx_cur {
             let desc = &self.tx_descs[self.tx_clean];
@@ -605,13 +637,14 @@ impl E1000Device {
                 let tdh = unsafe { Self::mmio_read(self.mmio_base, REG_TDH) };
                 let tdt = unsafe { Self::mmio_read(self.mmio_base, REG_TDT) };
                 log::error!(
-                    "[E1000] Transmit timeout queue full (cur={}, clean={}, TDH={}, TDT={})",
+                    "[E1000] Transmit timeout queue full (cur={}, clean={}, TDH={}, TDT={}), resetting TX unit...",
                     self.tx_cur,
                     self.tx_clean,
                     tdh,
                     tdt
                 );
-                return;
+                self.reset_tx();
+                break;
             }
         }
 

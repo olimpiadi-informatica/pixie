@@ -122,13 +122,13 @@ pub fn on_ui_init() {
     area.clear();
     *DRAW_AREA.lock() = area;
 
-    if let Some(history) = LOG_HISTORY.try_lock() {
-        if let Some(mut draw_area) = DRAW_AREA.try_lock() {
-            for entry in history.iter() {
-                write!(draw_area, "[{:.1}s ", entry.time).unwrap();
-                draw_area.write_with_color(&format!("{:5} ", entry.level), entry.col, Color::Black);
-                writeln!(draw_area, "{}] {}", entry.target, entry.msg).unwrap();
-            }
+    if let Some(history) = LOG_HISTORY.try_lock()
+        && let Some(mut draw_area) = DRAW_AREA.try_lock()
+    {
+        for entry in history.iter() {
+            write!(draw_area, "[{:.1}s ", entry.time).unwrap();
+            draw_area.write_with_color(&format!("{:5} ", entry.level), entry.col, Color::Black);
+            writeln!(draw_area, "{}] {}", entry.target, entry.msg).unwrap();
         }
     }
 
@@ -168,13 +168,14 @@ fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
         });
     }
 
-    if let Some(mut draw_area) = DRAW_AREA.try_lock() {
-        if draw_area.size.0 > 0 && draw_area.size.1 > 0 {
-            write!(draw_area, "[{time:.1}s ").unwrap();
-            draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
-            writeln!(draw_area, "{target}] {msg}").unwrap();
-            ui::flush();
-        }
+    if let Some(mut draw_area) = DRAW_AREA.try_lock()
+        && draw_area.size.0 > 0
+        && draw_area.size.1 > 0
+    {
+        write!(draw_area, "[{time:.1}s ").unwrap();
+        draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
+        writeln!(draw_area, "{target}] {msg}").unwrap();
+        ui::flush();
     }
 }
 

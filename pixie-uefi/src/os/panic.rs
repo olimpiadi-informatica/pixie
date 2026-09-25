@@ -37,18 +37,37 @@ impl<const N: usize> Write for StackBuf<N> {
     }
 }
 
+fn safe_serial_write(s: &str) {
+    if let Some(serial) = SERIAL.try_lock() {
+        serial.write_str(s);
+    } else {
+        // Fallback directly to I/O port 0x3F8 if SERIAL mutex is already locked
+        for b in s.bytes() {
+            if b == b'\n' {
+                unsafe {
+                    io::outb(0x3F8, b'\r');
+                }
+            }
+            unsafe {
+                io::outb(0x3F8, b);
+            }
+        }
+    }
+}
+
 pub fn handle_fault(reason: &str) -> ! {
     io::cli();
 
-    let serial = SERIAL.lock();
-    serial.write_str("\n\x1b[1;31m======================= SYSTEM FAULT DETECTED =======================\x1b[0m\n");
-    serial.write_str("\x1b[1;31m");
-    serial.write_str(reason);
-    serial.write_str("\x1b[0m\n");
-    serial.write_str("\x1b[1;31m=====================================================================\x1b[0m\n\n");
-    drop(serial);
+    safe_serial_write("\n\x1b[1;31m======================= SYSTEM FAULT DETECTED =======================\x1b[0m\n");
+    safe_serial_write("\x1b[1;31m");
+    safe_serial_write(reason);
+    safe_serial_write("\x1b[0m\n");
+    safe_serial_write("\x1b[1;31m=====================================================================\x1b[0m\n\n");
 
-    if let Some(st_ptr) = uefi::table::system_table_raw() {
+    // Only call UEFI console if we have not exited boot services yet
+    if !raw_fb::is_ready()
+        && let Some(st_ptr) = uefi::table::system_table_raw()
+    {
         unsafe {
             let st = st_ptr.as_ref();
             if !st.boot_services.is_null() && !st.stdout.is_null() {
@@ -72,14 +91,12 @@ pub fn handle_fault(reason: &str) -> ! {
         );
         raw_fb::print_at(2, 6, cdown.as_str(), raw_fb::COLOR_YELLOW, raw_fb::COLOR_BG_RED);
 
-        let serial = SERIAL.lock();
         let mut msg_buf = StackBuf::<128>::new();
         let _ = writeln!(
             msg_buf,
             "Rebooting in {sec:2} seconds... (press any key to reboot immediately)"
         );
-        serial.write_str(msg_buf.as_str());
-        drop(serial);
+        safe_serial_write(msg_buf.as_str());
 
         let deadline = Timer::micros() + 1_000_000;
         while Timer::micros() < deadline {
@@ -117,10 +134,21 @@ pub fn handle_exception(vector: u64, error_code: u64, rip: u64) -> ! {
     };
 
     let mut msg_buf = StackBuf::<256>::new();
-    let _ = core::write!(
-        msg_buf,
-        "CPU Exception {vector} ({name}), error code: 0x{error_code:X}, RIP: 0x{rip:016X}"
-    );
+    if vector == 14 {
+        let cr2: u64;
+        unsafe {
+            core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
+        }
+        let _ = core::write!(
+            msg_buf,
+            "CPU Exception {vector} ({name}), error code: 0x{error_code:X}, RIP: 0x{rip:016X}, CR2: 0x{cr2:016X}"
+        );
+    } else {
+        let _ = core::write!(
+            msg_buf,
+            "CPU Exception {vector} ({name}), error code: 0x{error_code:X}, RIP: 0x{rip:016X}"
+        );
+    }
     handle_fault(msg_buf.as_str());
 }
 

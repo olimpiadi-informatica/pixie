@@ -320,6 +320,7 @@ impl Executor {
             let t = f.await;
             let _ = send.send(t);
         });
+        task.in_queue.store(true, Ordering::Relaxed);
         let mut executor = EXECUTOR.lock();
         executor.tasks.push(task.clone());
         executor.ready_tasks.push_back(task);

@@ -68,6 +68,8 @@ fn poll_ps2() -> Option<Key> {
             } else {
                 match make_code {
                     0x1C => Some(Key::Printable('\r'.try_into().unwrap())),
+                    0x39 => Some(Key::Printable(' '.try_into().unwrap())),
+                    0x01 => Some(Key::Special(ScanCode::ESCAPE)),
                     _ => None,
                 }
             }
@@ -86,22 +88,25 @@ fn poll_serial() -> Option<Key> {
         return None;
     }
 
-    if ESCAPE_SEQ_STATE.load(Ordering::Relaxed) {
-        if byte == b'[' {
+    if ESCAPE_SEQ_STATE.swap(false, Ordering::Relaxed) && byte == b'[' {
+        if let Some(next) = serial.read_byte() {
+            match next {
+                b'A' => return Some(Key::Special(ScanCode::UP)),
+                b'B' => return Some(Key::Special(ScanCode::DOWN)),
+                b'D' => return Some(Key::Special(ScanCode::LEFT)),
+                b'C' => return Some(Key::Special(ScanCode::RIGHT)),
+                _ => return None,
+            }
+        } else {
+            ESCAPE_SEQ_STATE.store(true, Ordering::Relaxed);
             return None;
-        }
-        ESCAPE_SEQ_STATE.store(false, Ordering::Relaxed);
-        match byte {
-            b'A' => return Some(Key::Special(ScanCode::UP)),
-            b'B' => return Some(Key::Special(ScanCode::DOWN)),
-            b'D' => return Some(Key::Special(ScanCode::LEFT)),
-            b'C' => return Some(Key::Special(ScanCode::RIGHT)),
-            _ => return None,
         }
     }
 
     if byte == b'\r' || byte == b'\n' {
         Some(Key::Printable('\r'.try_into().unwrap()))
+    } else if (0x20..0x7F).contains(&byte) {
+        char::from_u32(byte as u32).and_then(|c| c.try_into().ok().map(Key::Printable))
     } else {
         None
     }

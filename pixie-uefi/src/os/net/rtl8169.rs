@@ -163,12 +163,11 @@ impl Rtl8169Device {
         for (i, byte) in mac.iter_mut().enumerate() {
             *byte = unsafe { reg.read_u8(REG_MAC0 + i) };
         }
-        if mac == [0; 6] || mac == [0xFF; 6] {
-            if let Some(info) = *crate::os::boot_info::BOOT_INFO.lock() {
-                if let Some(uefi_mac) = info.uefi_mac {
-                    mac = uefi_mac;
-                }
-            }
+        if (mac == [0; 6] || mac == [0xFF; 6])
+            && let Some(info) = *crate::os::boot_info::BOOT_INFO.lock()
+            && let Some(uefi_mac) = info.uefi_mac
+        {
+            mac = uefi_mac;
         }
 
         // 2. Reset device
@@ -411,8 +410,12 @@ impl Rtl8169Device {
             }
         } else if eth_type == 0x0806 {
             // ARP: standard frame is 42 bytes (14 eth + 28 arp), capped at min 42, max 60 (or raw_len)
-            raw_len.min(60).max(42)
-        } else if raw_len > 1514 && raw_len > 4 {
+            if raw_len >= 42 {
+                raw_len.clamp(42, 60)
+            } else {
+                raw_len
+            }
+        } else if raw_len > 1514 {
             raw_len - 4
         } else {
             raw_len
@@ -447,6 +450,28 @@ impl Rtl8169Device {
         let desc = &self.tx_descs[self.tx_cur];
         let opts1 = unsafe { core::ptr::read_volatile(&desc.opts1) };
         (opts1 & DESC_OWN) == 0
+    }
+}
+
+impl Drop for Rtl8169Device {
+    fn drop(&mut self) {
+        unsafe {
+            // Stop transmitter and receiver
+            self.reg.write_u8(REG_CR, 0);
+            self.reg.write_u16(REG_IMR, 0);
+            self.reg.write_u16(REG_ISR, 0xFFFF);
+        }
+        // Free RX and TX rings
+        memory::free_page(self.rx_descs.as_mut_ptr() as u64);
+        memory::free_page(self.tx_descs.as_mut_ptr() as u64);
+
+        // Free RX and TX packet buffer pages (allocated in step_by(2))
+        for &page in self.rx_bufs.iter().step_by(2) {
+            memory::free_page(page);
+        }
+        for &page in self.tx_bufs.iter().step_by(2) {
+            memory::free_page(page);
+        }
     }
 }
 
