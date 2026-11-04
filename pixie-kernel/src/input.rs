@@ -25,6 +25,7 @@ pub async fn init() {
     let ps2 = Ps2Keyboard::new(NativeHal);
     let serial = SerialPort::new(COM1_PORT, NativeHal);
     let mut xhci = Vec::new();
+    let skip_xhci_bar0 = crate::net::usb_nic_mmio_base();
 
     for dev in pixie_drivers::pci::scan_pci(&NativeHal) {
         // xHCI USB 3.0 controller: class 0x0C, subclass 0x03, prog_if 0x30
@@ -35,6 +36,9 @@ pub async fn init() {
                 base: bar0, size, ..
             }) = dev.read_bar(&NativeHal, 0)
         {
+            if skip_xhci_bar0 == Some(bar0) {
+                continue;
+            }
             dev.enable_bus_mastering(&NativeHal);
             crate::arch::paging::map_mmio(bar0, size.max(0x40000));
             if let Ok(kbd) = XhciKeyboard::new(bar0, NativeHal).await {
