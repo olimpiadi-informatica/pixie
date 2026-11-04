@@ -110,7 +110,13 @@ pub fn on_ui_init() {
     let mut logs = DrawArea::logs();
     logs.clear();
     for entry in EARLY_LOGS.lock().drain(..) {
-        write_log(&mut logs, entry.time, entry.level, &entry.target, &entry.msg);
+        write_log(
+            &mut logs,
+            entry.time,
+            entry.level,
+            &entry.target,
+            &entry.msg,
+        );
     }
     *LOG_DRAW_AREA.lock() = logs;
     UI_INITIALIZED.store(true, Ordering::Relaxed);

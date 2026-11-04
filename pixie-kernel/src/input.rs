@@ -24,16 +24,18 @@ pub async fn init() {
     let serial = SerialPort::new(COM1_PORT, NativeHal);
     let mut xhci = Vec::new();
 
-    for dev in pixie_drivers::pci::scan_pci(&NativeHal) {
-        // xHCI USB 3.0 controller: class 0x0C, subclass 0x03, prog_if 0x30
-        if dev.class_code == 0x0C && dev.subclass == 0x03 && dev.prog_if == 0x30 {
-            dev.enable_bus_mastering(&NativeHal);
-            if let Some(pixie_drivers::pci::Bar::Memory { base: bar0, .. }) =
-                dev.read_bar(&NativeHal, 0)
-            {
-                crate::arch::paging::map_mmio(bar0, 0x10000);
-                if let Ok(kbd) = XhciKeyboard::new(bar0, NativeHal).await {
-                    xhci.push(kbd);
+    if !crate::net::is_using_usb_nic() {
+        for dev in pixie_drivers::pci::scan_pci(&NativeHal) {
+            // xHCI USB 3.0 controller: class 0x0C, subclass 0x03, prog_if 0x30
+            if dev.class_code == 0x0C && dev.subclass == 0x03 && dev.prog_if == 0x30 {
+                dev.enable_bus_mastering(&NativeHal);
+                if let Some(pixie_drivers::pci::Bar::Memory { base: bar0, .. }) =
+                    dev.read_bar(&NativeHal, 0)
+                {
+                    crate::arch::paging::map_mmio(bar0, 0x10000);
+                    if let Ok(kbd) = XhciKeyboard::new(bar0, NativeHal).await {
+                        xhci.push(kbd);
+                    }
                 }
             }
         }

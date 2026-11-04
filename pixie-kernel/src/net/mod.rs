@@ -50,7 +50,9 @@ pub fn init() {
     use crate::hal::NativeHal;
     use crate::net::interface::KernelNic;
     use pixie_drivers::net::e1000::{self, E1000Device};
+    use pixie_drivers::net::igc::{self, IgcDevice};
     use pixie_drivers::net::rtl::{self, RtlDevice};
+    use pixie_drivers::net::usb_net::UsbEthernetDevice;
     use pixie_drivers::pci::{Bar, scan_pci};
 
     let fallback_mac = crate::boot_info::BOOT_INFO.lock().and_then(|b| b.uefi_mac);
@@ -68,6 +70,23 @@ pub fn init() {
                             dev.mac_address()
                         );
                         found_nic = Some(KernelNic::E1000(dev));
+                        break;
+                    }
+                }
+            }
+            if found_nic.is_some() {
+                break;
+            }
+        } else if igc::probe(&pci) {
+            for bar_idx in 0..6 {
+                if let Some(Bar::Memory { base, .. }) = pci.read_bar(&NativeHal, bar_idx) {
+                    crate::arch::paging::map_mmio(base, 0x20000);
+                    if let Ok(dev) = IgcDevice::new(pci, base, fallback_mac, NativeHal) {
+                        log::info!(
+                            "Initialized Intel igc I225/I226 NIC (MAC {:02x?})",
+                            dev.mac_address()
+                        );
+                        found_nic = Some(KernelNic::Igc(dev));
                         break;
                     }
                 }
@@ -110,8 +129,29 @@ pub fn init() {
         }
     }
 
+    if found_nic.is_none() {
+        for &pci in &pci_devs {
+            // xHCI USB 3.0 controller: class 0x0C, subclass 0x03, prog_if 0x30
+            if pci.class_code == 0x0C && pci.subclass == 0x03 && pci.prog_if == 0x30 {
+                pci.enable_bus_mastering(&NativeHal);
+                if let Some(Bar::Memory { base: bar0, .. }) = pci.read_bar(&NativeHal, 0) {
+                    crate::arch::paging::map_mmio(bar0, 0x10000);
+                    if let Ok(dev) = UsbEthernetDevice::new(bar0, fallback_mac, NativeHal) {
+                        log::info!(
+                            "Initialized USB Ethernet dongle ({:?}, MAC {:02x?})",
+                            dev.protocol(),
+                            dev.mac_address()
+                        );
+                        found_nic = Some(KernelNic::Usb(dev));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     let nic = found_nic.expect(
-        "No supported network interface found (Intel e1000/e1000e or Realtek RTL8168/8125)",
+        "No supported network interface found (Intel e1000/e1000e/igc, Realtek RTL8168/8125, or USB Ethernet)",
     );
 
     let mac = nic.mac_address();
@@ -188,6 +228,12 @@ pub async fn wait_for_ip() {
     }
 }
 
+pub fn is_using_usb_nic() -> bool {
+    let mg = NETWORK_DATA.lock();
+    mg.as_ref()
+        .is_some_and(|n| matches!(n.device.nic, crate::net::interface::KernelNic::Usb(_)))
+}
+
 pub fn ip() -> Option<Ipv4Addr> {
     with_net(|net| net.interface.ipv4_addr())
 }
@@ -252,7 +298,5 @@ fn poll() -> Option<u64> {
         return Some(0);
     }
 
-    interface
-        .poll_delay(now, socket_set)
-        .map(|x| x.micros())
+    interface.poll_delay(now, socket_set).map(|x| x.micros())
 }

@@ -664,9 +664,12 @@ impl<H: Hal> Drop for E1000Device<H> {
 }
 
 /// Returns `true` if `pci` is a supported Intel e1000 / e1000e Ethernet controller
-/// (excluding Intel Wi-Fi cards).
+/// (excluding Intel Wi-Fi cards and Intel `igc` I225/I226 2.5GbE controllers).
 pub fn probe(pci: &PciDevice) -> bool {
     if pci.vendor_id != 0x8086 || pci.class_code != 0x02 || pci.subclass != 0x00 {
+        return false;
+    }
+    if crate::net::igc::probe(pci) {
         return false;
     }
     if pci.device_id == 0x24F3
