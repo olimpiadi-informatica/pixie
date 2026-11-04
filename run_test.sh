@@ -2,18 +2,15 @@
 set -xe
 
 TEMPDIR=$(mktemp -d)
-DEV=""
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$TEMPDIR}"
 # Optional: path to write e2e store/flash timings to, in github-action-benchmark's
 # "customSmallerIsBetter" format. Left unset, nothing is timed or written.
 BENCH_JSON="$2"
-
-mkdir $TEMPDIR/mnt
+QEMU_DISPLAY_ARGS="${QEMU_DISPLAY_ARGS:--nographic}"
 
 cleanup() {
   # Ignore errors in cleanup.
   set +e
-  umount -l -q $TEMPDIR/mnt
-  [ -z "$DEV" ] || losetup -d $DEV
   rm -rf $TEMPDIR
   # Kill descendants, but not itself.
   trap '' SIGTERM
@@ -53,16 +50,28 @@ cat >$TEMPDIR/storage/registered.json <<EOF
 ]
 EOF
 
-if ! ip link show br-pixie; then
+if ! ip link show br-pixie &>/dev/null; then
   ip link add br-pixie type bridge
   ip link set dev br-pixie up
   ip addr add 10.0.0.1/16 dev br-pixie
 fi
 
-if ! ip link show br-pixie1; then
+if ! ip link show tap-pixie0 &>/dev/null; then
+  ip tuntap add dev tap-pixie0 mode tap
+  ip link set tap-pixie0 master br-pixie
+  ip link set tap-pixie0 up
+fi
+
+if ! ip link show br-pixie1 &>/dev/null; then
   ip link add br-pixie1 type bridge
   ip link set dev br-pixie1 up
   ip addr add 10.10.0.1/16 dev br-pixie1
+fi
+
+if ! ip link show tap-pixie1 &>/dev/null; then
+  ip tuntap add dev tap-pixie1 mode tap
+  ip link set tap-pixie1 master br-pixie1
+  ip link set tap-pixie1 up
 fi
 
 RUST_BACKTRACE=short RUST_LOG=debug RUST_LOG_STYLE=always LLVM_PROFILE_FILE=prof-out/pixie-server-%m-%p.profraw ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
@@ -85,19 +94,20 @@ run_qemu() {
   # SIGTTOU the instant it starts, which silently stops the process (not a
   # crash, no output) until the 90s timeout kills it.
   timeout -k 10 90 qemu-system-x86_64 \
-    -nographic \
+    $QEMU_DISPLAY_ARGS \
     -chardev stdio,id=char0,logfile=$1,signal=off \
     -serial chardev:char0 \
     -monitor none \
     -enable-kvm \
     -cpu host -smp cores=2 \
     -m 1G \
-    -drive if=pflash,format=raw,file=$OVMF \
+    -drive if=pflash,format=raw,readonly=on,file=$OVMF \
     -drive file=$TEMPDIR/disk.img,if=none,id=nvm,format=raw \
     -drive file=$FILE,if=none,id=cov,format=raw \
     -device nvme,serial=deadbeef,drive=nvm \
     -device nvme,serial=covdrive,drive=cov \
-    -nic bridge,mac=52:54:00:12:34:56,br=br-pixie,model=e1000 \
+    -netdev tap,id=net0,ifname=tap-pixie0,script=no,downscript=no \
+    -device e1000,netdev=net0,mac=52:54:00:12:34:56 \
     </dev/null
 }
 
@@ -110,35 +120,81 @@ run_qemu1() {
   truncate -s 500M $FILE
   # See run_qemu() above for why this is bounded with a timeout.
   timeout -k 10 90 qemu-system-x86_64 \
-    -nographic \
+    $QEMU_DISPLAY_ARGS \
     -chardev stdio,id=char0,logfile=$1,signal=off \
     -serial chardev:char0 \
     -monitor none \
     -enable-kvm \
     -cpu host -smp cores=2 \
     -m 1G \
-    -drive if=pflash,format=raw,file=$OVMF \
+    -drive if=pflash,format=raw,readonly=on,file=$OVMF \
     -drive file=$TEMPDIR/disk1.img,if=none,id=nvm,format=raw \
     -drive file=$FILE,if=none,id=cov,format=raw \
     -device nvme,serial=deadbeef,drive=nvm \
     -device nvme,serial=covdrive,drive=cov \
-    -nic bridge,mac=52:54:00:12:34:57,br=br-pixie1,model=e1000 \
+    -netdev tap,id=net0,ifname=tap-pixie1,script=no,downscript=no \
+    -device e1000,netdev=net0,mac=52:54:00:12:34:57 \
     </dev/null
 }
+
+# Partition layout created by sfdisk on an 8 GiB GPT disk:
+#   p1 (swap): start sector 2048    (1 MiB),    size 2097152 sectors (1 GiB)
+#   p2 (ntfs): start sector 2099200 (1025 MiB), size 2097152 sectors (1 GiB)
+#   p3 (ext4): start sector 4196352 (2049 MiB), size 12578816 sectors (6142 MiB)
+P1_OFFSET=$((2048 * 512))
+P1_SIZE=$((2097152 * 512))
+P2_OFFSET=$((2099200 * 512))
+P2_SIZE=$((2097152 * 512))
+P3_OFFSET=$((4196352 * 512))
+P3_SIZE=$((12578816 * 512))
+
+EXPECTED_MD5=$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')
 
 truncate -s 8G $TEMPDIR/disk.img
 truncate -s 8G $TEMPDIR/disk1.img
 echo -e "label: gpt\n- 1GiB - -\n- 1GiB - -\n- - L -" | sfdisk $TEMPDIR/disk.img
-DEV=$(losetup --partscan --show --find $TEMPDIR/disk.img)
-mkswap ${DEV}p1
-mkfs.ntfs -f ${DEV}p2
-mkfs.ext4 ${DEV}p3
-for PART in ${DEV}p{2..3}; do
-  mount $PART $TEMPDIR/mnt
-  cp ./pixie-server/target/debug/pixie-server $TEMPDIR/mnt
-  umount $TEMPDIR/mnt
-done
-losetup -d $DEV
+
+# Format p1 (swap) rootlessly and splice into disk.img
+truncate -s $P1_SIZE $TEMPDIR/p1.swap
+mkswap $TEMPDIR/p1.swap
+dd if=$TEMPDIR/p1.swap of=$TEMPDIR/disk.img bs=1M seek=1 conv=notrunc,sparse status=none
+rm -f $TEMPDIR/p1.swap
+
+# Format p2 (NTFS) rootlessly, copy pixie-server into it, and splice into disk.img
+truncate -s $P2_SIZE $TEMPDIR/p2.ntfs
+mkfs.ntfs -Q -F $TEMPDIR/p2.ntfs
+ntfscp $TEMPDIR/p2.ntfs ./pixie-server/target/debug/pixie-server pixie-server
+dd if=$TEMPDIR/p2.ntfs of=$TEMPDIR/disk.img bs=1M seek=1025 conv=notrunc,sparse status=none
+rm -f $TEMPDIR/p2.ntfs
+
+# Format p3 (ext4) directly at P3_OFFSET in disk.img populated from $TEMPDIR/root
+mkdir -p $TEMPDIR/root
+cp ./pixie-server/target/debug/pixie-server $TEMPDIR/root/pixie-server
+mkfs.ext4 -q -F -E offset=$P3_OFFSET -d $TEMPDIR/root $TEMPDIR/disk.img "$((P3_SIZE / 1024))K"
+
+verify_disk() {
+  local img="$1"
+  # Verify p1 (swap)
+  if [ "$(blkid -p --offset "$P1_OFFSET" --size "$P1_SIZE" -s TYPE -o value "$img")" != "swap" ]; then
+    echo "Swap partition on $img is not a valid swap partition"
+    exit 1
+  fi
+
+  # Verify p2 (NTFS)
+  dd if="$img" of=$TEMPDIR/check_p2.ntfs bs=1M skip=1025 count=1024 status=none
+  if [ "$(ntfscat $TEMPDIR/check_p2.ntfs pixie-server | md5sum | cut -f 1 -d ' ')" != "$EXPECTED_MD5" ]; then
+    echo "NTFS partition on $img does not contain the expected pixie-server content"
+    exit 1
+  fi
+  rm -f $TEMPDIR/check_p2.ntfs
+
+  # Verify p3 (ext4)
+  e2fsck -fn "$img?offset=$P3_OFFSET"
+  if [ "$(debugfs -R "cat pixie-server" "$img?offset=$P3_OFFSET" 2>/dev/null | md5sum | cut -f 1 -d ' ')" != "$EXPECTED_MD5" ]; then
+    echo "ext4 partition on $img does not contain the expected pixie-server content"
+    exit 1
+  fi
+}
 
 curl 'http://localhost:8080/admin/curr_action/mac:52:54:00:12:34:56/store'
 store_start=$(date +%s.%N)
@@ -156,29 +212,8 @@ run_qemu $TEMPDIR/flash-1.log
 flash_cold_end=$(date +%s.%N)
 run_qemu1 $TEMPDIR/flash1-1.log
 
-DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
-fsck -n ${DEV}p*
-for PART in ${DEV}p{2..3}; do
-  mount -o ro $PART $TEMPDIR/mnt
-  if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
-    echo "pixie-server does not contain the expected content"
-    exit 1
-  fi
-  umount $TEMPDIR/mnt
-done
-losetup -d $DEV
-
-DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk1.img)
-fsck -n ${DEV}p*
-for PART in ${DEV}p{2..3}; do
-  mount -o ro $PART $TEMPDIR/mnt
-  if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
-    echo "pixie-server does not contain the expected content"
-    exit 1
-  fi
-  umount $TEMPDIR/mnt
-done
-losetup -d $DEV
+verify_disk $TEMPDIR/disk.img
+verify_disk $TEMPDIR/disk1.img
 
 # Check that we don't fetch any data if the disk contents have not changed.
 
@@ -188,29 +223,8 @@ run_qemu $TEMPDIR/flash-2.log
 flash_cached_end=$(date +%s.%N)
 run_qemu1 $TEMPDIR/flash1-2.log
 
-DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk.img)
-fsck -n ${DEV}p*
-for PART in ${DEV}p{2..3}; do
-  mount -o ro $PART $TEMPDIR/mnt
-  if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
-    echo "pixie-server does not contain the expected content"
-    exit 1
-  fi
-  umount $TEMPDIR/mnt
-done
-losetup -d $DEV
-
-DEV=$(losetup --partscan --show --find --read-only $TEMPDIR/disk1.img)
-fsck -n ${DEV}p*
-for PART in ${DEV}p{2..3}; do
-  mount -o ro $PART $TEMPDIR/mnt
-  if [ "$(md5sum $TEMPDIR/mnt/pixie-server | cut -f 1 -d ' ')" != "$(md5sum ./pixie-server/target/debug/pixie-server | cut -f 1 -d ' ')" ]; then
-    echo "pixie-server does not contain the expected content"
-    exit 1
-  fi
-  umount $TEMPDIR/mnt
-done
-losetup -d $DEV
+verify_disk $TEMPDIR/disk.img
+verify_disk $TEMPDIR/disk1.img
 
 if ! grep "Disk scanned; 0 chunks to fetch" $TEMPDIR/flash-2.log &>/dev/null; then
   echo "Data was re-fetched"

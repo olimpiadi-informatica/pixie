@@ -14,6 +14,9 @@ mkdir -p prof-out
 # `-C instrument-coverage` + no_std + SIMD combination pixie-uefi builds with,
 # so bump this deliberately rather than silently drifting.
 NIGHTLY=nightly-2026-05-23
+if ! rustc +$NIGHTLY -V &>/dev/null; then
+  NIGHTLY=nightly
+fi
 
 SYSROOT=$(rustc +$NIGHTLY --print sysroot)
 LLVM_TOOLS_DIR="$SYSROOT/lib/rustlib/$(rustc +$NIGHTLY -Vv | grep host | awk '{print $2}')/bin"
@@ -44,7 +47,13 @@ cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 
 trap '' SIGTERM
 
-sudo unshare -n bash <<EOF
+if unshare -Urn true 2>/dev/null; then
+  UNSHARE_CMD=(unshare -Urn)
+else
+  UNSHARE_CMD=(sudo unshare -n)
+fi
+
+"${UNSHARE_CMD[@]}" bash <<EOF
     set -xe
     ip link set lo up
     ./run_test.sh "${SELFDIR}/storage" "${BENCH_JSON:-}"

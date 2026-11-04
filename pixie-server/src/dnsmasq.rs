@@ -82,6 +82,8 @@ interface={name}
 {interfaces_config}
 
 dhcp-hostsfile={run_str}/hosts
+dhcp-leasefile={run_str}/dnsmasq.leases
+pid-file={run_str}/dnsmasq.pid
 dhcp-boot=pixie-uefi.efi
 except-interface=lo
 user=root

@@ -207,7 +207,9 @@ impl State {
             images,
         };
 
-        let run_dir = PathBuf::from(format!("/run/pixie-{}", std::process::id()));
+        let run_dir =
+            PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| "/run".into()))
+                .join(format!("pixie-{}", std::process::id()));
         std::fs::create_dir(&run_dir)
             .with_context(|| format!("failed to create directory {}", run_dir.display()))?;
 
