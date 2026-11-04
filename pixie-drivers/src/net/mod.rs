@@ -1,6 +1,8 @@
 pub mod e1000;
+pub mod igc;
 pub(crate) mod intel;
 pub mod rtl;
+pub mod usb_net;
 
 pub(crate) const FALLBACK_LOCAL_MAC: [u8; 6] = [0x02, b'P', b'I', b'X', b'I', b'E'];
 

@@ -24,7 +24,8 @@ pixie is made of six crates:
 - **`pixie-kernel`** — the bare-metal x86_64 kernel runtime, memory manager,
   async executor, and network stack used by `pixie-client`.
 - **`pixie-drivers`** — `#![no_std]` async hardware drivers (NVMe, AHCI,
-  Intel e1000/e1000e, Realtek 8168/8169/8125, xHCI, PS/2, Serial, PCI, ACPI).
+  Intel e1000/e1000e/igc, Realtek 8168/8169/8125, USB Ethernet RTL8152/8153/8156
+  & CDC-ECM/NCM, xHCI, PS/2, Serial, PCI, ACPI).
 - **`pixie-web`** — a WASM admin dashboard (built with `trunk`), served by
   `pixie-server`, for watching machine status and issuing actions.
 - **`pixie-shared`** — wire-protocol types and the chunk codec shared by the
