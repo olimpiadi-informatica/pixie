@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{le16, le32};
-use crate::os::disk::Disk;
+use crate::os::disk::DiskIo;
 use crate::os::error::Result;
 use crate::store::ChunkInfo;
 
@@ -33,7 +33,11 @@ impl Type {
     }
 }
 
-pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+pub async fn get_fat_chunks<D: DiskIo + ?Sized>(
+    disk: &mut D,
+    start: u64,
+    end: u64,
+) -> Result<Option<Vec<ChunkInfo>>> {
     if end - start < 512 {
         return Ok(None);
     }
@@ -52,7 +56,12 @@ pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<
 
     let sector_size = le16(&ebpb, 0x0B) as u64;
     let sectors_per_cluster = ebpb[0x0D] as u64;
-    let cluster_size = sector_size * sectors_per_cluster;
+    if sector_size == 0 || sectors_per_cluster == 0 {
+        return Ok(None);
+    }
+    let Some(cluster_size) = sector_size.checked_mul(sectors_per_cluster) else {
+        return Ok(None);
+    };
     let total_sectors_short = le16(&ebpb, 0x13) as u64;
     let total_sectors_long = le32(&ebpb, 0x20) as u64;
     let total_sectors = if total_sectors_short > 0 {
@@ -70,6 +79,9 @@ pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<
         Type::Fat32 => le32(&ebpb, 0x24) as u64,
     };
     let table_count = ebpb[0x10] as u64;
+    if fat_size == 0 || table_count == 0 {
+        return Ok(None);
+    }
     log::trace!(
         "FAT partition: fat_bits={}, first_fat_sector={first_fat_sector}, fat_size={fat_size}, table_count={table_count}",
         fat_type.bits(),
@@ -81,13 +93,36 @@ pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<
         "FAT partition: root_dir_entries={root_dir_entries}, root_dir_sectors={root_dir_sectors}"
     );
 
-    let first_data_sector = first_fat_sector + fat_size * table_count + root_dir_sectors;
+    let Some(fat_sectors) = fat_size.checked_mul(table_count) else {
+        return Ok(None);
+    };
+    let Some(first_data_sector) = first_fat_sector
+        .checked_add(fat_sectors)
+        .and_then(|v| v.checked_add(root_dir_sectors))
+    else {
+        return Ok(None);
+    };
+    if total_sectors <= first_data_sector {
+        return Ok(None);
+    }
     let data_sector_count = total_sectors - first_data_sector;
     let data_cluster_count = data_sector_count / sectors_per_cluster;
 
-    let mut fat = vec![0; (fat_size * sector_size) as usize];
+    let Some(fat_bytes) = fat_size.checked_mul(sector_size) else {
+        return Ok(None);
+    };
+    let mut fat = vec![0; fat_bytes as usize];
     disk.read(start + first_fat_sector * sector_size, &mut fat)
         .await?;
+
+    let max_entries = match fat_type {
+        Type::Fat12 => fat.len() * 2 / 3,
+        Type::Fat16 => fat.len() / 2,
+        Type::Fat32 => fat.len() / 4,
+    };
+    if 2 + data_cluster_count as usize > max_entries {
+        return Ok(None);
+    }
 
     let mut chunks = Vec::new();
     chunks.push(ChunkInfo {

@@ -30,7 +30,7 @@ RELEASE_FLAG=""
 TARGET_DIR="debug"
 [ "$RELEASE" ] && TARGET_DIR="release"
 
-pushd pixie-uefi
+pushd pixie-client
 if [ "$RELEASE" ]; then
   SYSROOT="$(rustc --print sysroot)"
   COMMIT_HASH="$(rustc -Vv | awk '/commit-hash:/ {print $2}')"
@@ -40,7 +40,7 @@ if [ "$RELEASE" ]; then
   done
   CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS="${CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS:+$CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS }${REMAP_FLAGS}" \
     cargo build $RELEASE_FLAG
-  upx --lzma --best "target/x86_64-unknown-uefi/${TARGET_DIR}/pixie-uefi.efi"
+  upx --lzma --best "target/x86_64-unknown-uefi/${TARGET_DIR}/pixie-client.efi"
 else
   cargo build $RELEASE_FLAG
 fi
@@ -55,7 +55,7 @@ cargo build $RELEASE_FLAG
 popd
 
 mkdir -p "${STORAGE_DIR}/tftpboot" "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks" "${STORAGE_DIR}/admin"
-cp "pixie-uefi/target/x86_64-unknown-uefi/${TARGET_DIR}/pixie-uefi.efi" "${STORAGE_DIR}/tftpboot/"
+cp "pixie-client/target/x86_64-unknown-uefi/${TARGET_DIR}/pixie-client.efi" "${STORAGE_DIR}/tftpboot/"
 cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 
 [ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-server/example.config.yaml "${STORAGE_DIR}/config.yaml"
