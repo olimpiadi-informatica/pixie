@@ -94,10 +94,10 @@ async fn broadcast_chunks(
 }
 
 fn compute_hint(state: &State) -> Result<RegistrationInfo> {
+    let config = state.config();
     let Some(mut last) = state.get_registration_hint() else {
         return Ok(RegistrationInfo {
-            group: state
-                .config
+            group: config
                 .groups
                 .iter()
                 .next()
@@ -106,8 +106,7 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
                 .clone(),
             row: 1,
             col: 1,
-            image: state
-                .config
+            image: config
                 .images
                 .first()
                 .context("there should be at least one image")?
@@ -116,7 +115,7 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
     };
 
     let units = state.get_units(UnitSelector::Group(
-        *state.config.groups.get_by_first(&last.group).unwrap(),
+        *config.groups.get_by_first(&last.group).unwrap(),
     ));
     let positions = units
         .into_iter()
@@ -154,10 +153,14 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
             _ = time::sleep(Duration::from_secs(1)) => {}
             _ = state.cancel_token.cancelled() => break,
         }
+        let (images, groups) = {
+            let config = state.config();
+            (config.images.clone(), config.groups.clone())
+        };
         let hint = HintPacket {
             station: compute_hint(state)?,
-            images: state.config.images.clone(),
-            groups: state.config.groups.clone(),
+            images,
+            groups,
         };
         let data = postcard::to_allocvec(&hint)?;
         let hint_addr = SocketAddrV4::new(ip, HINT_PORT);
@@ -190,7 +193,7 @@ async fn handle_requests(
                 socket.send_to(&[], peer_addr).await?;
             }
             Ok(UdpRequest::ActionProgress(frac, tot)) => {
-                match find_mac(peer_addr.ip()) {
+                match find_mac(state, peer_addr.ip()) {
                     Ok(peer_mac) => {
                         state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
                     }
@@ -213,10 +216,8 @@ async fn handle_requests(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let (net_tx, net_rx): (_, Vec<_>) = state
-        .config
-        .hosts
-        .interfaces
+    let interfaces = state.config().hosts.interfaces.clone();
+    let (net_tx, net_rx): (_, Vec<_>) = interfaces
         .iter()
         .map(|iface| {
             let (tx, rx) = mpsc::channel(128);

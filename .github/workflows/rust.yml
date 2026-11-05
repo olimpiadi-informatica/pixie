@@ -34,6 +34,7 @@ jobs:
             cargo clippy -- -D warnings
             popd
           done
+          cargo test --manifest-path pixie-server/Cargo.toml
 
   test:
     name: Test
@@ -48,7 +49,7 @@ jobs:
       - name: Install apt dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dnsmasq qemu-system-x86 ovmf
+          sudo apt-get install -y qemu-system-x86 ovmf
           sudo mkdir -p /etc/qemu
           echo allow br-pixie | sudo tee /etc/qemu/bridge.conf
           echo allow br-pixie1 | sudo tee -a /etc/qemu/bridge.conf

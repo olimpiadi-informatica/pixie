@@ -14,6 +14,7 @@ mod images;
 mod units;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use macaddr::MacAddr6;
 use pixie_shared::{
     ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, RegistrationInfo, Unit,
 };
@@ -89,25 +90,26 @@ fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
 pub struct State {
     /// The storage_dir received by command line arguments.
     pub storage_dir: PathBuf,
-    /// A directory stored in ram for dynamically generated files, will be deleted on Drop.
-    pub run_dir: PathBuf,
     /// The config parsed from the config file.
-    pub config: Config,
+    config: watch::Sender<Config>,
     /// The hostmap built from the hostmap file.
-    pub hostmap: HashMap<Ipv4Addr, String>,
+    hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
 
     units: watch::Sender<Vec<Unit>>,
     registration_hint: Mutex<Option<RegistrationInfo>>,
     images_stats: watch::Sender<ImagesStats>,
     chunks_stats: Mutex<ChunksStats>,
+    dhcp_leases: Mutex<HashMap<Ipv4Addr, MacAddr6>>,
 
     /// Token to shutdown the entire server.
     pub cancel_token: CancellationToken,
 }
 
 impl State {
-    /// Loads the [`State`] from the given path.
-    pub fn load(storage_dir: PathBuf) -> Result<Self> {
+    fn read_config_and_hostmap(
+        storage_dir: &Path,
+        units: &[Unit],
+    ) -> Result<(Config, HashMap<Ipv4Addr, String>)> {
         let config: Config = {
             let path = storage_dir.join(CONFIG_YAML);
             let file = File::open(&path)
@@ -118,16 +120,7 @@ impl State {
 
         let hostmap = build_hostmap(config.hosts.hostsfile.as_deref())?;
 
-        let units_path = storage_dir.join(REGISTERED_JSON);
-        let units: Vec<Unit> = if units_path.exists() {
-            let file = File::open(&units_path)
-                .with_context(|| format!("open units file: {}", units_path.display()))?;
-            serde_json::from_reader(&file)
-                .with_context(|| format!("deserialize units from {}", units_path.display()))?
-        } else {
-            Vec::new()
-        };
-        for unit in &units {
+        for unit in units {
             ensure!(
                 config.groups.get_by_second(&unit.group).is_some(),
                 "unit group {} not found in config",
@@ -139,6 +132,25 @@ impl State {
                 unit.image,
             );
         }
+
+        Ok((config, hostmap))
+    }
+
+    /// Loads the [`State`] from the given path.
+    pub fn load(storage_dir: PathBuf) -> Result<Self> {
+        let units_path = storage_dir.join(REGISTERED_JSON);
+        let units: Vec<Unit> = if units_path.exists() {
+            let file = File::open(&units_path)
+                .with_context(|| format!("open units file: {}", units_path.display()))?;
+            serde_json::from_reader(&file)
+                .with_context(|| format!("deserialize units from {}", units_path.display()))?
+        } else {
+            Vec::new()
+        };
+
+        let (config, hostmap) = Self::read_config_and_hostmap(&storage_dir, &units)?;
+        let config = watch::Sender::new(config);
+        let hostmap = watch::Sender::new(hostmap);
         let units = watch::Sender::new(units);
 
         let mut units_rx = units.subscribe();
@@ -207,32 +219,79 @@ impl State {
             images,
         };
 
-        let run_dir =
-            PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| "/run".into()))
-                .join(format!("pixie-{}", std::process::id()));
-        std::fs::create_dir(&run_dir)
-            .with_context(|| format!("failed to create directory {}", run_dir.display()))?;
-
         let cancel_token = CancellationToken::new();
 
         Ok(Self {
             storage_dir,
-            run_dir,
             config,
             hostmap,
             units,
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
+            dhcp_leases: Mutex::new(HashMap::new()),
             cancel_token,
         })
     }
-}
 
-impl Drop for State {
-    fn drop(&mut self) {
-        // If we fail to remove the directory it's not an issue as it will be deleted on shutdown
-        // and doesn't take much space.
-        let _ = std::fs::remove_dir_all(&self.run_dir);
+    pub fn config(&self) -> watch::Ref<'_, Config> {
+        self.config.borrow()
+    }
+
+    pub fn hostmap(&self) -> watch::Ref<'_, HashMap<Ipv4Addr, String>> {
+        self.hostmap.borrow()
+    }
+
+    pub fn subscribe_config(&self) -> watch::Receiver<Config> {
+        self.config.subscribe()
+    }
+
+    pub fn subscribe_hostmap(&self) -> watch::Receiver<HashMap<Ipv4Addr, String>> {
+        self.hostmap.subscribe()
+    }
+
+    /// Reloads `config.yaml` and `hostsfile` from disk.
+    pub fn reload(&self) -> Result<()> {
+        let units = self.units.borrow().clone();
+        let (config, hostmap) = Self::read_config_and_hostmap(&self.storage_dir, &units)?;
+        self.config.send_if_modified(|old| {
+            if *old != config {
+                *old = config;
+                true
+            } else {
+                false
+            }
+        });
+        self.hostmap.send_if_modified(|old| {
+            if *old != hostmap {
+                *old = hostmap;
+                true
+            } else {
+                false
+            }
+        });
+        Ok(())
+    }
+
+    pub fn record_dhcp_lease(&self, ip: Ipv4Addr, mac: MacAddr6) {
+        let mut leases = self.dhcp_leases.lock().expect("dhcp_leases mutex poisoned");
+        leases.retain(|_, existing_mac| *existing_mac != mac);
+        leases.insert(ip, mac);
+    }
+
+    pub fn lookup_mac(&self, ip: Ipv4Addr) -> Option<MacAddr6> {
+        if let Some(&mac) = self
+            .dhcp_leases
+            .lock()
+            .expect("dhcp_leases mutex poisoned")
+            .get(&ip)
+        {
+            return Some(mac);
+        }
+        self.units
+            .borrow()
+            .iter()
+            .find(|u| u.static_ip() == ip)
+            .map(|u| u.mac)
     }
 }

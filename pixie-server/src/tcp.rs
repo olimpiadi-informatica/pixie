@@ -73,7 +73,7 @@ async fn handle_connection(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
 ) -> Result<()> {
-    let peer_mac = match find_mac(peer_addr.ip()) {
+    let peer_mac = match find_mac(&state, peer_addr.ip()) {
         Ok(peer_mac) => peer_mac,
         Err(err) => {
             log::error!("Error handling tcp connection: {err}");

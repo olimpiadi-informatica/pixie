@@ -75,7 +75,7 @@ async fn image(
     Path((unit_selector, image)): Path<(String, String)>,
     extract::State(state): extract::State<Arc<State>>,
 ) -> impl IntoResponse {
-    if !state.config.images.contains(&image) {
+    if !state.config().images.contains(&image) {
         return (
             StatusCode::BAD_REQUEST,
             format!("Unknown image: {image:?}\n"),
@@ -154,20 +154,18 @@ async fn gc(extract::State(state): extract::State<Arc<State>>) -> impl IntoRespo
 ///
 /// Stream of json-formatted events on changes to the database.
 async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoResponse {
-    let initial_messages = [
-        StatusUpdate::Config(state.config.clone()),
-        StatusUpdate::HostMap(state.hostmap.clone()),
-    ];
+    let config_rx = WatchStream::new(state.subscribe_config()).map(StatusUpdate::Config);
+    let hostmap_rx = WatchStream::new(state.subscribe_hostmap()).map(StatusUpdate::HostMap);
+    let units_rx = WatchStream::new(state.subscribe_units()).map(StatusUpdate::Units);
+    let image_rx = WatchStream::new(state.subscribe_images()).map(StatusUpdate::ImagesStats);
 
-    let units_rx = WatchStream::new(state.subscribe_units());
-    let image_rx = WatchStream::new(state.subscribe_images());
-
-    let messages = futures::stream::iter(initial_messages)
-        .chain(futures::stream::select(
-            image_rx.map(StatusUpdate::ImagesStats),
-            units_rx.map(StatusUpdate::Units),
-        ))
-        .take_until(state.cancel_token.clone().cancelled_owned());
+    let messages = futures::stream::select_all([
+        config_rx.boxed(),
+        hostmap_rx.boxed(),
+        image_rx.boxed(),
+        units_rx.boxed(),
+    ])
+    .take_until(state.cancel_token.clone().cancelled_owned());
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
 
     Response::builder()
@@ -179,7 +177,7 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let HttpConfig { ref listen_on } = state.config.http;
+    let HttpConfig { listen_on } = state.config().http.clone();
 
     let admin_path = state.storage_dir.join("admin");
 
