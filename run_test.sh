@@ -141,7 +141,7 @@ run_qemu() {
   if ! [ -e $OVMF ]; then
     OVMF=/usr/share/edk2/x64/OVMF_CODE.4m.fd
   fi
-  FILE=prof-out/pixie-uefi-$RANDOM.profraw
+  FILE=prof-out/pixie-client-$RANDOM.profraw
   truncate -s 500M $FILE
   # A guest CPU exception leaves QEMU running forever (OVMF dead-loops after
   # dumping the register state), so bound this instead of relying on the
@@ -176,7 +176,7 @@ run_qemu1() {
   if ! [ -e $OVMF ]; then
     OVMF=/usr/share/edk2/x64/OVMF_CODE.4m.fd
   fi
-  FILE=prof-out/pixie-uefi-$RANDOM.profraw
+  FILE=prof-out/pixie-client-$RANDOM.profraw
   truncate -s 500M $FILE
   # See run_qemu() above for why this is bounded with a timeout.
   timeout -k 10 90 qemu-system-x86_64 \

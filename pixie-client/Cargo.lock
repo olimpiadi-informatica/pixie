@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "anstyle"
-version = "1.0.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5192cca8006f1fd4f7237516f40fa183bb07f8fbdfedaa0036de5ea9b0b45e78"
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -330,32 +324,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
 
 [[package]]
-name = "pixie-shared"
+name = "pixie-client"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "serde",
- "thiserror",
+ "futures",
+ "log",
+ "lz4_flex",
+ "minicov",
+ "pixie-kernel",
+ "pixie-shared",
+ "postcard",
+ "thingbuf",
+ "uefi",
 ]
 
 [[package]]
-name = "pixie-uefi"
+name = "pixie-drivers"
+version = "0.1.0"
+
+[[package]]
+name = "pixie-kernel"
 version = "0.1.0"
 dependencies = [
- "anstyle",
- "blake3",
  "dhcparse",
  "etherparse",
  "futures",
  "gpt_disk_io",
  "log",
  "lz4_flex",
- "minicov",
+ "pixie-drivers",
  "pixie-shared",
  "postcard",
  "spin",
- "thingbuf",
+ "talc",
  "uefi",
+]
+
+[[package]]
+name = "pixie-shared"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -514,6 +526,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "talc"
+version = "4.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ae828aa394de34c7de08f522d1b86bd1c182c668d27da69caadda00590f26d"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]

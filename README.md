@@ -12,18 +12,23 @@ separately. This makes it practical to re-image a whole room of machines
 
 ## How it works
 
-pixie is made of four crates:
+pixie is made of six crates:
 
 - **`pixie-server`** — the coordinator, run as root on one machine. It runs
   built-in DHCP/PXE, TFTP, and DNS servers, an admin HTTP/SSE API, and the
   UDP protocol that clients speak.
-- **`pixie-uefi`** — the client agent, a small UEFI application that each
-  machine PXE-boots into. It talks to the server and executes the actions it
-  is given (register, store, flash, boot, restart, shutdown).
+- **`pixie-client`** — the client agent (`pixie-client.efi`), a bare-metal
+  application that each machine PXE-boots into. It talks to the server and
+  executes the actions it is given (register, store, flash, boot, restart,
+  shutdown).
+- **`pixie-kernel`** — the bare-metal x86_64 kernel runtime, memory manager,
+  async executor, and network stack used by `pixie-client`.
+- **`pixie-drivers`** — `#![no_std]` async hardware drivers (NVMe, AHCI,
+  Intel e1000/e1000e, Realtek 8168/8169/8125, xHCI, PS/2, Serial, PCI, ACPI).
 - **`pixie-web`** — a WASM admin dashboard (built with `trunk`), served by
   `pixie-server`, for watching machine status and issuing actions.
 - **`pixie-shared`** — wire-protocol types and the chunk codec shared by the
-  three above.
+  crates above.
 
 Typical workflow:
 

@@ -8,7 +8,7 @@ use futures::future::{Either, select};
 use pixie_shared::{HINT_PORT, HintPacket, RegistrationInfo, RpcRequest, UnitStats};
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
-use crate::os::error::{Error, Result};
+use crate::os::error::Result;
 use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
 use crate::os::ui::DrawArea;
 use crate::os::{input, ui};
@@ -58,6 +58,7 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     let udp = UdpSocket::bind(Some(HINT_PORT)).await?;
     let mut buf = [0; ETH_PACKET_SIZE];
 
+    let mut has_hint = false;
     let mut hint = true;
     let mut images = Vec::new();
     let mut groups = Vec::new();
@@ -71,17 +72,40 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
                 let recv = Box::pin(udp.recv_from(&mut buf));
                 let key = Box::pin(input::read_key());
                 match select(recv, key).await {
-                    Either::Left(((buf, _), _)) => {
-                        let hint: HintPacket = postcard::from_bytes(buf)?;
-                        data.borrow_mut().station = hint.station;
-                        images = hint.images;
-                        groups = hint.groups.into_iter().map(|(k, _)| k).collect();
-                        ui::update_content(&draw_content);
-                        ui::flush();
-                    }
+                    Either::Left(((buf, _), _)) => match postcard::from_bytes::<HintPacket>(buf) {
+                        Ok(pkt) => {
+                            let new_groups: Vec<_> =
+                                pkt.groups.into_iter().map(|(k, _)| k).collect();
+                            if new_groups.is_empty() || pkt.images.is_empty() {
+                                log::warn!("Ignoring HintPacket with empty groups or images");
+                                continue;
+                            }
+                            images = pkt.images;
+                            groups = new_groups;
+                            let mut d = data.borrow_mut();
+                            d.station = pkt.station;
+                            if !groups.contains(&d.station.group) {
+                                d.station.group = groups[0].clone();
+                            }
+                            if !images.contains(&d.station.image) {
+                                d.station.image = images[0].clone();
+                            }
+                            drop(d);
+                            has_hint = true;
+                            ui::update_content(&draw_content);
+                            ui::flush();
+                        }
+                        Err(e) => {
+                            log::warn!("Ignoring invalid HintPacket: {e}");
+                        }
+                    },
                     Either::Right((key, _)) => {
+                        let key = key?;
+                        if !has_hint {
+                            continue;
+                        }
                         hint = false;
-                        break key?;
+                        break key;
                     }
                 }
             }
@@ -101,26 +125,26 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
             let mut data = data.borrow_mut();
             match data.selected {
                 0 => {
-                    data.station.group = groups
-                        .iter()
-                        .rev()
-                        .cycle()
-                        .skip_while(|g| **g != data.station.group)
-                        .nth(1)
-                        .unwrap()
-                        .clone()
+                    if !groups.is_empty() {
+                        let idx = groups
+                            .iter()
+                            .position(|g| g == &data.station.group)
+                            .unwrap_or(0);
+                        data.station.group =
+                            groups[(idx + groups.len() - 1) % groups.len()].clone();
+                    }
                 }
                 1 => data.station.row = data.station.row.wrapping_sub(1),
                 2 => data.station.col = data.station.col.wrapping_sub(1),
                 3 => {
-                    data.station.image = images[(images
-                        .iter()
-                        .position(|x| x == &data.station.image)
-                        .ok_or(Error::msg("Invalid image name"))?
-                        + images.len()
-                        - 1)
-                        % images.len()]
-                    .clone();
+                    if !images.is_empty() {
+                        let idx = images
+                            .iter()
+                            .position(|x| x == &data.station.image)
+                            .unwrap_or(0);
+                        data.station.image =
+                            images[(idx + images.len() - 1) % images.len()].clone();
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -129,24 +153,24 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
             let mut data = data.borrow_mut();
             match data.selected {
                 0 => {
-                    data.station.group = groups
-                        .iter()
-                        .cycle()
-                        .skip_while(|g| **g != data.station.group)
-                        .nth(1)
-                        .unwrap()
-                        .clone()
+                    if !groups.is_empty() {
+                        let idx = groups
+                            .iter()
+                            .position(|g| g == &data.station.group)
+                            .unwrap_or(0);
+                        data.station.group = groups[(idx + 1) % groups.len()].clone();
+                    }
                 }
                 1 => data.station.row = data.station.row.wrapping_add(1),
                 2 => data.station.col = data.station.col.wrapping_add(1),
                 3 => {
-                    data.station.image = images[(images
-                        .iter()
-                        .position(|x| x == &data.station.image)
-                        .ok_or(Error::msg("Invalid image name"))?
-                        + 1)
-                        % images.len()]
-                    .clone();
+                    if !images.is_empty() {
+                        let idx = images
+                            .iter()
+                            .position(|x| x == &data.station.image)
+                            .unwrap_or(0);
+                        data.station.image = images[(idx + 1) % images.len()].clone();
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -161,7 +185,7 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     let mem_stats = crate::os::memory::stats();
     let stat = UnitStats {
         ram: mem_stats.used + mem_stats.free + mem_stats.other,
-        disk: crate::os::disk::Disk::largest().size(),
+        disk: crate::os::disk::Disk::largest().await.size(),
         cpu: crate::os::util::get_cpu_model(),
     };
 
