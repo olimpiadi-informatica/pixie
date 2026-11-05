@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{le16, le32, le64_32_32};
-use crate::os::disk::Disk;
+use crate::os::disk::DiskIo;
 use crate::os::error::Result;
 use crate::store::ChunkInfo;
 
@@ -23,12 +23,14 @@ fn has_superblock(group: usize) -> bool {
     false
 }
 
-pub async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+pub async fn get_ext4_chunks<D: DiskIo + ?Sized>(
+    disk: &mut D,
+    start: u64,
+    end: u64,
+) -> Result<Option<Vec<ChunkInfo>>> {
     if start + 2048 > end {
-        // Not an ext4 partition.
         return Ok(None);
     }
-    // Read superblock.
     let mut superblock = [0; 1024];
     disk.read(start + 1024, &mut superblock).await?;
 
@@ -39,13 +41,11 @@ pub async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option
 
     let feature_incompat = le32(&superblock, 0x60);
     if feature_incompat & 0x80 == 0 {
-        // INCOMPAT_64BIT flag
         return Ok(None);
     }
 
     let feature_ro_compat = le32(&superblock, 0x64);
     if feature_ro_compat & 0x1 == 0 {
-        // RO_COMPAT_SPARSE_SUPER flag
         return Ok(None);
     }
 
@@ -77,7 +77,6 @@ pub async fn get_ext4_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option
     for (group, group_descriptor) in group_descriptors.chunks(desc_size as usize).enumerate() {
         let flags = le16(group_descriptor, 0x12);
         if flags & 0x2 != 0 {
-            // EXT4_BG_BLOCK_UNINIT
             if has_superblock(group) {
                 for block in 0..blocks_for_special_group {
                     if group * blocks_per_group as usize + block < blocks_count as usize {

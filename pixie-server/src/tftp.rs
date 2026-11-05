@@ -269,7 +269,7 @@ mod tests {
     async fn test_tftp_tsize_probe_and_blksize_transfer() {
         let dir = tempfile::tempdir().unwrap();
         let payload: Vec<u8> = (0..4000).map(|i| (i % 251) as u8).collect();
-        std::fs::write(dir.path().join("pixie-uefi.efi"), &payload).unwrap();
+        std::fs::write(dir.path().join("pixie-client.efi"), &payload).unwrap();
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let client_addr = client.local_addr().unwrap();
@@ -280,7 +280,7 @@ mod tests {
             handle_rrq(
                 root,
                 client_addr,
-                "/pixie-uefi.efi".to_string(),
+                "/pixie-client.efi".to_string(),
                 vec![
                     TransferOption {
                         option: OptionType::TransferSize,
@@ -329,7 +329,7 @@ mod tests {
             handle_rrq(
                 root,
                 client_addr,
-                "pixie-uefi.efi".to_string(),
+                "pixie-client.efi".to_string(),
                 vec![TransferOption {
                     option: OptionType::BlockSize,
                     value: 1468,

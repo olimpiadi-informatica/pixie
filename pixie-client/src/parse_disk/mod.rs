@@ -4,15 +4,15 @@ use log::info;
 use pixie_shared::MAX_CHUNK_SIZE;
 use pixie_shared::util::BytesFmt;
 
-use crate::os::disk::Disk;
+use crate::os::disk::DiskIo;
 use crate::os::error::Result;
 use crate::store::ChunkInfo;
 
-mod ext4;
-mod fat;
-mod gpt;
-mod ntfs;
-mod swap;
+pub mod ext4;
+pub mod fat;
+pub mod gpt;
+pub mod ntfs;
+pub mod swap;
 
 fn le16(buf: &[u8], lo: usize) -> u16 {
     (0..2).map(|i| (buf[lo + i] as u16) << (8 * i)).sum()
@@ -33,7 +33,11 @@ fn le64_32_32(buf: &[u8], lo: usize, hi: usize) -> u64 {
 }
 
 /// Returns chunks *relative to the start of the partition*.
-async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkInfo>> {
+pub async fn parse_partition<D: DiskIo + ?Sized>(
+    disk: &mut D,
+    start: u64,
+    end: u64,
+) -> Result<Vec<ChunkInfo>> {
     if let Some(chunks) = fat::get_fat_chunks(disk, start, end).await? {
         info!(
             "FAT partition with {} chunks of size {}",
@@ -71,18 +75,19 @@ async fn parse_partition(disk: &Disk, start: u64, end: u64) -> Result<Vec<ChunkI
     }
 }
 
-async fn parse_partition_table(disk: &mut Disk) -> Result<Vec<ChunkInfo>> {
+async fn parse_partition_table<D: DiskIo + ?Sized>(disk: &mut D) -> Result<Vec<ChunkInfo>> {
     if let Some(chunks) = gpt::parse_gpt(disk).await? {
         Ok(chunks)
     } else {
-        parse_partition(disk, 0, disk.size()).await
+        let size = disk.size();
+        parse_partition(disk, 0, size).await
     }
 }
 
-pub async fn parse_disk(disk: &mut Disk) -> Result<Vec<ChunkInfo>> {
+pub async fn parse_disk<D: DiskIo + ?Sized>(disk: &mut D) -> Result<Vec<ChunkInfo>> {
     let chunks = parse_partition_table(disk).await?;
 
-    // Split up chunks.
+    // Split up and coalesce contiguous chunks at MAX_CHUNK_SIZE boundaries.
     let mut final_chunks = Vec::<ChunkInfo>::new();
     for ChunkInfo { mut start, size } in chunks {
         let end = start + size;

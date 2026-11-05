@@ -15,7 +15,7 @@ use crate::os::ui::DrawArea;
 use crate::os::{disk, memory, ui};
 use crate::{MIN_MEMORY, parse_disk};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkInfo {
     pub start: Offset,
     pub size: usize,
@@ -90,7 +90,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     let boid = BootOptions::reboot_target().expect("Could not find reboot target");
     let bo_command = BootOptions::get(boid);
 
-    let mut disk = disk::Disk::largest();
+    let mut disk = disk::Disk::largest().await;
     let chunks = parse_disk::parse_disk(&mut disk).await?;
     info!(
         "Total size of chunks: {}",
@@ -108,7 +108,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     let free_mem = memory::stats().free;
     let channel_size =
-        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
+        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).clamp(32, 128);
     log::debug!(
         "Free memory: {}. Channel size: {channel_size}",
         BytesFmt(free_mem)
@@ -238,7 +238,6 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     stream_get_csize.force_close().await;
 
     stream_upload_chunk.shutdown().await;
-    // TODO(virv): this could be better
     stream_upload_chunk.force_close().await;
 
     log::info!(

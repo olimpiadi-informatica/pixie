@@ -161,7 +161,7 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     let mem_stats = crate::os::memory::stats();
     let stat = UnitStats {
         ram: mem_stats.used + mem_stats.free + mem_stats.other,
-        disk: crate::os::disk::Disk::largest().size(),
+        disk: crate::os::disk::Disk::largest().await.size(),
         cpu: crate::os::util::get_cpu_model(),
     };
 
@@ -173,7 +173,6 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     let len = stream.read_u64_le().await?;
     assert_eq!(len, 0);
     stream.shutdown().await;
-    // TODO(virv): this could be better
     stream.force_close().await;
 
     log::info!("Registration successful! {:?}", data.borrow().station);

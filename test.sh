@@ -11,7 +11,7 @@ mkdir -p prof-out
 
 # Pinned rather than a floating `nightly`: an untested newer nightly can (and
 # has) introduced codegen regressions that only show up on the exotic
-# `-C instrument-coverage` + no_std + SIMD combination pixie-uefi builds with,
+# `-C instrument-coverage` + no_std + SIMD combination pixie-client builds with,
 # so bump this deliberately rather than silently drifting.
 NIGHTLY=nightly-2026-05-23
 if ! rustc +$NIGHTLY -V &>/dev/null; then
@@ -27,7 +27,12 @@ pushd pixie-shared
 RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-shared-%m-%p.profraw cargo +$NIGHTLY test --no-fail-fast --all-features
 popd
 
-pushd pixie-uefi
+pushd pixie-drivers
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-drivers-%m-%p.profraw cargo +$NIGHTLY test --no-fail-fast
+popd
+
+pushd pixie-client
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-client-%m-%p.profraw cargo +$NIGHTLY test --target x86_64-unknown-linux-gnu --no-fail-fast
 RUSTFLAGS='-Cinstrument-coverage -Zno-profiler-runtime' cargo +$NIGHTLY build -F coverage
 popd
 
@@ -40,7 +45,7 @@ RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/build-pixie-ser
 popd
 
 mkdir -p "${STORAGE_DIR}/tftpboot" "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks" "${STORAGE_DIR}/admin"
-cp "pixie-uefi/target/x86_64-unknown-uefi/debug/pixie-uefi.efi" "${STORAGE_DIR}/tftpboot/"
+cp "pixie-client/target/x86_64-unknown-uefi/debug/pixie-client.efi" "${STORAGE_DIR}/tftpboot/"
 cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 
 [ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-server/example.config.yaml "${STORAGE_DIR}/config.yaml"
@@ -62,8 +67,14 @@ EOF
 TEST_OBJECTS=$(
   for file in \
     $(
-      RUSTFLAGS="-C instrument-coverage" \
-        cargo +$NIGHTLY test --manifest-path pixie-shared/Cargo.toml --no-fail-fast --all-features --no-run --message-format=json |
+      (
+        RUSTFLAGS="-C instrument-coverage" \
+          cargo +$NIGHTLY test --manifest-path pixie-shared/Cargo.toml --no-fail-fast --all-features --no-run --message-format=json
+        RUSTFLAGS="-C instrument-coverage" \
+          cargo +$NIGHTLY test --manifest-path pixie-drivers/Cargo.toml --no-fail-fast --no-run --message-format=json
+        RUSTFLAGS="-C instrument-coverage" \
+          cargo +$NIGHTLY test --manifest-path pixie-client/Cargo.toml --target x86_64-unknown-linux-gnu --no-fail-fast --no-run --message-format=json
+      ) |
         jq -r "select(.profile.test == true) | .filenames[]" |
         grep -v dSYM -
     ); do
@@ -75,7 +86,7 @@ TEST_OBJECTS=$(
 "$LLVM_COV" show \
   -instr-profile=prof-out/pixie.profdata \
   -object pixie-server/target/debug/pixie-server \
-  -object pixie-uefi/target/x86_64-unknown-uefi/debug/pixie-uefi.efi \
+  -object pixie-client/target/x86_64-unknown-uefi/debug/pixie-client.efi \
   $TEST_OBJECTS \
   -Xdemangler=rustfilt \
   --ignore-filename-regex='/.cargo' \

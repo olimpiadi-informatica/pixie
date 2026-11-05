@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
 use super::{le16, le32};
-use crate::os::disk::Disk;
+use crate::os::disk::DiskIo;
 use crate::os::error::Result;
 use crate::store::ChunkInfo;
 
@@ -33,7 +33,11 @@ impl Type {
     }
 }
 
-pub async fn get_fat_chunks(disk: &Disk, start: u64, end: u64) -> Result<Option<Vec<ChunkInfo>>> {
+pub async fn get_fat_chunks<D: DiskIo + ?Sized>(
+    disk: &mut D,
+    start: u64,
+    end: u64,
+) -> Result<Option<Vec<ChunkInfo>>> {
     if end - start < 512 {
         return Ok(None);
     }

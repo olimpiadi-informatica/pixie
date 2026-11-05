@@ -43,7 +43,7 @@ struct Stats {
     requested: usize,
 }
 
-fn handle_packet(
+pub fn handle_packet(
     buf: &[u8],
     chunks_info: &mut BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
     received: &mut BTreeMap<ChunkHash, Decoder>,
@@ -81,7 +81,6 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let stream = TcpStream::connect(server_addr).await?;
     let image = fetch_image(&stream).await?;
     stream.shutdown().await;
-    // TODO(virv): this could be better
     stream.force_close().await;
 
     let mut chunks_info = BTreeMap::new();
@@ -132,7 +131,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         Ok(())
     };
 
-    let mut disk = disk::Disk::largest();
+    let mut disk = disk::Disk::largest().await;
 
     for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
         let mut found = None;
@@ -170,7 +169,8 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         let tx = tx;
         let mut last_seen = Vec::new();
         let free_mem = memory::stats().free;
-        let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
+        let max_chunks =
+            (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).clamp(64, 128);
         log::debug!(
             "Free memory: {}. Max chunks in memory: {max_chunks}",
             BytesFmt(free_mem)
@@ -198,7 +198,6 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                     }
                 }
                 Either::Right(((), _sleep)) => {
-                    // TODO(virv): compute the number of chunks to request
                     let chunks: Vec<_> =
                         chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
                     stats.borrow_mut().requested += chunks.len();
@@ -228,6 +227,8 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     };
 
     let ((), (), ()) = futures::try_join!(task1, task2, draw_task)?;
+
+    disk.flush().await?;
 
     info!("Fetch complete, updating boot options");
 

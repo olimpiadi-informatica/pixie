@@ -1,5 +1,5 @@
-#![no_main]
-#![no_std]
+#![cfg_attr(target_os = "uefi", no_main)]
+#![cfg_attr(target_os = "uefi", no_std)]
 #![deny(unused_must_use)]
 
 #[macro_use]
@@ -11,28 +11,17 @@ use core::time::Duration;
 
 use futures::future::{self, Either};
 use pixie_shared::{ACTION_PORT, Action, PING_PORT, TcpRequest, UdpRequest};
+#[cfg(target_os = "uefi")]
 use uefi::{Status, entry};
 
-use crate::flash::flash;
-use crate::os::error::{Error, Result};
-use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
-use crate::os::ui::update_content;
-use crate::register::register;
-use crate::store::store;
-
-mod flash;
-mod os;
-mod parse_disk;
-mod power_control;
-mod register;
-mod store;
-
-#[cfg(feature = "coverage")]
-mod export_cov;
-
-// Memory to keep free for non-chunk storage.
-const MIN_MEMORY: u64 = 32 << 20;
+use pixie_client::flash::flash;
+use pixie_client::os::error::{Error, Result};
+use pixie_client::os::executor::Executor;
+use pixie_client::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use pixie_client::os::ui::update_content;
+use pixie_client::register::register;
+use pixie_client::store::store;
+use pixie_client::{os, power_control};
 
 async fn server_discover() -> Result<SocketAddrV4> {
     let socket = UdpSocket::bind(None).await?;
@@ -68,7 +57,7 @@ async fn server_discover() -> Result<SocketAddrV4> {
 
 async fn shutdown() -> ! {
     #[cfg(feature = "coverage")]
-    export_cov::export().await;
+    pixie_client::export_cov::export().await;
 
     log::info!("Shutting down...");
     Executor::sleep(Duration::from_secs(1)).await;
@@ -162,7 +151,13 @@ async fn run() -> Result<()> {
     }
 }
 
+#[cfg(target_os = "uefi")]
 #[entry]
 fn main() -> Status {
     os::start(run)
+}
+
+#[cfg(not(target_os = "uefi"))]
+fn main() {
+    let _ = os::start(run);
 }
