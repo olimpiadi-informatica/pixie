@@ -159,13 +159,23 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
         StatusUpdate::HostMap(state.hostmap.clone()),
     ];
 
-    let units_rx = WatchStream::new(state.subscribe_units());
+    let units_rx = futures::stream::unfold(
+        (state.subscribe_units(), true),
+        |(mut rx, is_first)| async move {
+            if !is_first {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                rx.changed().await.ok()?;
+            }
+            let units = rx.borrow_and_update().clone();
+            Some((StatusUpdate::Units(units), (rx, false)))
+        },
+    );
     let image_rx = WatchStream::new(state.subscribe_images());
 
     let messages = futures::stream::iter(initial_messages)
         .chain(futures::stream::select(
             image_rx.map(StatusUpdate::ImagesStats),
-            units_rx.map(StatusUpdate::Units),
+            units_rx,
         ))
         .take_until(state.cancel_token.clone().cancelled_owned());
     let lines = messages.map(|msg| serde_json::to_string(&msg).map(|x| x + "\n"));
