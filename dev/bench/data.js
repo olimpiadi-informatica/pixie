@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1790159747391,
+  "lastUpdate": 1794045839268,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -293,6 +293,48 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
             "value": 3508314.55,
             "range": "± 197206.91",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "distinct": true,
+          "id": "fd97685af8de717c2cb7e4c7579e3c111e96a94a",
+          "message": "Run tests without requiring root",
+          "timestamp": "2026-11-07T11:02:41+01:00",
+          "tree_id": "7326c1f185032cd71ccdc1d986b35ff898ab9641",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/fd97685af8de717c2cb7e4c7579e3c111e96a94a"
+        },
+        "date": 1794045838446,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_200kib",
+            "value": 230055.52,
+            "range": "± 4060.45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_20b",
+            "value": 1851.3,
+            "range": "± 37.24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
+            "value": 5393430.5,
+            "range": "± 100993.8",
             "unit": "ns/iter"
           }
         ]
