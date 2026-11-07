@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794093017286,
+  "lastUpdate": 1794093175647,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -691,6 +691,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 12.478,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "distinct": true,
+          "id": "169b65f416a54103d737f4695a303612e778192a",
+          "message": "Overhaul pixie-web with Leptos 0.8, DaisyUI, and fine-grained reactivity",
+          "timestamp": "2026-11-08T00:08:55+01:00",
+          "tree_id": "1ba342567bb211b6e2a8a774302e01e05321d528",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/169b65f416a54103d737f4695a303612e778192a"
+        },
+        "date": 1794093175624,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 21.162,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 15.766,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 11.249,
             "unit": "s"
           }
         ]
