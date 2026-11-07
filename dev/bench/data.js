@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794045839268,
+  "lastUpdate": 1794046031391,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -610,6 +610,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 11.208,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "distinct": true,
+          "id": "fd97685af8de717c2cb7e4c7579e3c111e96a94a",
+          "message": "Run tests without requiring root",
+          "timestamp": "2026-11-07T11:02:41+01:00",
+          "tree_id": "7326c1f185032cd71ccdc1d986b35ff898ab9641",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/fd97685af8de717c2cb7e4c7579e3c111e96a94a"
+        },
+        "date": 1794046031369,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 19.431,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 15.955,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 12.478,
             "unit": "s"
           }
         ]
