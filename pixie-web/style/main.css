@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@plugin "./daisyui.mjs" {
+  themes: winter --default, night --prefersdark;
+}
+
+@plugin "./daisyui-theme.mjs" {
+  themes: winter --default, night --prefersdark;
+}
+
+@source "../src/**/*.rs";
+@source "../index.html";
+@source not "./daisyui{,*}.mjs";
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}

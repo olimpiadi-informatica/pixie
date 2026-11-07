@@ -1,6 +1,19 @@
-[build]
-public_url = "."
-minify = "on_release"
+trunk-version = "*"
 
-[[proxy]]
-backend = "http://localhost:8000/admin/"
+[build]
+target = "index.html"
+minify = "on_release"
+inject_scripts = true
+
+[watch]
+watch = [
+  "src/",
+  "../pixie-shared/src/",
+  "style/",
+  "index.html",
+  "Cargo.toml",
+  "../pixie-shared/Cargo.toml",
+]
+
+[tools]
+tailwindcss = "4.2.2"
