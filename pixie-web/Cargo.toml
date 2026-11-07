@@ -13,14 +13,13 @@ console_error_panic_hook = "0.1.7"
 console_log = "1.0.0"
 futures = "0.3.32"
 gloo-net = "0.6.0"
+gloo-timers = { version = "0.3.0", features = ["futures"] }
 js-sys = "0.3.81"
-leptos = { version = "0.6.15", features = ["csr"] }
-leptos-use = "0.13.5"
+leptos = { version = "0.8.20", features = ["csr"] }
 log = "0.4.29"
-#macaddr = "1.0.1"
+macaddr = "1.0.1"
 pixie-shared = { version = "0.1.0", path = "../pixie-shared", features = ["macaddr", "std"] }
 serde_json = "1.0.149"
-thaw = { version = "0.3.4", features = ["csr"] }
 wasm-bindgen-futures = { version = "0.4.54", features = ["futures-core-03-stream"] }
 
 [profile.release]

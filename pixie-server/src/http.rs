@@ -12,7 +12,7 @@ use axum::{
 };
 use futures::StreamExt;
 use pixie_shared::{Action, HttpConfig, StatusUpdate};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::WatchStream;
 use tower_http::{services::ServeDir, trace::TraceLayer};
@@ -159,8 +159,14 @@ async fn status(extract::State(state): extract::State<Arc<State>>) -> impl IntoR
         StatusUpdate::HostMap(state.hostmap.clone()),
     ];
 
-    let units_rx = WatchStream::new(state.subscribe_units());
-    let image_rx = WatchStream::new(state.subscribe_images());
+    let units_rx = tokio_stream::StreamExt::throttle(
+        WatchStream::new(state.subscribe_units()),
+        Duration::from_millis(250),
+    );
+    let image_rx = tokio_stream::StreamExt::throttle(
+        WatchStream::new(state.subscribe_images()),
+        Duration::from_millis(250),
+    );
 
     let messages = futures::stream::iter(initial_messages)
         .chain(futures::stream::select(
