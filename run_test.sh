@@ -66,6 +66,8 @@ if ! ip link show br-pixie1 &>/dev/null; then
   ip link add br-pixie1 type bridge
   ip link set dev br-pixie1 up
   ip addr add 10.10.0.1/16 dev br-pixie1
+  ip addr add 192.168.99.1/24 dev br-pixie1
+  ip addr add 192.168.99.2/24 dev br-pixie1
 fi
 
 if ! ip link show tap-pixie1 &>/dev/null; then
@@ -73,6 +75,64 @@ if ! ip link show tap-pixie1 &>/dev/null; then
   ip link set tap-pixie1 master br-pixie1
   ip link set tap-pixie1 up
 fi
+
+# External DHCP server on br-pixie1 (192.168.99.2) that assigns 192.168.99.50/24
+# with no PXE/bootfile options, so br-pixie1 tests DhcpMode::Proxy end-to-end.
+python3 - <<'PY' &
+import socket, struct
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"br-pixie1")
+sock.bind(("0.0.0.0", 67))
+
+SERVER_IP = socket.inet_aton("192.168.99.2")
+CLIENT_IP = socket.inet_aton("192.168.99.50")
+NETMASK = socket.inet_aton("255.255.255.0")
+COOKIE = b"\x63\x82\x53\x63"
+
+while True:
+    pkt, _ = sock.recvfrom(2048)
+    if len(pkt) < 240 or pkt[0] != 1 or pkt[236:240] != COOKIE:
+        continue
+    opts = pkt[240:]
+    msg_type = None
+    server_id = None
+    i = 0
+    while i < len(opts) and opts[i] != 255:
+        if opts[i] == 0:
+            i += 1
+            continue
+        code, length = opts[i], opts[i + 1]
+        val = opts[i + 2 : i + 2 + length]
+        if code == 53 and length == 1:
+            msg_type = val[0]
+        elif code == 54 and length == 4:
+            server_id = val
+        i += 2 + length
+    if msg_type == 1:
+        reply_type = 2  # OFFER
+    elif msg_type == 3 and (server_id is None or server_id == SERVER_IP):
+        reply_type = 5  # ACK
+    else:
+        continue
+    reply = bytearray(240)
+    reply[0] = 2  # BOOTREPLY
+    reply[1:4] = pkt[1:4]
+    reply[4:8] = pkt[4:8]  # xid
+    reply[10:12] = pkt[10:12]  # flags
+    reply[16:20] = CLIENT_IP  # yiaddr
+    reply[28:44] = pkt[28:44]  # chaddr
+    reply[236:240] = COOKIE
+    reply += bytes([53, 1, reply_type])
+    reply += bytes([54, 4]) + SERVER_IP
+    reply += bytes([51, 4]) + struct.pack("!I", 3600)
+    reply += bytes([1, 4]) + NETMASK
+    reply += bytes([3, 4]) + SERVER_IP
+    reply += bytes([255])
+    sock.sendto(reply, ("255.255.255.255", 68))
+PY
 
 RUST_BACKTRACE=short RUST_LOG=debug RUST_LOG_STYLE=always LLVM_PROFILE_FILE=prof-out/pixie-server-%m-%p.profraw ./pixie-server/target/debug/pixie-server -s $TEMPDIR/storage &
 
