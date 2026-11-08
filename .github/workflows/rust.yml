@@ -73,7 +73,7 @@ jobs:
 
       - name: Run flash codec benchmark (pixie-shared)
         working-directory: pixie-shared
-        run: cargo +nightly bench --features std | tee ../flash-codec-bench.txt
+        run: cargo bench --features std -- --output-format bencher | tee ../flash-codec-bench.txt
 
       - name: Track flash codec benchmark
         uses: benchmark-action/github-action-benchmark@v1

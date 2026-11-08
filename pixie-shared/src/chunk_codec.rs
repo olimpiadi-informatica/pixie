@@ -369,6 +369,13 @@ impl Encoder {
 mod tests {
     use super::*;
     use crate::UDP_BODY_LEN;
+    use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
+
+    fn make_chunk(size: usize) -> Vec<u8> {
+        let mut chunk = vec![0u8; size];
+        StdRng::seed_from_u64(0x1234_5678_9ABC_DEF0).fill_bytes(&mut chunk);
+        chunk
+    }
 
     fn test_chunk_skip_packet(chunk: &[u8]) {
         let mut encoder = Encoder::new(chunk.to_vec());
@@ -378,11 +385,7 @@ mod tests {
             packets.push(buf[..len].to_vec());
         }
 
-        packets.sort_by_key(|p| {
-            p.iter().take(6).fold(0u64, |acc, &x| {
-                acc.wrapping_mul(0x5DEECE66D).wrapping_add(x as u64)
-            })
-        });
+        packets.shuffle(&mut StdRng::seed_from_u64(0xCAFE_BABE_DEAD_BEEF));
 
         for skip_idx in 0..packets.len() {
             let mut decoder = Decoder::new(chunk.len());
@@ -410,23 +413,13 @@ mod tests {
 
     #[test]
     fn test_small_chunk() {
-        let mut chunk = vec![0u8; 20];
-        let mut val = u64::MAX / 5;
-        for x in &mut chunk {
-            val = val.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
-            *x = val.to_be_bytes()[0];
-        }
+        let chunk = make_chunk(20);
         test_chunk_skip_packet(&chunk);
     }
 
     #[test]
     fn test_big_chunk() {
-        let mut chunk = vec![0u8; 200 << 10];
-        let mut val = u64::MAX / 5;
-        for x in &mut chunk {
-            val = val.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
-            *x = val.to_be_bytes()[0];
-        }
+        let chunk = make_chunk(200 << 10);
         test_chunk_skip_packet(&chunk);
     }
 
@@ -519,60 +512,5 @@ mod tests {
                     .unwrap_or_else(|e| panic!("size {size}, rot_index {rot_index}: {e}"));
             }
         }
-    }
-}
-
-/// Micro-benchmark for the codec itself, not a stand-in for a real flash: it loops
-/// [`Encoder::next_packet`] straight into [`Decoder::add_packet`] over an in-memory buffer,
-/// skipping the real UEFI/tokio UDP sockets and the rest of the flash pipeline entirely. Run and
-/// tracked in CI (`cargo +nightly bench --features std`, see `.github/workflows/rust.yml`) to
-/// catch regressions in this hot, security-sensitive path in isolation; see `run_test.sh` for the
-/// actual end-to-end store/flash benchmark, which drives the real `pixie-uefi.efi` client in QEMU
-/// against a real `pixie-server`.
-#[cfg(test)]
-mod benches {
-    use super::*;
-    use crate::UDP_BODY_LEN;
-    use std::hint::black_box;
-    use test::Bencher;
-
-    fn make_chunk(size: usize) -> Vec<u8> {
-        let mut chunk = vec![0u8; size];
-        let mut val = u64::MAX / 5;
-        for x in &mut chunk {
-            val = val.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
-            *x = val.to_be_bytes()[0];
-        }
-        chunk
-    }
-
-    fn bench_roundtrip(b: &mut Bencher, size: usize) {
-        let chunk = make_chunk(size);
-        let mut buf = [0u8; UDP_BODY_LEN];
-        b.iter(|| {
-            let mut encoder = Encoder::new(chunk.clone());
-            let mut decoder = Decoder::new(chunk.len());
-            while let Some(len) = encoder.next_packet(&mut buf) {
-                decoder
-                    .add_packet(&buf[..len])
-                    .expect("failed to add packet");
-            }
-            black_box(decoder.finish().expect("failed to decode chunk"))
-        });
-    }
-
-    #[bench]
-    fn bench_flash_roundtrip_20b(b: &mut Bencher) {
-        bench_roundtrip(b, 20);
-    }
-
-    #[bench]
-    fn bench_flash_roundtrip_200kib(b: &mut Bencher) {
-        bench_roundtrip(b, 200 << 10);
-    }
-
-    #[bench]
-    fn bench_flash_roundtrip_4mib(b: &mut Bencher) {
-        bench_roundtrip(b, crate::MAX_CHUNK_SIZE);
     }
 }
