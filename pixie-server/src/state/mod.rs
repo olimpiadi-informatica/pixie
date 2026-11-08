@@ -91,9 +91,9 @@ pub struct State {
     /// The storage_dir received by command line arguments.
     pub storage_dir: PathBuf,
     /// The config parsed from the config file.
-    pub config: Config,
+    config: watch::Sender<Config>,
     /// The hostmap built from the hostmap file.
-    pub hostmap: HashMap<Ipv4Addr, String>,
+    hostmap: watch::Sender<HashMap<Ipv4Addr, String>>,
 
     units: watch::Sender<Vec<Unit>>,
     registration_hint: Mutex<Option<RegistrationInfo>>,
@@ -106,8 +106,10 @@ pub struct State {
 }
 
 impl State {
-    /// Loads the [`State`] from the given path.
-    pub fn load(storage_dir: PathBuf) -> Result<Self> {
+    fn read_config_and_hostmap(
+        storage_dir: &Path,
+        units: &[Unit],
+    ) -> Result<(Config, HashMap<Ipv4Addr, String>)> {
         let config: Config = {
             let path = storage_dir.join(CONFIG_YAML);
             let file = File::open(&path)
@@ -118,16 +120,7 @@ impl State {
 
         let hostmap = build_hostmap(config.hosts.hostsfile.as_deref())?;
 
-        let units_path = storage_dir.join(REGISTERED_JSON);
-        let units: Vec<Unit> = if units_path.exists() {
-            let file = File::open(&units_path)
-                .with_context(|| format!("open units file: {}", units_path.display()))?;
-            serde_json::from_reader(&file)
-                .with_context(|| format!("deserialize units from {}", units_path.display()))?
-        } else {
-            Vec::new()
-        };
-        for unit in &units {
+        for unit in units {
             ensure!(
                 config.groups.get_by_second(&unit.group).is_some(),
                 "unit group {} not found in config",
@@ -139,6 +132,25 @@ impl State {
                 unit.image,
             );
         }
+
+        Ok((config, hostmap))
+    }
+
+    /// Loads the [`State`] from the given path.
+    pub fn load(storage_dir: PathBuf) -> Result<Self> {
+        let units_path = storage_dir.join(REGISTERED_JSON);
+        let units: Vec<Unit> = if units_path.exists() {
+            let file = File::open(&units_path)
+                .with_context(|| format!("open units file: {}", units_path.display()))?;
+            serde_json::from_reader(&file)
+                .with_context(|| format!("deserialize units from {}", units_path.display()))?
+        } else {
+            Vec::new()
+        };
+
+        let (config, hostmap) = Self::read_config_and_hostmap(&storage_dir, &units)?;
+        let config = watch::Sender::new(config);
+        let hostmap = watch::Sender::new(hostmap);
         let units = watch::Sender::new(units);
 
         let mut units_rx = units.subscribe();
@@ -220,6 +232,45 @@ impl State {
             dhcp_leases: Mutex::new(HashMap::new()),
             cancel_token,
         })
+    }
+
+    pub fn config(&self) -> watch::Ref<'_, Config> {
+        self.config.borrow()
+    }
+
+    pub fn hostmap(&self) -> watch::Ref<'_, HashMap<Ipv4Addr, String>> {
+        self.hostmap.borrow()
+    }
+
+    pub fn subscribe_config(&self) -> watch::Receiver<Config> {
+        self.config.subscribe()
+    }
+
+    pub fn subscribe_hostmap(&self) -> watch::Receiver<HashMap<Ipv4Addr, String>> {
+        self.hostmap.subscribe()
+    }
+
+    /// Reloads `config.yaml` and `hostsfile` from disk.
+    pub fn reload(&self) -> Result<()> {
+        let units = self.units.borrow().clone();
+        let (config, hostmap) = Self::read_config_and_hostmap(&self.storage_dir, &units)?;
+        self.config.send_if_modified(|old| {
+            if *old != config {
+                *old = config;
+                true
+            } else {
+                false
+            }
+        });
+        self.hostmap.send_if_modified(|old| {
+            if *old != hostmap {
+                *old = hostmap;
+                true
+            } else {
+                false
+            }
+        });
+        Ok(())
     }
 
     pub fn record_dhcp_lease(&self, ip: Ipv4Addr, mac: MacAddr6) {

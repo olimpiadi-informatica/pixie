@@ -60,14 +60,25 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     };
     log::info!("DNS listening on {}", socket.local_addr()?);
 
-    let upstream = build_upstream_resolver();
-    let hosts = build_hosts(&state.hostmap);
+    let mut upstream = build_upstream_resolver();
+    let mut config_rx = state.subscribe_config();
+    let _ = config_rx.borrow_and_update();
+    let mut hostmap_rx = state.subscribe_hostmap();
+    let mut hosts = build_hosts(&hostmap_rx.borrow_and_update());
     let mut buf = [0u8; 4096];
     loop {
         let (len, peer) = tokio::select! {
             res = socket.recv_from(&mut buf) => res?,
             _ = state.cancel_token.cancelled() => break,
         };
+
+        if config_rx.has_changed().unwrap_or(false) {
+            let _ = config_rx.borrow_and_update();
+            upstream = build_upstream_resolver();
+        }
+        if hostmap_rx.has_changed().unwrap_or(false) {
+            hosts = build_hosts(&hostmap_rx.borrow_and_update());
+        }
 
         let Ok(req) = Message::from_vec(&buf[..len]) else {
             continue;
@@ -90,7 +101,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             .is_some()
         {
             // Local hostname exists in hostsfile, but has no record for the requested type (e.g. AAAA).
-        } else if state.config.hosts.dns_upstream {
+        } else if state.config().hosts.dns_upstream {
             reply.metadata.authoritative = false;
             match upstream
                 .as_ref()

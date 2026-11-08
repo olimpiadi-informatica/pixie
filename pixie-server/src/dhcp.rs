@@ -208,7 +208,7 @@ fn handle_dhcp_packet(
         opts.insert(DhcpOption::BroadcastAddr(iface.network.broadcast()));
         opts.insert(DhcpOption::Router(vec![server_ip]));
         opts.insert(DhcpOption::DomainNameServer(vec![server_ip]));
-        if let Some(hostname) = state.hostmap.get(&assigned_ip) {
+        if let Some(hostname) = state.hostmap().get(&assigned_ip) {
             opts.insert(DhcpOption::Hostname(hostname.clone()));
         }
         reply
@@ -255,8 +255,9 @@ async fn serve_socket(
 
 pub async fn main(state: Arc<State>) -> Result<()> {
     let mut tasks = Vec::new();
+    let interfaces = state.config().hosts.interfaces.clone();
 
-    for iface in &state.config.hosts.interfaces {
+    for iface in &interfaces {
         let (iface_name, _) = find_network(iface.network.addr())?;
 
         let dhcp_sock = bind_interface_udp(SERVER_PORT, &iface_name)?;

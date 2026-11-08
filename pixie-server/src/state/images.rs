@@ -89,7 +89,7 @@ impl State {
 
     pub fn get_image_serialized(&self, image: &str) -> Result<Option<Vec<u8>>> {
         ensure!(
-            self.config.images.iter().any(|i| i == image),
+            self.config().images.iter().any(|i| i == image),
             "Unknown image: {image}"
         );
 
@@ -147,7 +147,10 @@ impl State {
     }
 
     pub fn add_image(&self, name: String, image: &Image) -> Result<()> {
-        ensure!(self.config.images.contains(&name), "Unknown image: {name}");
+        ensure!(
+            self.config().images.contains(&name),
+            "Unknown image: {name}"
+        );
 
         let mut res = Ok(());
         self.images_stats.send_modify(|images_stats| {
@@ -179,7 +182,10 @@ impl State {
         let name = it.next().expect("Invalid image name").to_owned();
         let _version = it.next().unwrap_or_default();
         ensure!(it.next().is_none(), "Invalid image name");
-        ensure!(self.config.images.contains(&name), "Unknown image: {name}");
+        ensure!(
+            self.config().images.contains(&name),
+            "Unknown image: {name}"
+        );
 
         let mut res = Ok(());
         let path = self.storage_dir.join(IMAGES_DIR).join(full_name);
@@ -208,7 +214,10 @@ impl State {
         let name = it.next().expect("Invalid image name").to_owned();
         let _version = it.next().unwrap_or_default();
         ensure!(it.next().is_none(), "Invalid image name");
-        ensure!(self.config.images.contains(&name), "Unknown image: {name}");
+        ensure!(
+            self.config().images.contains(&name),
+            "Unknown image: {name}"
+        );
 
         let mut res = Ok(());
         self.images_stats.send_modify(|images_stats| {
