@@ -157,9 +157,10 @@ impl State {
                     modified = false;
                     action
                 } else {
-                    match unit.next_action {
+                    let next = unit.next_action;
+                    match next {
                         Action::Restart | Action::Store | Action::Flash | Action::Register => {
-                            unit.curr_action = Some(unit.next_action);
+                            unit.curr_action = Some(next);
                             unit.next_action = Action::Wait;
                             modified = true;
                         }
@@ -167,7 +168,7 @@ impl State {
                             modified = false;
                         }
                     }
-                    unit.next_action
+                    next
                 };
             } else {
                 action = Action::Register;

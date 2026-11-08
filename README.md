@@ -15,8 +15,8 @@ separately. This makes it practical to re-image a whole room of machines
 pixie is made of four crates:
 
 - **`pixie-server`** — the coordinator, run as root on one machine. It runs
-  DHCP/TFTP/PXE (via a managed `dnsmasq` subprocess), an admin HTTP/SSE API,
-  and the UDP/TCP protocol that clients speak.
+  built-in DHCP/PXE, TFTP, and DNS servers, an admin HTTP/SSE API, and the
+  UDP/TCP protocol that clients speak.
 - **`pixie-uefi`** — the client agent, a small UEFI application that each
   machine PXE-boots into. It talks to the server and executes the actions it
   is given (register, store, flash, boot, restart, shutdown).
@@ -51,11 +51,10 @@ group/image at once) are available from the web dashboard or the server's
   ```sh
   yay -S rustup upx trunk
   rustup toolchain install stable
-  rustup target add x86_64-unknown-uefi
+  rustup target add wasm32-unknown-unknown x86_64-unknown-uefi
   ```
-* At runtime, `pixie-server` also needs `dnsmasq` and `iproute2` (`ip`)
-  installed, and must run as root (it needs raw sockets, DHCP/TFTP on port
-  69, and to manage `dnsmasq`).
+* `pixie-server` must run as root (it needs device-bound sockets and
+  privileged ports 53, 67, and 69 for DNS, DHCP, and TFTP).
 
 ## Quickstart
 
@@ -82,8 +81,8 @@ point) has the following top-level sections:
     that interface.
 * `hosts.hostsfile` — optional path to an `/etc/hosts`-style file used to
   give registered machines friendly hostnames.
-* `hosts.dns_upstream` — whether `dnsmasq` should forward DNS queries
-  upstream, or only answer for pixie's own hosts.
+* `hosts.dns_upstream` — whether `pixie-server`'s built-in DNS server should
+  forward unknown DNS queries upstream, or only answer for pixie's own hosts.
 * `http.listen_on` — address:port the admin dashboard/API is served on.
 * `groups` — a list of `[name, id]` pairs mapping human-readable group names
   (e.g. rooms) to the numeric id used in the static IP scheme.

@@ -266,24 +266,35 @@ impl Decoder {
             let start0 = d0 * BODY_LEN;
             let len0 = self.expected_body_len(32 + d0);
             let rhs = pivot_rhs[0];
-            let mut acc = vec![0u8; parity_len];
+            self.data[start0..start0 + len0].fill(0);
             let mut r = rhs;
             while r != 0 {
                 let g = r.trailing_zeros() as usize;
                 r &= r - 1;
                 let p_start = g * parity_len;
-                xor_slice(&mut acc, &self.parity[p_start..p_start + parity_len]);
+                xor_slice(
+                    &mut self.data[start0..start0 + len0],
+                    &self.parity[p_start..p_start + len0],
+                );
             }
             let mut mask = initial_mask(num_packets);
+            let (before_and_target, after) = self.data.split_at_mut(start0 + len0);
+            let (before, target) = before_and_target.split_at_mut(start0);
             for (d, &is_missing) in self.missing_data.iter().enumerate().rev() {
                 if !is_missing && ((mask & rhs).count_ones() & 1 != 0) {
                     let s = d * BODY_LEN;
-                    let e = self.data.len().min(s + BODY_LEN);
-                    xor_slice(&mut acc, &self.data[s..e]);
+                    let src = if d < d0 {
+                        let end = before.len().min(s + len0);
+                        &before[s..end]
+                    } else {
+                        let rel = s - (start0 + len0);
+                        let end = after.len().min(rel + len0);
+                        &after[rel..end]
+                    };
+                    xor_slice(target, src);
                 }
                 mask = step_mask(mask);
             }
-            self.data[start0..start0 + len0].copy_from_slice(&acc[..len0]);
         } else {
             let active_parity = pivot_rhs[..m].iter().fold(0u32, |acc, &r| acc | r);
             let (known_parity, base) = compute_parity(&self.data, Some(&self.missing_data));

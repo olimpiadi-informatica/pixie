@@ -8,7 +8,7 @@ on:
 
 jobs:
   clippy:
-    name: Cargo Format & Clippy & Test
+    name: Cargo Format & Clippy
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -34,6 +34,7 @@ jobs:
             cargo clippy -- -D warnings
             popd
           done
+          cargo clippy --manifest-path pixie-shared/Cargo.toml --all-features --all-targets -- -D warnings
 
   test:
     name: Test
@@ -48,10 +49,7 @@ jobs:
       - name: Install apt dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dnsmasq qemu-system-x86 ovmf
-          sudo mkdir -p /etc/qemu
-          echo allow br-pixie | sudo tee /etc/qemu/bridge.conf
-          echo allow br-pixie1 | sudo tee -a /etc/qemu/bridge.conf
+          sudo apt-get install -y qemu-system-x86 ovmf
 
       - name: Install rust
         uses: actions-rust-lang/setup-rust-toolchain@v1

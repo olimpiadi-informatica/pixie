@@ -14,6 +14,8 @@ mod images;
 mod units;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use hickory_resolver::Hosts;
+use macaddr::MacAddr6;
 use pixie_shared::{
     ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, RegistrationInfo, Unit,
 };
@@ -24,7 +26,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
@@ -54,52 +56,80 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
             Err(e) => Err(e)?,
         }
     };
-    file.write_all(data)
-        .with_context(|| format!("write to file: {}", tmp_path.display()))?;
+    if let Err(e) = file.write_all(data) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e).with_context(|| format!("write to file: {}", tmp_path.display()));
+    }
     std::mem::drop(file);
     std::fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
-/// Builds a map from ip address to hostname parsing the hostfile at `path`.
-fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
+/// Parses an `/etc/hosts`-style file into a primary `IPv4 -> hostname` map (for DHCP/UI)
+/// and a `hickory_resolver::Hosts` table (including all host aliases and IPv6/PTR records for DNS).
+pub(crate) fn build_hostmap(
+    path: Option<&Path>,
+) -> Result<(HashMap<Ipv4Addr, String>, Arc<Hosts>)> {
     let mut hostmap = HashMap::new();
+    let mut dns_hosts = Hosts::default();
     if let Some(path) = path {
-        let hosts =
-            hostfile::parse_file(path).map_err(|e| anyhow!("Error parsing host file: {e}"))?;
-        for mut host in hosts {
-            if let IpAddr::V4(ip) = host.ip {
-                let old = hostmap.insert(ip, std::mem::take(&mut host.names[0]));
-                if old.is_some() {
-                    log::warn!("Duplicated hostname for {ip}");
-                }
-            } else {
-                log::warn!(
-                    "ignoring non-IPv4 address {} for host {}",
-                    host.ip,
-                    host.names[0]
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("read hosts file: {}", path.display()))?;
+        dns_hosts
+            .read_hosts_conf(content.as_bytes())
+            .with_context(|| format!("parse DNS hosts file: {}", path.display()))?;
+        for (idx, raw_line) in content.lines().enumerate() {
+            let line = raw_line
+                .trim_start_matches('\u{feff}')
+                .split('#')
+                .next()
+                .unwrap_or("")
+                .trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut fields = line.split_whitespace();
+            let ip_str = fields.next().expect("non-empty line");
+            let ip: IpAddr = ip_str.parse().with_context(|| {
+                format!(
+                    "Error parsing host file {}:{}: invalid IP {ip_str:?}",
+                    path.display(),
+                    idx + 1
+                )
+            })?;
+            let Some(primary_name) = fields.next() else {
+                anyhow::bail!(
+                    "Error parsing host file {}:{}: missing hostname for {ip}",
+                    path.display(),
+                    idx + 1
                 );
+            };
+            if let IpAddr::V4(v4) = ip
+                && hostmap.insert(v4, primary_name.to_owned()).is_some()
+            {
+                log::warn!("Duplicated hostname for {v4}");
             }
         }
     }
-    Ok(hostmap)
+    Ok((hostmap, Arc::new(dns_hosts)))
 }
 
 /// See [the module-level documentation][self].
 pub struct State {
     /// The storage_dir received by command line arguments.
     pub storage_dir: PathBuf,
-    /// A directory stored in ram for dynamically generated files, will be deleted on Drop.
-    pub run_dir: PathBuf,
     /// The config parsed from the config file.
     pub config: Config,
     /// The hostmap built from the hostmap file.
     pub hostmap: HashMap<Ipv4Addr, String>,
+    /// Static DNS hosts parsed from the hostmap file (including aliases).
+    pub dns_hosts: Arc<Hosts>,
 
     units: watch::Sender<Vec<Unit>>,
     registration_hint: Mutex<Option<RegistrationInfo>>,
     images_stats: watch::Sender<ImagesStats>,
     chunks_stats: Mutex<ChunksStats>,
+    dhcp_leases: Mutex<HashMap<Ipv4Addr, MacAddr6>>,
 
     /// Token to shutdown the entire server.
     pub cancel_token: CancellationToken,
@@ -116,7 +146,7 @@ impl State {
                 .with_context(|| format!("deserialize config from {}", path.display()))?
         };
 
-        let hostmap = build_hostmap(config.hosts.hostsfile.as_deref())?;
+        let (hostmap, dns_hosts) = build_hostmap(config.hosts.hostsfile.as_deref())?;
 
         let units_path = storage_dir.join(REGISTERED_JSON);
         let units: Vec<Unit> = if units_path.exists() {
@@ -154,43 +184,61 @@ impl State {
         let chunks_dir = storage_dir.join(CHUNKS_DIR);
         let mut chunks_stats: ChunksStats = std::fs::read_dir(&chunks_dir)
             .with_context(|| format!("open chunks dir: {}", chunks_dir.display()))?
-            .map(|file| {
-                let file = file?;
-                let metadata = file.metadata()?;
-                let csize = metadata.len();
+            .filter_map(|file| {
+                let file = match file {
+                    Ok(f) => f,
+                    Err(e) => return Some(Err(e.into())),
+                };
+                if file.path().extension().is_some_and(|ext| ext == "tmp") {
+                    let _ = std::fs::remove_file(file.path());
+                    return None;
+                }
+                Some((|| {
+                    let metadata = file.metadata()?;
+                    let csize = metadata.len();
 
-                let name = file
-                    .file_name()
-                    .to_str()
-                    .and_then(|s| hex::decode(s).ok())
-                    .and_then(|s| ChunkHash::try_from(&s[..]).ok())
-                    .with_context(|| format!("invalid chunk name: {:?}", file.file_name()))?;
+                    let name = file
+                        .file_name()
+                        .to_str()
+                        .and_then(|s| hex::decode(s).ok())
+                        .and_then(|s| ChunkHash::try_from(&s[..]).ok())
+                        .with_context(|| format!("invalid chunk name: {:?}", file.file_name()))?;
 
-                Ok((name, ChunkStats { csize, ref_cnt: 0 }))
+                    Ok((name, ChunkStats { csize, ref_cnt: 0 }))
+                })())
             })
             .collect::<Result<_>>()?;
 
         let images_dir = storage_dir.join(IMAGES_DIR);
         let images = std::fs::read_dir(&images_dir)
             .with_context(|| format!("open images dir: {}", images_dir.display()))?
-            .map(|image_entry| {
-                let image_entry = image_entry?;
+            .filter_map(|image_entry| {
+                let image_entry = match image_entry {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e.into())),
+                };
                 let path = image_entry.path();
-                let image_name = image_entry
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| anyhow!("invalid image name {:?}", image_entry.file_name()))?;
-                let content = std::fs::read(&path)
-                    .with_context(|| format!("read image file: {}", path.display()))?;
-                let image = postcard::from_bytes::<Image>(&content)
-                    .with_context(|| format!("deserialize image from {}", path.display()))?;
-                for chunk in &image.disk {
-                    let chunk_stats = chunks_stats
-                        .get_mut(&chunk.hash)
-                        .with_context(|| format!("chunk {} not found", hex::encode(chunk.hash)))?;
-                    chunk_stats.ref_cnt += 1;
+                if path.extension().is_some_and(|ext| ext == "tmp") {
+                    let _ = std::fs::remove_file(&path);
+                    return None;
                 }
-                Ok((image_name, (image.size(), image.csize())))
+                Some((|| {
+                    let image_name = image_entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| anyhow!("invalid image name {:?}", image_entry.file_name()))?;
+                    let content = std::fs::read(&path)
+                        .with_context(|| format!("read image file: {}", path.display()))?;
+                    let image = postcard::from_bytes::<Image>(&content)
+                        .with_context(|| format!("deserialize image from {}", path.display()))?;
+                    for chunk in &image.disk {
+                        let chunk_stats = chunks_stats.get_mut(&chunk.hash).with_context(|| {
+                            format!("chunk {} not found", hex::encode(chunk.hash))
+                        })?;
+                        chunk_stats.ref_cnt += 1;
+                    }
+                    Ok((image_name, (image.size(), image.csize())))
+                })())
             })
             .collect::<Result<_>>()?;
 
@@ -207,32 +255,115 @@ impl State {
             images,
         };
 
-        let run_dir =
-            PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| "/run".into()))
-                .join(format!("pixie-{}", std::process::id()));
-        std::fs::create_dir(&run_dir)
-            .with_context(|| format!("failed to create directory {}", run_dir.display()))?;
-
         let cancel_token = CancellationToken::new();
 
         Ok(Self {
             storage_dir,
-            run_dir,
             config,
             hostmap,
+            dns_hosts,
             units,
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
+            dhcp_leases: Mutex::new(HashMap::new()),
             cancel_token,
         })
     }
+
+    pub fn record_dhcp_lease(&self, ip: Ipv4Addr, mac: MacAddr6) {
+        let mut leases = self.dhcp_leases.lock().expect("dhcp_leases mutex poisoned");
+        leases.retain(|_, existing_mac| *existing_mac != mac);
+        leases.insert(ip, mac);
+    }
+
+    pub fn release_dhcp_lease(&self, mac: MacAddr6) {
+        self.dhcp_leases
+            .lock()
+            .expect("dhcp_leases mutex poisoned")
+            .retain(|_, existing_mac| *existing_mac != mac);
+    }
+
+    pub fn allocate_dhcp_ip(
+        &self,
+        mac: MacAddr6,
+        low: Ipv4Addr,
+        high: Ipv4Addr,
+    ) -> Option<Ipv4Addr> {
+        let mut leases = self.dhcp_leases.lock().expect("dhcp_leases mutex poisoned");
+        let range = u32::from(low)..=u32::from(high);
+        if let Some((&ip, _)) = leases
+            .iter()
+            .find(|&(&ip, &m)| m == mac && range.contains(&u32::from(ip)))
+        {
+            return Some(ip);
+        }
+
+        let units = self.units.borrow();
+        for raw in range {
+            let ip = Ipv4Addr::from(raw);
+            if !leases.contains_key(&ip) && !units.iter().any(|u| u.static_ip() == ip) {
+                leases.retain(|_, existing_mac| *existing_mac != mac);
+                leases.insert(ip, mac);
+                return Some(ip);
+            }
+        }
+        None
+    }
+
+    pub fn lookup_mac(&self, ip: Ipv4Addr) -> Option<MacAddr6> {
+        if let Some(&mac) = self
+            .dhcp_leases
+            .lock()
+            .expect("dhcp_leases mutex poisoned")
+            .get(&ip)
+        {
+            return Some(mac);
+        }
+        self.units
+            .borrow()
+            .iter()
+            .find(|u| u.static_ip() == ip)
+            .map(|u| u.mac)
+    }
 }
 
-impl Drop for State {
-    fn drop(&mut self) {
-        // If we fail to remove the directory it's not an issue as it will be deleted on shutdown
-        // and doesn't take much space.
-        let _ = std::fs::remove_dir_all(&self.run_dir);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_resolver::proto::{
+        op::Query,
+        rr::{Name, RecordType},
+    };
+    use std::str::FromStr;
+
+    #[test]
+    fn parse_hosts_supports_comments_aliases_and_ipv6() {
+        let path = std::env::temp_dir().join(format!("pixie-hosts-test-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            "# header comment\n\
+             10.0.0.10  node01.lab  node01 # inline comment\n\
+             ::1        localhost ip6-localhost\n",
+        )
+        .expect("write temp hosts");
+
+        let (hostmap, dns_hosts) = build_hostmap(Some(&path)).expect("build_hostmap");
+        assert_eq!(
+            hostmap
+                .get(&Ipv4Addr::new(10, 0, 0, 10))
+                .map(String::as_str),
+            Some("node01.lab")
+        );
+        for name in ["node01.lab.", "node01."] {
+            let q = Query::query(Name::from_str(name).expect("name"), RecordType::A);
+            assert!(dns_hosts.lookup_static_host(&q).is_some(), "missing {name}");
+        }
+        let q6 = Query::query(
+            Name::from_str("ip6-localhost.").expect("name"),
+            RecordType::AAAA,
+        );
+        assert!(dns_hosts.lookup_static_host(&q6).is_some());
+        let _ = std::fs::remove_file(&path);
     }
 }

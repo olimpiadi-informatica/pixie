@@ -1,8 +1,10 @@
-mod dnsmasq;
+mod dhcp;
+mod dns;
 mod http;
 mod ping;
 mod state;
 mod tcp;
+mod tftp;
 mod udp;
 
 use crate::state::State;
@@ -13,67 +15,80 @@ use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use std::{
     fs,
-    io::{BufRead, BufReader},
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
-    process::{Child, Command, Stdio},
     sync::Arc,
+    time::Duration,
 };
-use tokio::{signal::unix::SignalKind, task::JoinHandle};
+use tokio::{net::UdpSocket, signal::unix::SignalKind, task::JoinHandle, time};
+
+pub(crate) fn listener_ips(config: &pixie_shared::Config) -> Vec<Ipv4Addr> {
+    let mut ips = Vec::new();
+    for iface in &config.hosts.interfaces {
+        let addr = iface.network.addr();
+        if !ips.contains(&addr) {
+            ips.push(addr);
+        }
+        if let pixie_shared::DhcpMode::Proxy(proxy_ip) = iface.dhcp
+            && !ips.contains(&proxy_ip)
+        {
+            ips.push(proxy_ip);
+        }
+    }
+    ips
+}
+
+fn lookup_proc_arp(ip: Ipv4Addr) -> Option<MacAddr6> {
+    let content = fs::read_to_string("/proc/net/arp").ok()?;
+    for line in content.lines().skip(1) {
+        let mut fields = line.split_whitespace();
+        let Some(Ok(entry_ip)) = fields.next().map(str::parse::<Ipv4Addr>) else {
+            continue;
+        };
+        let _hw_type = fields.next()?;
+        let flags = fields.next()?;
+        let hw_addr = fields.next()?;
+        if entry_ip == ip
+            && flags != "0x0"
+            && let Ok(mac) = hw_addr.parse::<MacAddr6>()
+            && !mac.is_nil()
+        {
+            return Some(mac);
+        }
+    }
+    None
+}
 
 /// Finds the mac address for the given ip.
 ///
-/// This function searches the address in the arp cache, if it is not available it tries to
-/// populate it by pinging the peer.
-fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
-    struct Zombie {
-        inner: Child,
-    }
-
-    impl Drop for Zombie {
-        fn drop(&mut self) {
-            self.inner.kill().unwrap();
-            self.inner.wait().unwrap();
-        }
-    }
-
+/// First checks the in-memory DHCP lease table and registered units, then searches
+/// `/proc/net/arp` (triggering kernel ARP resolution via a dummy UDP probe on miss).
+async fn find_mac(state: &State, ip: IpAddr) -> Result<MacAddr6> {
     if ip.is_loopback() {
         bail!("localhost not supported");
     }
 
-    // Repeat twice, sending a ping if looking at ip neigh the first time fails.
-    for _ in 0..2 {
-        let mut child = Zombie {
-            inner: Command::new("ip")
-                .arg("neigh")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()?,
-        };
-        let stdout = child.inner.stdout.take().unwrap();
-        let lines = BufReader::new(stdout).lines();
+    let IpAddr::V4(v4) = ip else {
+        bail!("IPv6 not supported");
+    };
 
-        for line in lines {
-            let line = line?;
-            let mut parts = line.split(' ');
-
-            if parts.next().and_then(|s| s.parse().ok()) == Some(ip) {
-                let mac = parts.nth(3).unwrap();
-                if let Ok(mac) = mac.parse() {
-                    return Ok(mac);
-                }
-            }
-        }
-
-        let _ = Command::new("ping")
-            .args([&ip.to_string(), "-c", "1", "-W", "0.1"])
-            .stdout(Stdio::null())
-            .spawn()?
-            .wait();
+    if let Some(mac) = state.lookup_mac(v4).or_else(|| lookup_proc_arp(v4)) {
+        return Ok(mac);
     }
 
-    bail!("Mac address not found");
+    // Trigger kernel ARP resolution on cold cache (e.g., after a pixie-server restart).
+    if let Ok(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await {
+        let _ = sock.send_to(&[], (v4, 9)).await;
+        for delay_ms in [10, 20, 30, 40] {
+            time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(mac) = lookup_proc_arp(v4) {
+                state.record_dhcp_lease(v4, mac);
+                return Ok(mac);
+            }
+        }
+    }
+
+    bail!("Mac address not found for {v4}")
 }
 
 /// Find the network where the server has the given IP.
@@ -113,33 +128,24 @@ async fn main() -> Result<()> {
     options.storage_dir = fs::canonicalize(&options.storage_dir)
         .with_context(|| format!("storage dir is invalid: {}", options.storage_dir.display()))?;
 
-    ensure!(
-        options.storage_dir.to_str().is_some(),
-        "storage dir must be valid utf8"
-    );
-
-    for file_path in [["tftpboot", "pixie-uefi.efi"]] {
-        let mut path = options.storage_dir.clone();
-        for path_piece in file_path {
-            path = path.join(path_piece);
-        }
-        ensure!(path.is_file(), "{} not found", path.display());
-    }
+    let bootfile = options
+        .storage_dir
+        .join("tftpboot")
+        .join(dhcp::BOOTFILE_NAME);
+    ensure!(bootfile.is_file(), "{} not found", bootfile.display());
 
     let state = Arc::new(State::load(options.storage_dir)?);
 
     tokio::spawn({
-        let cancel_token = state.cancel_token.clone();
-        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
-            .expect("failed to register SIGNINT handler");
-        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
-            .expect("failed to register SIGNTERM handler");
+        let state = state.clone();
+        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt()).unwrap();
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate()).unwrap();
         async move {
-            let _token_guard = cancel_token.drop_guard();
             tokio::select! {
                 _ = sigint.recv() => log::info!("Received SIGINT."),
                 _ = sigterm.recv() => log::info!("Received SIGTERM."),
-            };
+            }
+            state.cancel_token.cancel();
         }
     });
 
@@ -148,13 +154,19 @@ async fn main() -> Result<()> {
         Ok(())
     }
 
-    let dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
+    let _cancel_guard = state.cancel_token.clone().drop_guard();
+
+    let dhcp_task = flatten(tokio::spawn(dhcp::main(state.clone())));
+    let tftp_task = flatten(tokio::spawn(tftp::main(state.clone())));
+    let dns_task = flatten(tokio::spawn(dns::main(state.clone())));
     let http_task = flatten(tokio::spawn(http::main(state.clone())));
     let udp_task = flatten(tokio::spawn(udp::main(state.clone())));
     let tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
     let ping_task = flatten(tokio::spawn(ping::main(state.clone())));
 
-    tokio::try_join!(dnsmasq_task, http_task, udp_task, tcp_task, ping_task)?;
+    tokio::try_join!(
+        dhcp_task, tftp_task, dns_task, http_task, udp_task, tcp_task, ping_task
+    )?;
 
     Ok(())
 }
