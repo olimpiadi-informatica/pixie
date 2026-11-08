@@ -1,5 +1,6 @@
 use crate::UDP_BODY_LEN;
 use alloc::{vec, vec::Vec};
+use core::mem;
 use thiserror::Error;
 
 const PACKET_LEN: usize = UDP_BODY_LEN - 32;
@@ -8,6 +9,90 @@ const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 
 const MIN_SIZE: usize = HEADER_LEN;
 const MAX_SIZE: usize = PACKET_LEN;
+
+/// Primitive polynomial x^32 + x^22 + x^2 + x + 1 over GF(2) (period 2^32 - 1).
+const POLY: u32 = (1 << 22) | (1 << 2) | (1 << 1) | 1;
+const EXTRA_STEPS: usize = 256;
+
+#[inline]
+const fn step_mask(v: u32) -> u32 {
+    let msb = (v >> 31) & 1;
+    (v << 1) ^ (if msb != 0 { POLY } else { 0 })
+}
+
+#[inline]
+const fn initial_mask(num_packets: usize) -> u32 {
+    if num_packets < 32 {
+        1
+    } else {
+        let mut v = 1u32;
+        let mut steps = EXTRA_STEPS;
+        while steps > 0 {
+            v = step_mask(v);
+            steps -= 1;
+        }
+        v
+    }
+}
+
+#[inline]
+fn xor_slice(dst: &mut [u8], src: &[u8]) {
+    dst[..src.len()]
+        .iter_mut()
+        .zip(src)
+        .for_each(|(a, b)| *a ^= *b);
+}
+
+#[inline]
+fn step_parity(parity: &mut [u8], base: &mut usize, parity_len: usize) {
+    *base = (*base + 31) & 31;
+    let p0 = *base;
+    for tap in [1, 2, 22] {
+        let pt = (*base + tap) & 31;
+        let (a, b) = if p0 < pt {
+            let (left, right) = parity.split_at_mut(pt * parity_len);
+            (
+                &mut right[..parity_len],
+                &left[p0 * parity_len..(p0 + 1) * parity_len],
+            )
+        } else {
+            let (left, right) = parity.split_at_mut(p0 * parity_len);
+            (
+                &mut left[pt * parity_len..(pt + 1) * parity_len],
+                &right[..parity_len],
+            )
+        };
+        xor_slice(a, b);
+    }
+}
+
+fn compute_parity(data: &[u8], missing_data: Option<&[bool]>) -> (Vec<u8>, usize) {
+    let parity_len = BODY_LEN.min(data.len());
+    let num_packets = data.len().div_ceil(BODY_LEN);
+    let mut parity = vec![0u8; 32 * parity_len];
+    let mut base = 0usize;
+
+    for d in 0..num_packets {
+        if d > 0 {
+            step_parity(&mut parity, &mut base, parity_len);
+        }
+        if missing_data.is_none_or(|m| !m[d]) {
+            let start = d * BODY_LEN;
+            let end = data.len().min(start + BODY_LEN);
+            let p_start = base * parity_len;
+            xor_slice(
+                &mut parity[p_start..p_start + parity_len],
+                &data[start..end],
+            );
+        }
+    }
+    if num_packets >= 32 {
+        for _ in 0..EXTRA_STEPS {
+            step_parity(&mut parity, &mut base, parity_len);
+        }
+    }
+    (parity, base)
+}
 
 #[derive(Error, Debug)]
 pub enum DecoderError {
@@ -29,48 +114,34 @@ pub enum DecoderError {
 
 pub struct Decoder {
     data: Vec<u8>,
-    missing_packet: Vec<bool>,
-    missing_packets_per_group: [u16; 32],
-    missing_groups: u16,
+    missing_data: Vec<bool>,
+    missing_data_count: usize,
+    parity: Vec<u8>,
+    received_parity_mask: u32,
 }
 
 impl Decoder {
     pub fn new(size: usize) -> Self {
         let num_packets = size.div_ceil(BODY_LEN);
-        let data = vec![0; 32 * BODY_LEN + size];
-        let missing_packet = vec![true; 32 + num_packets];
-        let missing_packets_per_group: [u16; 32] = (0..32)
-            .map(|i| ((num_packets + 31 - i) / 32) as u16)
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let missing_groups = missing_packets_per_group
-            .iter()
-            .map(|&x| (x != 0) as u16)
-            .sum();
         Decoder {
-            data,
-            missing_packet,
-            missing_packets_per_group,
-            missing_groups,
+            data: vec![0; size],
+            missing_data: vec![true; num_packets],
+            missing_data_count: num_packets,
+            parity: Vec::new(),
+            received_parity_mask: 0,
         }
     }
 
     /// The exact body length (excluding the 2-byte index header) a well-formed packet at
     /// `rot_index` must have, given the total decoded `size` this decoder was built for.
-    ///
-    /// Both parity slots (`rot_index < 32`) and real data slots (`rot_index >= 32`) share the
-    /// same formula: a slot's body is a full [`BODY_LEN`], except when it lands on the chunk's
-    /// final, partial block, in which case it is only the remaining bytes. This mirrors
-    /// [`Encoder::next_packet`], which is what actually decides the length of every packet.
     fn expected_body_len(&self, rot_index: usize) -> usize {
-        let size = self.data.len() - 32 * BODY_LEN;
-        let pos = if rot_index < 32 {
-            rot_index
+        let size = self.data.len();
+        if rot_index < 32 {
+            BODY_LEN.min(size)
         } else {
-            rot_index - 32
-        };
-        BODY_LEN.min(size.saturating_sub(pos * BODY_LEN))
+            let pos = rot_index - 32;
+            BODY_LEN.min(size.saturating_sub(pos * BODY_LEN))
+        }
     }
 
     pub fn add_packet(&mut self, buf: &[u8]) -> Result<(), DecoderError> {
@@ -84,7 +155,7 @@ impl Decoder {
         let index = u16::from_le_bytes(buf[..2].try_into().unwrap());
 
         let rot_index = index.wrapping_add(32) as usize;
-        if rot_index >= self.missing_packet.len() {
+        if rot_index >= 32 + self.missing_data.len() {
             return Err(DecoderError::InvalidIndex(index));
         }
 
@@ -98,58 +169,154 @@ impl Decoder {
             });
         }
 
-        let missing = &mut self.missing_packet[rot_index];
-        match missing {
-            false => return Ok(()),
-            x @ true => *x = false,
-        }
-
-        let start = rot_index * BODY_LEN;
-        self.data[start..start + buf.len() - 2].clone_from_slice(&buf[2..]);
-
-        let group = index & 31;
-        match &mut self.missing_packets_per_group[group as usize] {
-            0 => return Ok(()),
-            x @ 1 => *x = 0,
-            x @ 2.. => {
-                *x -= 1;
+        if rot_index < 32 {
+            if self.missing_data_count == 0 {
                 return Ok(());
             }
-        }
-
-        match &mut self.missing_groups {
-            0 => unreachable!(),
-            x @ 1.. => *x -= 1,
+            let bit = 1u32 << rot_index;
+            if self.received_parity_mask & bit == 0 {
+                if self.parity.is_empty() {
+                    self.parity.resize(32 * got, 0);
+                }
+                self.received_parity_mask |= bit;
+                let start = rot_index * got;
+                self.parity[start..start + got].copy_from_slice(&buf[2..]);
+            }
+        } else {
+            let d = rot_index - 32;
+            if self.missing_data[d] {
+                self.missing_data[d] = false;
+                self.missing_data_count -= 1;
+                let start = d * BODY_LEN;
+                self.data[start..start + got].copy_from_slice(&buf[2..]);
+            }
         }
 
         Ok(())
     }
 
     pub fn finish(&mut self) -> Option<Vec<u8>> {
-        if self.missing_groups != 0 {
+        if self.missing_data_count == 0 {
+            return Some(mem::take(&mut self.data));
+        }
+        if self.missing_data_count > self.received_parity_mask.count_ones() as usize {
             return None;
         }
 
-        let mut xor = [[0; BODY_LEN]; 32];
-        for packet in 0..self.missing_packet.len() {
-            if !self.missing_packet[packet] {
-                let group = packet & 31;
-                self.data[BODY_LEN * packet..]
-                    .iter()
-                    .zip(xor[group].iter_mut())
-                    .for_each(|(a, b)| *b ^= a);
+        let num_packets = self.missing_data.len();
+        let mut missing_indices = [0usize; 32];
+        let mut missing_masks = [0u32; 32];
+        let mut m = 0usize;
+        let mut cur_mask = initial_mask(num_packets);
+        for (d, &is_missing) in self.missing_data.iter().enumerate().rev() {
+            if is_missing {
+                missing_indices[m] = d;
+                missing_masks[m] = cur_mask;
+                m += 1;
+            }
+            cur_mask = step_mask(cur_mask);
+        }
+
+        let mut pivot_lhs = [0u32; 32];
+        let mut pivot_rhs = [0u32; 32];
+        let mut rank = 0usize;
+
+        for g in 0..32 {
+            if (self.received_parity_mask >> g) & 1 == 0 {
+                continue;
+            }
+            let mut lhs = 0u32;
+            for (j, &mask) in missing_masks[..m].iter().enumerate() {
+                lhs |= ((mask >> g) & 1) << j;
+            }
+            let mut rhs = 1u32 << g;
+
+            for j in 0..m {
+                if (lhs >> j) & 1 != 0 && pivot_lhs[j] != 0 {
+                    lhs ^= pivot_lhs[j];
+                    rhs ^= pivot_rhs[j];
+                }
+            }
+            if lhs != 0 {
+                let pivot = lhs.trailing_zeros() as usize;
+                for j in 0..m {
+                    if pivot_lhs[j] != 0 && (pivot_lhs[j] >> pivot) & 1 != 0 {
+                        pivot_lhs[j] ^= lhs;
+                        pivot_rhs[j] ^= rhs;
+                    }
+                }
+                pivot_lhs[pivot] = lhs;
+                pivot_rhs[pivot] = rhs;
+                rank += 1;
+                if rank == m {
+                    break;
+                }
             }
         }
-        for packet in 0..self.missing_packet.len() {
-            if self.missing_packet[packet] {
-                let group = packet & 31;
-                self.data[BODY_LEN * packet..]
-                    .iter_mut()
-                    .zip(xor[group].iter())
-                    .for_each(|(a, b)| *a = *b);
+
+        if rank < m {
+            return None;
+        }
+
+        let parity_len = BODY_LEN.min(self.data.len());
+        if m == 1 {
+            // Fast path for single-packet recovery: accumulate directly into the missing slice
+            // of `self.data` with zero allocations.
+            let d0 = missing_indices[0];
+            let start0 = d0 * BODY_LEN;
+            let len0 = self.expected_body_len(32 + d0);
+            let rhs = pivot_rhs[0];
+            let mut acc = vec![0u8; parity_len];
+            let mut r = rhs;
+            while r != 0 {
+                let g = r.trailing_zeros() as usize;
+                r &= r - 1;
+                let p_start = g * parity_len;
+                xor_slice(&mut acc, &self.parity[p_start..p_start + parity_len]);
+            }
+            let mut mask = initial_mask(num_packets);
+            for (d, &is_missing) in self.missing_data.iter().enumerate().rev() {
+                if !is_missing && ((mask & rhs).count_ones() & 1 != 0) {
+                    let s = d * BODY_LEN;
+                    let e = self.data.len().min(s + BODY_LEN);
+                    xor_slice(&mut acc, &self.data[s..e]);
+                }
+                mask = step_mask(mask);
+            }
+            self.data[start0..start0 + len0].copy_from_slice(&acc[..len0]);
+        } else {
+            let active_parity = pivot_rhs[..m].iter().fold(0u32, |acc, &r| acc | r);
+            let (known_parity, base) = compute_parity(&self.data, Some(&self.missing_data));
+            for g in 0..32 {
+                if (active_parity >> g) & 1 != 0 {
+                    let p_start = g * parity_len;
+                    let k_start = ((base + g) & 31) * parity_len;
+                    xor_slice(
+                        &mut self.parity[p_start..p_start + parity_len],
+                        &known_parity[k_start..k_start + parity_len],
+                    );
+                }
+            }
+
+            for j in 0..m {
+                let d = missing_indices[j];
+                let start = d * BODY_LEN;
+                let len = self.expected_body_len(32 + d);
+                let dst = &mut self.data[start..start + len];
+                dst.fill(0);
+                let mut rhs = pivot_rhs[j];
+                while rhs != 0 {
+                    let g = rhs.trailing_zeros() as usize;
+                    rhs &= rhs - 1;
+                    let p_start = g * parity_len;
+                    xor_slice(dst, &self.parity[p_start..p_start + len]);
+                }
             }
         }
-        Some(self.data[32 * BODY_LEN..].to_vec())
+
+        self.missing_data.fill(false);
+        self.missing_data_count = 0;
+        Some(mem::take(&mut self.data))
     }
 }
 
@@ -157,13 +324,19 @@ pub struct Encoder {
     data: Vec<u8>,
     groups: usize,
     idx: usize,
+    parity: Option<(Vec<u8>, usize)>,
 }
 
 impl Encoder {
     pub fn new(data: Vec<u8>) -> Self {
         let idx = 0;
         let groups = data.len().div_ceil(BODY_LEN).min(32);
-        Encoder { data, groups, idx }
+        Encoder {
+            data,
+            groups,
+            idx,
+            parity: None,
+        }
     }
 
     pub fn next_packet(&mut self, out_buf: &mut [u8]) -> Option<usize> {
@@ -176,20 +349,16 @@ impl Encoder {
             self.idx += 1;
             Some(2 + len)
         } else if self.groups > 0 {
+            let (parity, base) = self
+                .parity
+                .get_or_insert_with(|| compute_parity(&self.data, None));
             self.groups -= 1;
-            out_buf[0..2].copy_from_slice(&(self.groups as u16).wrapping_sub(32).to_le_bytes());
-            out_buf[2..].fill(0);
-            (0..)
-                .map(|x| (x * 32 + self.groups) * BODY_LEN)
-                .take_while(|x| *x < self.data.len())
-                .for_each(|start| {
-                    let end = self.data.len().min(start + BODY_LEN);
-                    out_buf[2..2 + end - start]
-                        .iter_mut()
-                        .zip(self.data[start..end].iter())
-                        .for_each(|(a, b)| *a ^= *b);
-                });
-            Some(2 + BODY_LEN.min(self.data.len() - self.groups * BODY_LEN))
+            let g = self.groups;
+            let len = BODY_LEN.min(self.data.len());
+            let p_start = ((*base + g) & 31) * len;
+            out_buf[0..2].copy_from_slice(&(g as u16).wrapping_sub(32).to_le_bytes());
+            out_buf[2..2 + len].copy_from_slice(&parity[p_start..p_start + len]);
+            Some(2 + len)
         } else {
             None
         }
