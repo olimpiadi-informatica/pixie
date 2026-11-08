@@ -14,6 +14,7 @@ mod images;
 mod units;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use macaddr::MacAddr6;
 use pixie_shared::{
     ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, RegistrationInfo, Unit,
 };
@@ -89,8 +90,6 @@ fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
 pub struct State {
     /// The storage_dir received by command line arguments.
     pub storage_dir: PathBuf,
-    /// A directory stored in ram for dynamically generated files, will be deleted on Drop.
-    pub run_dir: PathBuf,
     /// The config parsed from the config file.
     pub config: Config,
     /// The hostmap built from the hostmap file.
@@ -100,6 +99,7 @@ pub struct State {
     registration_hint: Mutex<Option<RegistrationInfo>>,
     images_stats: watch::Sender<ImagesStats>,
     chunks_stats: Mutex<ChunksStats>,
+    dhcp_leases: Mutex<HashMap<Ipv4Addr, MacAddr6>>,
 
     /// Token to shutdown the entire server.
     pub cancel_token: CancellationToken,
@@ -207,32 +207,74 @@ impl State {
             images,
         };
 
-        let run_dir =
-            PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| "/run".into()))
-                .join(format!("pixie-{}", std::process::id()));
-        std::fs::create_dir(&run_dir)
-            .with_context(|| format!("failed to create directory {}", run_dir.display()))?;
-
         let cancel_token = CancellationToken::new();
 
         Ok(Self {
             storage_dir,
-            run_dir,
             config,
             hostmap,
             units,
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
+            dhcp_leases: Mutex::new(HashMap::new()),
             cancel_token,
         })
     }
-}
 
-impl Drop for State {
-    fn drop(&mut self) {
-        // If we fail to remove the directory it's not an issue as it will be deleted on shutdown
-        // and doesn't take much space.
-        let _ = std::fs::remove_dir_all(&self.run_dir);
+    pub fn record_dhcp_lease(&self, ip: Ipv4Addr, mac: MacAddr6) {
+        let mut leases = self.dhcp_leases.lock().expect("dhcp_leases mutex poisoned");
+        leases.retain(|_, existing_mac| *existing_mac != mac);
+        leases.insert(ip, mac);
+    }
+
+    pub fn release_dhcp_lease(&self, mac: MacAddr6) {
+        self.dhcp_leases
+            .lock()
+            .expect("dhcp_leases mutex poisoned")
+            .retain(|_, existing_mac| *existing_mac != mac);
+    }
+
+    pub fn allocate_dhcp_ip(
+        &self,
+        mac: MacAddr6,
+        low: Ipv4Addr,
+        high: Ipv4Addr,
+    ) -> Option<Ipv4Addr> {
+        let mut leases = self.dhcp_leases.lock().expect("dhcp_leases mutex poisoned");
+        let range = u32::from(low)..=u32::from(high);
+        if let Some((&ip, _)) = leases
+            .iter()
+            .find(|&(&ip, &m)| m == mac && range.contains(&u32::from(ip)))
+        {
+            return Some(ip);
+        }
+
+        let units = self.units.borrow();
+        for raw in range {
+            let ip = Ipv4Addr::from(raw);
+            if !leases.contains_key(&ip) && !units.iter().any(|u| u.static_ip() == ip) {
+                leases.retain(|_, existing_mac| *existing_mac != mac);
+                leases.insert(ip, mac);
+                return Some(ip);
+            }
+        }
+        None
+    }
+
+    pub fn lookup_mac(&self, ip: Ipv4Addr) -> Option<MacAddr6> {
+        if let Some(&mac) = self
+            .dhcp_leases
+            .lock()
+            .expect("dhcp_leases mutex poisoned")
+            .get(&ip)
+        {
+            return Some(mac);
+        }
+        self.units
+            .borrow()
+            .iter()
+            .find(|u| u.static_ip() == ip)
+            .map(|u| u.mac)
     }
 }
