@@ -4,7 +4,7 @@ use crate::{listener_ips, state::State};
 use anyhow::Result;
 use futures::FutureExt;
 use hickory_resolver::{
-    Hosts, TokioResolver,
+    TokioResolver,
     config::ResolveHosts,
     net::runtime::TokioRuntimeProvider,
     proto::{
@@ -50,12 +50,7 @@ async fn send_reply(socket: &UdpSocket, peer: SocketAddr, reply: &Message) {
     }
 }
 
-async fn serve_dns_ip(
-    state: Arc<State>,
-    local_ip: Ipv4Addr,
-    upstream: Option<Arc<TokioResolver>>,
-    hosts: Arc<Hosts>,
-) -> Result<()> {
+async fn serve_dns_ip(state: Arc<State>, local_ip: Ipv4Addr) -> Result<()> {
     let socket = match UdpSocket::bind((local_ip, DNS_PORT)).await {
         Ok(s) => Arc::new(s),
         Err(e) => {
@@ -68,12 +63,23 @@ async fn serve_dns_ip(
     };
     log::info!("DNS listening on {}", socket.local_addr()?);
 
+    let mut config_rx = state.subscribe_config();
+    let mut upstream = build_upstream_resolver(&listener_ips(&config_rx.borrow_and_update()));
+    let mut dns_hosts_rx = state.subscribe_dns_hosts();
+    let mut hosts = dns_hosts_rx.borrow_and_update().clone();
     let mut buf = [0u8; 4096];
     loop {
         let (len, peer) = tokio::select! {
             res = socket.recv_from(&mut buf) => res?,
             _ = state.cancel_token.cancelled() => break,
         };
+
+        if config_rx.has_changed().unwrap_or(false) {
+            upstream = build_upstream_resolver(&listener_ips(&config_rx.borrow_and_update()));
+        }
+        if dns_hosts_rx.has_changed().unwrap_or(false) {
+            hosts = dns_hosts_rx.borrow_and_update().clone();
+        }
 
         let Ok(req) = Message::from_vec(&buf[..len]) else {
             continue;
@@ -99,7 +105,7 @@ async fn serve_dns_ip(
             // Local hostname exists in hostsfile, but has no record for the requested type (e.g. AAAA).
             let reply = make_response_base(&req, &query, true);
             send_reply(&socket, peer, &reply).await;
-        } else if state.config.hosts.dns_upstream {
+        } else if state.config().hosts.dns_upstream {
             let mut reply = make_response_base(&req, &query, false);
             if let Some(upstream) = upstream.clone() {
                 let socket = socket.clone();
@@ -136,12 +142,10 @@ async fn serve_dns_ip(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let ips = listener_ips(&state.config);
-    let upstream = build_upstream_resolver(&ips);
-    let hosts = state.dns_hosts.clone();
+    let ips = listener_ips(&state.config());
     let tasks = ips
         .into_iter()
-        .map(|ip| serve_dns_ip(state.clone(), ip, upstream.clone(), hosts.clone()).boxed())
+        .map(|ip| serve_dns_ip(state.clone(), ip).boxed())
         .collect::<Vec<_>>();
     futures::future::try_join_all(tasks).await?;
     Ok(())

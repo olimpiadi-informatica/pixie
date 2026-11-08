@@ -36,13 +36,13 @@ impl UnitSelector {
             ip.parse::<Ipv4Addr>().ok().map(UnitSelector::IpAddr)
         } else if let Some(group) = selector.strip_prefix("group:") {
             state
-                .config
+                .config()
                 .groups
                 .get_by_first(&group.to_owned())
                 .map(|&group| UnitSelector::Group(group))
         } else if let Some(image) = selector.strip_prefix("image:") {
             state
-                .config
+                .config()
                 .images
                 .contains(&image.to_owned())
                 .then(|| UnitSelector::Image(image.to_owned()))
@@ -93,11 +93,15 @@ impl State {
         station: RegistrationInfo,
         stats: UnitStats,
     ) -> Result<()> {
-        if !self.config.images.contains(&station.image) {
-            bail!("Unknown image: {}", station.image);
-        }
-        let Some(&group) = self.config.groups.get_by_first(&station.group) else {
-            bail!("Unknown group: {}", station.group);
+        let group = {
+            let config = self.config();
+            if !config.images.contains(&station.image) {
+                bail!("Unknown image: {}", station.image);
+            }
+            let Some(&group) = config.groups.get_by_first(&station.group) else {
+                bail!("Unknown group: {}", station.group);
+            };
+            group
         };
 
         let mut res = Ok(());
@@ -216,7 +220,7 @@ impl State {
 
     pub fn set_unit_image(&self, selector: UnitSelector, image: String) -> Result<usize> {
         ensure!(
-            self.config.images.contains(&image),
+            self.config().images.contains(&image),
             "Unknown image: {image}"
         );
         Ok(self.set_unit_inner(selector, |unit| {

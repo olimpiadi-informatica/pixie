@@ -199,7 +199,7 @@ async fn serve_tftp_ip(state: Arc<State>, tftp_dir: PathBuf, local_ip: Ipv4Addr)
 pub async fn main(state: Arc<State>) -> Result<()> {
     let tftp_dir = std::fs::canonicalize(state.storage_dir.join("tftpboot"))
         .context("canonicalize tftpboot dir")?;
-    let ips = listener_ips(&state.config);
+    let ips = listener_ips(&state.config());
     let tasks = ips
         .into_iter()
         .map(|ip| serve_tftp_ip(state.clone(), tftp_dir.clone(), ip).boxed())

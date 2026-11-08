@@ -138,14 +138,34 @@ async fn main() -> Result<()> {
 
     tokio::spawn({
         let state = state.clone();
-        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt()).unwrap();
-        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate()).unwrap();
+        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
+            .expect("failed to register SIGINT handler");
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
+        let mut sighup = tokio::signal::unix::signal(SignalKind::hangup())
+            .expect("failed to register SIGHUP handler");
         async move {
-            tokio::select! {
-                _ = sigint.recv() => log::info!("Received SIGINT."),
-                _ = sigterm.recv() => log::info!("Received SIGTERM."),
+            let _token_guard = state.cancel_token.clone().drop_guard();
+            loop {
+                tokio::select! {
+                    _ = sigint.recv() => {
+                        log::info!("Received SIGINT.");
+                        break;
+                    }
+                    _ = sigterm.recv() => {
+                        log::info!("Received SIGTERM.");
+                        break;
+                    }
+                    _ = sighup.recv() => {
+                        log::info!("Received SIGHUP, reloading configuration and hostsfile...");
+                        if let Err(err) = state.reload() {
+                            log::error!("Failed to reload configuration: {err:#}");
+                        } else {
+                            log::info!("Configuration and hostsfile reloaded successfully.");
+                        }
+                    }
+                }
             }
-            state.cancel_token.cancel();
         }
     });
 

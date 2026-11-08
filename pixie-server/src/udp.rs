@@ -95,10 +95,10 @@ async fn broadcast_chunks(
 }
 
 fn compute_hint(state: &State) -> Result<RegistrationInfo> {
+    let config = state.config();
     let Some(mut last) = state.get_registration_hint() else {
         return Ok(RegistrationInfo {
-            group: state
-                .config
+            group: config
                 .groups
                 .iter()
                 .next()
@@ -107,8 +107,7 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
                 .clone(),
             row: 1,
             col: 1,
-            image: state
-                .config
+            image: config
                 .images
                 .first()
                 .context("there should be at least one image")?
@@ -116,10 +115,9 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
         });
     };
 
-    let Some(group_id) = state.config.groups.get_by_first(&last.group).copied() else {
+    let Some(group_id) = config.groups.get_by_first(&last.group).copied() else {
         return Ok(RegistrationInfo {
-            group: state
-                .config
+            group: config
                 .groups
                 .iter()
                 .next()
@@ -128,8 +126,7 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
                 .clone(),
             row: 1,
             col: 1,
-            image: state
-                .config
+            image: config
                 .images
                 .first()
                 .context("there should be at least one image")?
@@ -158,11 +155,10 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
         (1, _) => (1, mcol + 1),
         _ => (last.row + last.col / mcol, last.col % mcol + 1),
     };
-    let image = if state.config.images.contains(&last.image) {
+    let image = if config.images.contains(&last.image) {
         last.image
     } else {
-        state
-            .config
+        config
             .images
             .first()
             .context("there should be at least one image")?
@@ -185,8 +181,8 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
         }
         let hint = HintPacket {
             station: compute_hint(state)?,
-            images: state.config.images.clone(),
-            groups: state.config.groups.clone(),
+            images: state.config().images.clone(),
+            groups: state.config().groups.clone(),
         };
         let data = postcard::to_allocvec(&hint)?;
         let hint_addr = SocketAddrV4::new(ip, HINT_PORT);
@@ -243,9 +239,10 @@ async fn handle_requests(
 }
 
 pub async fn main(state: Arc<State>) -> Result<()> {
-    let mut net_tx = Vec::with_capacity(state.config.hosts.interfaces.len());
-    let mut net_rx = Vec::with_capacity(state.config.hosts.interfaces.len());
-    for iface in &state.config.hosts.interfaces {
+    let interfaces = state.config().hosts.interfaces.clone();
+    let mut net_tx = Vec::with_capacity(interfaces.len());
+    let mut net_rx = Vec::with_capacity(interfaces.len());
+    for iface in &interfaces {
         let pixie_net = match iface.dhcp {
             DhcpMode::Static(..) => iface.network,
             DhcpMode::Proxy(proxy_ip) => find_network(proxy_ip)?.1,
