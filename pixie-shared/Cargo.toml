@@ -10,5 +10,17 @@ macaddr = { version = "1.0.1", optional = true, features = ["serde"] }
 serde =  { version = "1.0.193", default-features = false, features = ["derive", "alloc"] }
 thiserror = { version = "2.0.12", default-features = false }
 
+[dev-dependencies]
+criterion = "0.8"
+rand = "0.9"
+
 [features]
 std = ["ipnet", "macaddr", "serde/std"]
+
+[lib]
+bench = false
+
+[[bench]]
+name = "bench_codec"
+harness = false
+required-features = ["std"]
