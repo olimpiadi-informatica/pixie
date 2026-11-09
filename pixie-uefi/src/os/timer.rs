@@ -2,8 +2,6 @@ use core::arch::x86_64::_rdtsc;
 use core::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use core::time::Duration;
 
-use smoltcp::time::Instant;
-
 static TICKS_AT_START: AtomicI64 = AtomicI64::new(0);
 static TICKS_PER_MICRO: AtomicI64 = AtomicI64::new(0);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -41,9 +39,5 @@ impl Timer {
         let ticks_at_start = TICKS_AT_START.load(Ordering::Relaxed);
         let ticks_per_micro = TICKS_PER_MICRO.load(Ordering::Relaxed);
         (rdtsc() - ticks_at_start) / ticks_per_micro
-    }
-
-    pub fn instant() -> Instant {
-        Instant::from_micros(Timer::micros())
     }
 }

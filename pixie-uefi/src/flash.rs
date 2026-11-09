@@ -12,24 +12,33 @@ use log::info;
 use lz4_flex::decompress;
 use pixie_shared::chunk_codec::Decoder;
 use pixie_shared::util::BytesFmt;
-use pixie_shared::{CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, TcpRequest, UdpRequest};
+use pixie_shared::{CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, RpcRequest, UdpRequest};
 
 use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
 use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
 
-async fn fetch_image(stream: &TcpStream) -> Result<Image> {
-    let req = TcpRequest::GetImage;
-    let mut buf = postcard::to_allocvec(&req)?;
-    stream.write_u64_le(buf.len() as u64).await?;
-    stream.write_all(&buf).await?;
-    let len = stream.read_u64_le().await?;
-    buf.resize(len as usize, 0);
-    stream.read_exact(&mut buf).await?;
+async fn fetch_image(server_addr: SocketAddrV4) -> Result<Image> {
+    let socket = UdpSocket::bind(None).await?;
+    let mut buf = Vec::new();
+    loop {
+        let (total_len, part): (u32, Vec<u8>) = socket
+            .rpc(
+                server_addr,
+                RpcRequest::GetImage {
+                    offset: buf.len() as u32,
+                },
+            )
+            .await?;
+        buf.extend_from_slice(&part);
+        if buf.len() >= total_len as usize {
+            break;
+        }
+    }
     Ok(postcard::from_bytes(&buf)?)
 }
 
@@ -72,17 +81,17 @@ fn handle_packet(
     last_seen.retain(|x| x != &hash);
 
     let data = decompress(&cdata, size)?;
-    assert_eq!(data.len(), size);
+    if data.len() != size || blake3::hash(&data).as_bytes() != &hash {
+        log::warn!("Corrupt chunk received for {hash:02x?}, retrying");
+        chunks_info.insert(hash, (size, csize, pos));
+        return Ok(None);
+    }
 
     Ok(Some((pos, data)))
 }
 
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
-    let stream = TcpStream::connect(server_addr).await?;
-    let image = fetch_image(&stream).await?;
-    stream.shutdown().await;
-    // TODO(virv): this could be better
-    stream.force_close().await;
+    let image = fetch_image(server_addr).await?;
 
     let mut chunks_info = BTreeMap::new();
     for chunk in &image.disk {
@@ -181,7 +190,9 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
             match select(recv, sleep).await {
                 Either::Left(((buf, _addr), _)) => {
                     stats.borrow_mut().pack_recv += 1;
-                    assert!(buf.len() >= 34);
+                    if buf.len() < 34 {
+                        continue;
+                    }
 
                     let chunk =
                         handle_packet(buf, &mut chunks_info, &mut received, &mut last_seen)?;

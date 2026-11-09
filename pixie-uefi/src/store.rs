@@ -6,11 +6,11 @@ use core::net::SocketAddrV4;
 use log::info;
 use lz4_flex::compress;
 use pixie_shared::util::BytesFmt;
-use pixie_shared::{Chunk, Image, MAX_CHUNK_SIZE, Offset, TcpRequest, UdpRequest};
+use pixie_shared::{Chunk, Image, MAX_CHUNK_SIZE, Offset, RpcRequest, UdpRequest};
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
-use crate::os::net::{TcpStream, UdpSocket};
+use crate::os::net::UdpSocket;
 use crate::os::ui::DrawArea;
 use crate::os::{disk, memory, ui};
 use crate::{MIN_MEMORY, parse_disk};
@@ -21,23 +21,22 @@ pub struct ChunkInfo {
     pub size: usize,
 }
 
-async fn save_image(stream: &TcpStream, image: Image) -> Result<()> {
-    let req = TcpRequest::UploadImage(image);
-    let buf = postcard::to_allocvec(&req)?;
-    stream.write_u64_le(buf.len() as u64).await?;
-    stream.write_all(&buf).await?;
-    let len = stream.read_u64_le().await?;
-    assert_eq!(len, 0);
-    Ok(())
+async fn save_image(udp: &UdpSocket, server_address: SocketAddrV4, image: Image) -> Result<()> {
+    let buf = postcard::to_allocvec(&image)?;
+    udp.upload_blob(server_address, &buf).await?;
+    udp.rpc::<()>(
+        server_address,
+        RpcRequest::CommitImage {
+            size: buf.len() as u32,
+        },
+    )
+    .await
 }
 
 struct PushingChunks {
     total: usize,
-    step1: usize,
-    step2: usize,
-    step3: usize,
-    step4: usize,
-    step5: usize,
+    read_chunks: usize,
+    pushed_chunks: usize,
     tsize: usize,
     tcsize: usize,
 }
@@ -67,17 +66,14 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             }
             State::PushingChunks(PushingChunks {
                 total,
-                step1,
-                step2,
-                step3,
-                step4,
-                step5,
+                read_chunks,
+                pushed_chunks,
                 tsize,
                 tcsize,
             }) => {
                 writeln!(
                     draw_area,
-                    "Pushed {step5} / {step4} / {step3} / {step2} / {step1} / {total} chunks"
+                    "Pushed {pushed_chunks} / {read_chunks} / {total} chunks"
                 )
                 .unwrap();
                 writeln!(draw_area, "total size {tsize}, compressed {tcsize}").unwrap();
@@ -98,8 +94,6 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     );
 
     let udp = UdpSocket::bind(None).await?;
-    let stream_get_csize = TcpStream::connect(server_address).await?;
-    let stream_upload_chunk = TcpStream::connect(server_address).await?;
 
     let total = chunks.len();
 
@@ -107,8 +101,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     let mut total_csize = 0;
 
     let free_mem = memory::stats().free;
-    let channel_size =
-        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
+    let channel_size = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(32);
     log::debug!(
         "Free memory: {}. Channel size: {channel_size}",
         BytesFmt(free_mem)
@@ -116,23 +109,17 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     stats.replace(State::PushingChunks(PushingChunks {
         total,
-        step1: 0,
-        step2: 0,
-        step3: 0,
-        step4: 0,
-        step5: 0,
+        read_chunks: 0,
+        pushed_chunks: 0,
         tsize: 0,
         tcsize: 0,
     }));
     ui::update_content(draw);
 
-    let (tx1, rx1) = thingbuf::mpsc::channel(channel_size);
-    let (tx2, rx2) = thingbuf::mpsc::channel(channel_size);
-    let (tx3, rx3) = thingbuf::mpsc::channel(channel_size);
-    let (tx4, rx4) = thingbuf::mpsc::channel(channel_size);
+    let (tx, rx) = thingbuf::mpsc::channel(channel_size);
 
     let task1 = async {
-        let tx1 = tx1;
+        let tx = tx;
         for chunk_info in chunks {
             let mut data = vec![0; chunk_info.size];
             disk.read(chunk_info.start as u64, &mut data).await?;
@@ -144,74 +131,42 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 size: chunk_info.size,
                 csize: cdata.len(),
             };
-            stats.borrow_mut().as_pushing_chunks_mut().step1 += 1;
+            stats.borrow_mut().as_pushing_chunks_mut().read_chunks += 1;
             ui::update_content(draw);
-            tx1.send((chunk, cdata)).await.expect("receiver dropped");
+            tx.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok::<_, Error>(())
     };
 
     let task2 = async {
-        let tx2 = tx2;
-        while let Some((chunk, cdata)) = rx1.recv().await {
-            let req = TcpRequest::HasChunk(chunk.hash);
-            let buf = postcard::to_allocvec(&req)?;
-            stream_get_csize.write_u64_le(buf.len() as u64).await?;
-            stream_get_csize.write_all(&buf).await?;
-            stats.borrow_mut().as_pushing_chunks_mut().step2 += 1;
-            ui::update_content(draw);
-            tx2.send((chunk, cdata)).await.expect("receiver dropped");
-        }
-        Ok(())
-    };
-
-    let task3 = async {
-        let tx3 = tx3;
-        while let Some((chunk, cdata)) = rx2.recv().await {
-            let len = stream_get_csize.read_u64_le().await?;
-            let mut buf = vec![0; len as usize];
-            stream_get_csize.read_exact(&mut buf).await?;
-            let has_chunk: bool = postcard::from_bytes(&buf)?;
-            stats.borrow_mut().as_pushing_chunks_mut().step3 += 1;
-            ui::update_content(draw);
-            tx3.send((chunk, cdata, has_chunk))
-                .await
-                .expect("receiver dropped");
-        }
-        Ok(())
-    };
-
-    let task4 = async {
-        let tx4 = tx4;
-        while let Some((chunk, cdata, has_chunk)) = rx3.recv().await {
-            if !has_chunk {
-                let req = TcpRequest::UploadChunk(cdata);
-                let buf = postcard::to_allocvec(&req)?;
-                stream_upload_chunk.write_u64_le(buf.len() as u64).await?;
-                stream_upload_chunk.write_all(&buf).await?;
-            }
-            stats.borrow_mut().as_pushing_chunks_mut().step4 += 1;
-            ui::update_content(draw);
-            tx4.send((chunk, has_chunk))
-                .await
-                .expect("receiver dropped");
-        }
-        Ok(())
-    };
-
-    let task5 = async {
         let mut chunks = Vec::new();
-        while let Some((chunk, has_chunk)) = rx4.recv().await {
+        while let Some((chunk, cdata)) = rx.recv().await {
+            let has_chunk: bool = udp
+                .rpc(server_address, RpcRequest::HasChunk(chunk.hash))
+                .await?;
             if !has_chunk {
-                let len = stream_upload_chunk.read_u64_le().await?;
-                assert_eq!(len, 0);
+                udp.upload_blob(server_address, &cdata).await?;
+                udp.rpc::<()>(
+                    server_address,
+                    RpcRequest::CommitChunk {
+                        hash: chunk.hash,
+                        size: cdata.len() as u32,
+                    },
+                )
+                .await?;
             }
             chunks.push(chunk);
 
             total_size += chunk.size;
             total_csize += chunk.csize;
 
-            stats.borrow_mut().as_pushing_chunks_mut().step5 += 1;
+            {
+                let mut st = stats.borrow_mut();
+                let pc = st.as_pushing_chunks_mut();
+                pc.pushed_chunks += 1;
+                pc.tsize = total_size;
+                pc.tcsize = total_csize;
+            }
             ui::update_content(draw);
             udp.send_to(
                 server_address,
@@ -222,10 +177,11 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
         Ok(chunks)
     };
 
-    let ((), (), (), (), chunk_hashes) = futures::try_join!(task1, task2, task3, task4, task5)?;
+    let ((), chunk_hashes) = futures::try_join!(task1, task2)?;
 
     save_image(
-        &stream_upload_chunk,
+        &udp,
+        server_address,
         Image {
             boot_option_id: boid,
             boot_entry: bo_command.to_vec(),
@@ -233,13 +189,6 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
         },
     )
     .await?;
-
-    stream_get_csize.shutdown().await;
-    stream_get_csize.force_close().await;
-
-    stream_upload_chunk.shutdown().await;
-    // TODO(virv): this could be better
-    stream_upload_chunk.force_close().await;
 
     log::info!(
         "image saved. Total size {}, total csize {}",

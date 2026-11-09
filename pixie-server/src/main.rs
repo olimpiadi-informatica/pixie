@@ -3,7 +3,6 @@ mod dns;
 mod http;
 mod ping;
 mod state;
-mod tcp;
 mod tftp;
 mod udp;
 
@@ -38,7 +37,7 @@ pub(crate) fn listener_ips(config: &pixie_shared::Config) -> Vec<Ipv4Addr> {
     ips
 }
 
-fn lookup_proc_arp(ip: Ipv4Addr) -> Option<MacAddr6> {
+pub(crate) fn lookup_proc_arp(ip: Ipv4Addr) -> Option<MacAddr6> {
     let content = fs::read_to_string("/proc/net/arp").ok()?;
     for line in content.lines().skip(1) {
         let mut fields = line.split_whitespace();
@@ -181,11 +180,10 @@ async fn main() -> Result<()> {
     let dns_task = flatten(tokio::spawn(dns::main(state.clone())));
     let http_task = flatten(tokio::spawn(http::main(state.clone())));
     let udp_task = flatten(tokio::spawn(udp::main(state.clone())));
-    let tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
     let ping_task = flatten(tokio::spawn(ping::main(state.clone())));
 
     tokio::try_join!(
-        dhcp_task, tftp_task, dns_task, http_task, udp_task, tcp_task, ping_task
+        dhcp_task, tftp_task, dns_task, http_task, udp_task, ping_task
     )?;
 
     Ok(())

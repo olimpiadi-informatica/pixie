@@ -10,13 +10,13 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use core::time::Duration;
 
 use futures::future::{self, Either};
-use pixie_shared::{ACTION_PORT, Action, PING_PORT, TcpRequest, UdpRequest};
+use pixie_shared::{ACTION_PORT, Action, PING_PORT, RpcRequest, UdpRequest};
 use uefi::{Status, entry};
 
 use crate::flash::flash;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
 use crate::os::ui::update_content;
 use crate::register::register;
 use crate::store::store;
@@ -50,9 +50,12 @@ async fn server_discover() -> Result<SocketAddrV4> {
 
     let task2 = async {
         let mut buf = [0; ETH_PACKET_SIZE];
-        let (data, server) = socket.recv_from(&mut buf).await;
-        assert_eq!(data.len(), 0);
-        Ok::<_, Error>(server)
+        loop {
+            let (data, server) = socket.recv_from(&mut buf).await;
+            if data.is_empty() {
+                break Ok::<_, Error>(server);
+            }
+        }
     };
 
     let x = future::try_select(Box::pin(task1), Box::pin(task2)).await;
@@ -75,43 +78,23 @@ async fn shutdown() -> ! {
     power_control::shutdown()
 }
 
-async fn get_action(stream: &TcpStream) -> Result<Action> {
-    let msg = postcard::to_allocvec(&TcpRequest::GetAction)?;
-    stream.write_u64_le(msg.len() as u64).await?;
-    stream.write_all(&msg).await?;
-
-    let len = stream.read_u64_le().await? as usize;
-    let mut buf = vec![0; len];
-    stream.read_exact(&mut buf).await?;
-    let cmd = postcard::from_bytes(&buf)?;
-    Ok(cmd)
-}
-
-async fn complete_action(stream: &TcpStream) -> Result<()> {
-    let msg = postcard::to_allocvec(&TcpRequest::ActionComplete)?;
-    stream.write_u64_le(msg.len() as u64).await?;
-    stream.write_all(&msg).await?;
-
-    let len = stream.read_u64_le().await?;
-    assert_eq!(len, 0);
-    Ok(())
-}
-
 async fn run() -> Result<()> {
     let server = server_discover().await?;
 
     let mut last_was_wait = false;
 
     Executor::spawn("ping", async move {
-        let udp_socket = UdpSocket::bind(None).await.unwrap();
-        loop {
-            udp_socket
-                .send_to(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
-                .await
-                .unwrap();
-            Executor::sleep(Duration::from_secs(10)).await;
+        if let Ok(udp_socket) = UdpSocket::bind(None).await {
+            loop {
+                let _ = udp_socket
+                    .send_to(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
+                    .await;
+                Executor::sleep(Duration::from_secs(10)).await;
+            }
         }
     });
+
+    let rpc_socket = UdpSocket::bind(None).await?;
 
     loop {
         update_content(|d| d.clear());
@@ -119,10 +102,7 @@ async fn run() -> Result<()> {
             log::debug!("Sending request for command");
         }
 
-        let tcp = TcpStream::connect(server).await?;
-        let command = get_action(&tcp).await;
-        tcp.shutdown().await;
-        tcp.force_close().await;
+        let command: Result<Action> = rpc_socket.rpc(server, RpcRequest::GetAction).await;
 
         if let Err(e) = command {
             log::warn!("Error receiving action: {e}");
@@ -149,10 +129,9 @@ async fn run() -> Result<()> {
                     Action::Flash => Executor::spawn("flash", flash(server)).join().await?,
                 }
 
-                let tcp = TcpStream::connect(server).await?;
-                complete_action(&tcp).await?;
-                tcp.shutdown().await;
-                tcp.force_close().await;
+                rpc_socket
+                    .rpc::<()>(server, RpcRequest::ActionComplete)
+                    .await?;
 
                 if command == Action::Restart {
                     power_control::reset()

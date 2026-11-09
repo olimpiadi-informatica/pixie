@@ -108,7 +108,8 @@ impl State {
         self.units.send_modify(|units| {
             res = (|| {
                 ensure!(
-                    !units.iter().any(|unit| unit.group == group
+                    !units.iter().any(|unit| unit.mac != mac
+                        && unit.group == group
                         && unit.row == station.row
                         && unit.col == station.col),
                     "Duplicated IP address"

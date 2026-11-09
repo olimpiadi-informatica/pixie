@@ -18,6 +18,7 @@ use std::{collections::HashMap, net::Ipv4Addr};
 pub use bijection::Bijection;
 #[cfg(feature = "std")]
 pub use config::*;
+pub use serde::de::DeserializeOwned;
 
 /// Maximum size in bytes for a chunk.
 pub const MAX_CHUNK_SIZE: usize = 1 << 22;
@@ -154,6 +155,9 @@ impl Display for Action {
     }
 }
 
+/// Maximum slice payload size for [`UdpRequest::UploadSlice`].
+pub const UPLOAD_SLICE_LEN: usize = 1400;
+
 /// A request for the udp server.
 ///
 /// To send a request to the server it must be serialized with postcard and sent
@@ -168,40 +172,38 @@ pub enum UdpRequest {
     ActionProgress(usize, usize),
     /// Requests the given chunks to be broadcasted by the server.
     RequestChunks(Vec<ChunkHash>),
+    /// Writes a slice of data (`<= UPLOAD_SLICE_LEN` bytes) into the client's upload buffer on the server.
+    UploadSlice { id: u16, offset: u32, data: Vec<u8> },
+    /// Request-response RPC with a sequence number echoed in the reply `(seq, response)`.
+    Rpc { seq: u32, req: RpcRequest },
 }
 
-/// A request for the tcp server.
-///
-/// Over a single tcp connection multiple request can be sent.
-/// Each request is encoded as:
-/// - request length with 8 bytes;
-/// - request content encoded with postcard;
-///
-/// To each request the server will reply with a message in the same format:
-/// - request length with 8 bytes;
-/// - response content encoded with postcard;
+/// A request-response RPC carried inside [`UdpRequest::Rpc`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TcpRequest {
+pub enum RpcRequest {
     /// Checks if the server contains the chunk in the database.
-    /// The server will reply with a bool.
+    /// The server will reply with a `bool`.
     HasChunk(ChunkHash),
-    /// Asks the server the [`Image`], the image name is deduced by the client configuration.
-    /// The server replies with the requested [`Image`].
-    GetImage,
+    /// Asks the server for a slice of the serialized [`Image`] starting at `offset`.
+    /// The server replies with `(total_len: u32, slice: Vec<u8>)`.
+    GetImage { offset: u32 },
     /// Registers the client with the given info.
-    /// The response is empty.
+    /// The response is `()`.
     Register(RegistrationInfo, UnitStats),
-    /// Uploads the given chunk to the server, the content is already compressed.
-    /// The response is empty.
-    UploadChunk(Vec<u8>),
-    /// Uploads the [`Image`] to the server, the image name is deduced by the client configuration.
-    /// The response is empty.
-    UploadImage(Image),
+    /// Returns a `u32` bitmask of which slices in `[base, base + count * UPLOAD_SLICE_LEN)`
+    /// are present in the server's upload buffer.
+    UploadSync { id: u16, base: u32, count: u8 },
+    /// Commits the uploaded buffer as a compressed chunk of the given hash and byte size.
+    /// The response is `()`.
+    CommitChunk { hash: ChunkHash, size: u32 },
+    /// Commits the uploaded buffer as the unit's [`Image`] of the given byte size.
+    /// The response is `()`.
+    CommitImage { size: u32 },
     /// Asks the server for the client action to run.
     /// The server will reply with an [`Action`].
     GetAction,
-    /// Tells the server that the action is complete and can proced to the next action.
-    /// The response is emtpy.
+    /// Tells the server that the action is complete and can proceed to the next action.
+    /// The response is `()`.
     ActionComplete,
 }
 

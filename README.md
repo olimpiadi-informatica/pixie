@@ -16,7 +16,7 @@ pixie is made of four crates:
 
 - **`pixie-server`** — the coordinator, run as root on one machine. It runs
   built-in DHCP/PXE, TFTP, and DNS servers, an admin HTTP/SSE API, and the
-  UDP/TCP protocol that clients speak.
+  UDP protocol that clients speak.
 - **`pixie-uefi`** — the client agent, a small UEFI application that each
   machine PXE-boots into. It talks to the server and executes the actions it
   is given (register, store, flash, boot, restart, shutdown).
