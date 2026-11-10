@@ -31,8 +31,19 @@ TARGET_DIR="debug"
 [ "$RELEASE" ] && TARGET_DIR="release"
 
 pushd pixie-uefi
-cargo build $RELEASE_FLAG
-[ "$RELEASE" ] && upx --best "target/x86_64-unknown-uefi/${TARGET_DIR}/pixie-uefi.efi"
+if [ "$RELEASE" ]; then
+  SYSROOT="$(rustc --print sysroot)"
+  COMMIT_HASH="$(rustc -Vv | awk '/commit-hash:/ {print $2}')"
+  REMAP_FLAGS="--remap-path-prefix=${SYSROOT}/lib/rustlib/src/rust/library/= --remap-path-prefix=/rustc/${COMMIT_HASH}/library/= --remap-path-prefix=${SELFDIR}/="
+  for reg_dir in "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/; do
+    [ -d "$reg_dir" ] && REMAP_FLAGS="${REMAP_FLAGS} --remap-path-prefix=${reg_dir}="
+  done
+  CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS="${CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS:+$CARGO_TARGET_X86_64_UNKNOWN_UEFI_RUSTFLAGS }${REMAP_FLAGS}" \
+    cargo build $RELEASE_FLAG
+  upx --lzma --best "target/x86_64-unknown-uefi/${TARGET_DIR}/pixie-uefi.efi"
+else
+  cargo build $RELEASE_FLAG
+fi
 popd
 
 pushd pixie-web

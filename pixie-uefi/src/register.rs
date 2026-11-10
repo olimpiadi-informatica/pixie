@@ -171,7 +171,7 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
     udp.rpc::<()>(server_addr, RpcRequest::Register(station, stat))
         .await?;
 
-    log::info!("Registration successful! {:?}", data.borrow().station);
+    log::info!("Registration successful! {}", data.borrow().station);
 
     Ok(())
 }

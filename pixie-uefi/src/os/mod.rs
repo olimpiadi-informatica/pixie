@@ -57,7 +57,7 @@ where
     Executor::spawn("init", async move {
         loop {
             if let Err(err) = f().await {
-                log::error!("Error: {err:?}");
+                log::error!("Error: {err}");
             }
         }
     });

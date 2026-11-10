@@ -105,6 +105,16 @@ pub struct RegistrationInfo {
     pub image: String,
 }
 
+impl Display for RegistrationInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{}-{}-{} (image: {})",
+            self.group, self.row, self.col, self.image
+        )
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UnitStats {
     pub ram: u64,

@@ -33,6 +33,6 @@ err!(gpt_disk_types::GptPartitionEntrySizeError);
 
 impl Display for Error {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), core::fmt::Error> {
-        write!(fmt, "{self:?}")
+        fmt.write_str(&self.0)
     }
 }

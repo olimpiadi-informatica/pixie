@@ -92,9 +92,11 @@ pub(super) fn init() {
         let mut draw_area = DrawArea::time();
         loop {
             draw_area.clear();
-            let time = Timer::micros() as f32 * 0.000_001;
+            let tenths = (Timer::micros() as u64 + 50_000) / 100_000;
+            let secs = tenths / 10;
+            let dec = tenths % 10;
             let w = draw_area.size().0;
-            write!(draw_area, "uptime:{0:1$}{time:12.1}s", "", w - 20).unwrap();
+            write!(draw_area, "uptime:{0:1$}{secs:10}.{dec}s", "", w - 20).unwrap();
             Executor::sleep(Duration::from_millis(50)).await;
         }
     });

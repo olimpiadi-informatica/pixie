@@ -119,7 +119,7 @@ impl Executor {
         loop {
             draw_area.clear();
             let cur = Timer::micros() as u64;
-            let elapsed = cur.saturating_sub(last).max(1) as f64;
+            let elapsed = cur.saturating_sub(last).max(1);
             {
                 let mut executor = EXECUTOR.lock();
                 let tasks = &mut executor.tasks;
@@ -151,17 +151,21 @@ impl Executor {
                             let task = &tasks[idx];
                             let total_cpu = task.micros.load(Ordering::Relaxed);
                             let last_cpu = task.last_micros.load(Ordering::Relaxed);
-                            let frac = ((total_cpu - last_cpu) as f64 / elapsed).min(1.0);
+                            let delta_cpu = total_cpu.saturating_sub(last_cpu).min(elapsed);
+                            let permille = (delta_cpu * 1000 + elapsed / 2) / elapsed;
+                            let pct_whole = permille / 10;
+                            let pct_frac = permille % 10;
+                            let cpu_ms = (total_cpu + 500) / 1000;
+                            let cpu_secs = cpu_ms / 1000;
+                            let cpu_frac = cpu_ms % 1000;
                             draw_area.write_with_color(
                                 &format!(
-                                    " {:15}{:5.1}%{:10.3}s ",
-                                    &task.name[..task.name.len().min(15)],
-                                    frac * 100.0,
-                                    total_cpu as f64 * 0.000_001,
+                                    " {:15.15}{pct_whole:3}.{pct_frac}%{cpu_secs:6}.{cpu_frac:03}s ",
+                                    task.name,
                                 ),
-                                if frac >= 0.5 {
+                                if permille >= 500 {
                                     Color::Red
-                                } else if frac >= 0.1 {
+                                } else if permille >= 100 {
                                     Color::Yellow
                                 } else {
                                     Color::White
