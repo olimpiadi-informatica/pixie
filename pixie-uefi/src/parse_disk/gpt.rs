@@ -12,7 +12,7 @@ pub async fn parse_gpt(disk: &mut Disk) -> Result<Option<Vec<ChunkInfo>>> {
     let (primary, secondary, mut partitions) = match disk.partitions() {
         Ok(partitions) => partitions,
         Err(e) => {
-            log::debug!("Failed to parse GPT partitions: {e:?}");
+            log::debug!("Failed to parse GPT partitions: {e}");
             return Ok(None);
         }
     };

@@ -30,7 +30,9 @@ pub(super) fn init() {
     DRAW_AREA.lock().clear();
 }
 
-fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
+fn append_message(tenths: u64, level: log::Level, target: &str, msg: String) {
+    let secs = tenths / 10;
+    let dec = tenths % 10;
     if let Some(serial) = &mut *SERIAL.lock() {
         let style = match level {
             Level::Trace => anstyle::AnsiColor::Cyan.on_default(),
@@ -41,7 +43,7 @@ fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
         };
         write!(
             serial.0,
-            "[{time:.1}s {style}{level:5}{style:#} {target}] {msg}\r\n"
+            "[{secs}.{dec}s {style}{level:5}{style:#} {target}] {msg}\r\n"
         )
         .unwrap();
     }
@@ -55,7 +57,7 @@ fn append_message(time: f64, level: log::Level, target: &str, msg: String) {
             Level::Error => Color::Red,
         };
         let mut draw_area = DRAW_AREA.lock();
-        write!(draw_area, "[{time:.1}s ").unwrap();
+        write!(draw_area, "[{secs}.{dec}s ").unwrap();
         draw_area.write_with_color(&format!("{level:5} "), col, Color::Black);
         writeln!(draw_area, "{target}] {msg}").unwrap();
     }
@@ -71,9 +73,9 @@ impl log::Log for Logger {
     }
 
     fn log(&self, record: &log::Record) {
-        let now = Timer::micros() as f64 * 0.000_001;
+        let tenths = (Timer::micros() as u64 + 50_000) / 100_000;
         append_message(
-            now,
+            tenths,
             record.level(),
             record.target(),
             format!("{}", record.args()),
