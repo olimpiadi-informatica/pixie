@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794093175647,
+  "lastUpdate": 1794331154209,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -377,6 +377,96 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec::benches::bench_flash_roundtrip_4mib",
             "value": 6546876.65,
             "range": "± 690672.98",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "distinct": true,
+          "id": "4359ca6867cf1618caf8d1daac2154b8db1cbdfc",
+          "message": "Move chunk_codec benchmarks to bench_codec using criterion and rand",
+          "timestamp": "2026-11-10T18:17:06+01:00",
+          "tree_id": "37ef6ae0db26f94794c3dcb874422caf225b6a65",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/4359ca6867cf1618caf8d1daac2154b8db1cbdfc"
+        },
+        "date": 1794331153577,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec/roundtrip_20b",
+            "value": 52,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_200kib",
+            "value": 45805,
+            "range": "± 1562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_4mib",
+            "value": 3107017,
+            "range": "± 70163",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/encode_4mib",
+            "value": 489484,
+            "range": "± 8585",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_0_drops",
+            "value": 112729,
+            "range": "± 22872",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_1_drop",
+            "value": 180246,
+            "range": "± 3397",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_4_drops_stride32",
+            "value": 490073,
+            "range": "± 21643",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_stride32",
+            "value": 493320,
+            "range": "± 17602",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_burst",
+            "value": 493246,
+            "range": "± 7623",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_burst",
+            "value": 506111,
+            "range": "± 19435",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_stride32",
+            "value": 491830,
+            "range": "± 33518",
             "unit": "ns/iter"
           }
         ]
