@@ -15,8 +15,8 @@ separately. This makes it practical to re-image a whole room of machines
 pixie is made of four crates:
 
 - **`pixie-server`** — the coordinator, run as root on one machine. It runs
-  DHCP/TFTP/PXE (via a managed `dnsmasq` subprocess), an admin HTTP/SSE API,
-  and the UDP/TCP protocol that clients speak.
+  built-in DHCP/PXE, TFTP, and DNS servers, an admin HTTP/SSE API, and the
+  UDP/TCP protocol that clients speak.
 - **`pixie-uefi`** — the client agent, a small UEFI application that each
   machine PXE-boots into. It talks to the server and executes the actions it
   is given (register, store, flash, boot, restart, shutdown).
@@ -53,9 +53,8 @@ group/image at once) are available from the web dashboard or the server's
   rustup toolchain install stable
   rustup target add x86_64-unknown-uefi
   ```
-* At runtime, `pixie-server` also needs `dnsmasq` installed, and must run
-  as root (it needs raw sockets, DHCP/TFTP on port 69, and to manage
-  `dnsmasq`).
+* `pixie-server` must run as root (it needs device-bound sockets and
+  privileged ports 53, 67, and 69 for DNS, DHCP, and TFTP).
 
 ## Quickstart
 
