@@ -37,7 +37,6 @@ impl Drop for DnsmasqHandle {
 async fn write_config(state: &State) -> Result<()> {
     let mut dnsmasq_conf = File::create(state.run_dir.join("dnsmasq.conf"))?;
 
-    let storage_str = state.storage_dir.to_str().unwrap();
     let run_str = state.run_dir.to_str().unwrap();
 
     let interfaces_config = state
@@ -92,10 +91,6 @@ bind-interfaces
 {dns_upstream_conf}
 
 ### Common configuration
-
-## Root for TFTP server
-tftp-root={storage_str}/tftpboot
-enable-tftp
 
 ## PXE prompt and timeout
 pxe-prompt="pixie",1

@@ -3,6 +3,7 @@ mod http;
 mod ping;
 mod state;
 mod tcp;
+mod tftp;
 mod udp;
 
 use crate::state::State;
@@ -19,6 +20,22 @@ use std::{
     time::Duration,
 };
 use tokio::{net::UdpSocket, signal::unix::SignalKind, task::JoinHandle, time};
+
+pub(crate) fn listener_ips(config: &pixie_shared::Config) -> Vec<Ipv4Addr> {
+    let mut ips = Vec::new();
+    for iface in &config.hosts.interfaces {
+        let addr = iface.network.addr();
+        if !ips.contains(&addr) {
+            ips.push(addr);
+        }
+        if let pixie_shared::DhcpMode::Proxy(proxy_ip) = iface.dhcp
+            && !ips.contains(&proxy_ip)
+        {
+            ips.push(proxy_ip);
+        }
+    }
+    ips
+}
 
 fn lookup_proc_arp(ip: Ipv4Addr) -> Option<MacAddr6> {
     let content = fs::read_to_string("/proc/net/arp").ok()?;
@@ -124,17 +141,15 @@ async fn main() -> Result<()> {
     let state = Arc::new(State::load(options.storage_dir)?);
 
     tokio::spawn({
-        let cancel_token = state.cancel_token.clone();
-        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())
-            .expect("failed to register SIGNINT handler");
-        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())
-            .expect("failed to register SIGNTERM handler");
+        let state = state.clone();
+        let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt()).unwrap();
+        let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate()).unwrap();
         async move {
-            let _token_guard = cancel_token.drop_guard();
             tokio::select! {
                 _ = sigint.recv() => log::info!("Received SIGINT."),
                 _ = sigterm.recv() => log::info!("Received SIGTERM."),
-            };
+            }
+            state.cancel_token.cancel();
         }
     });
 
@@ -143,13 +158,23 @@ async fn main() -> Result<()> {
         Ok(())
     }
 
+    let _cancel_guard = state.cancel_token.clone().drop_guard();
+
     let dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
+    let tftp_task = flatten(tokio::spawn(tftp::main(state.clone())));
     let http_task = flatten(tokio::spawn(http::main(state.clone())));
     let udp_task = flatten(tokio::spawn(udp::main(state.clone())));
     let tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
     let ping_task = flatten(tokio::spawn(ping::main(state.clone())));
 
-    tokio::try_join!(dnsmasq_task, http_task, udp_task, tcp_task, ping_task)?;
+    tokio::try_join!(
+        dnsmasq_task,
+        tftp_task,
+        http_task,
+        udp_task,
+        tcp_task,
+        ping_task
+    )?;
 
     Ok(())
 }
