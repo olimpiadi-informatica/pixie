@@ -1,5 +1,5 @@
+mod dhcp;
 mod dns;
-mod dnsmasq;
 mod http;
 mod ping;
 mod state;
@@ -61,8 +61,9 @@ fn lookup_proc_arp(ip: Ipv4Addr) -> Option<MacAddr6> {
 
 /// Finds the mac address for the given ip.
 ///
-/// Searches `/proc/net/arp`, triggering kernel ARP resolution via a dummy UDP probe on miss.
-async fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
+/// First checks the in-memory DHCP lease table and registered units, then searches
+/// `/proc/net/arp` (triggering kernel ARP resolution via a dummy UDP probe on miss).
+async fn find_mac(state: &State, ip: IpAddr) -> Result<MacAddr6> {
     if ip.is_loopback() {
         bail!("localhost not supported");
     }
@@ -71,16 +72,17 @@ async fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
         bail!("IPv6 not supported");
     };
 
-    if let Some(mac) = lookup_proc_arp(v4) {
+    if let Some(mac) = state.lookup_mac(v4).or_else(|| lookup_proc_arp(v4)) {
         return Ok(mac);
     }
 
-    // Trigger kernel ARP resolution on cold cache.
+    // Trigger kernel ARP resolution on cold cache (e.g., after a pixie-server restart).
     if let Ok(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await {
         let _ = sock.send_to(&[], (v4, 9)).await;
         for delay_ms in [10, 20, 30, 40] {
             time::sleep(Duration::from_millis(delay_ms)).await;
             if let Some(mac) = lookup_proc_arp(v4) {
+                state.record_dhcp_lease(v4, mac);
                 return Ok(mac);
             }
         }
@@ -126,18 +128,11 @@ async fn main() -> Result<()> {
     options.storage_dir = fs::canonicalize(&options.storage_dir)
         .with_context(|| format!("storage dir is invalid: {}", options.storage_dir.display()))?;
 
-    ensure!(
-        options.storage_dir.to_str().is_some(),
-        "storage dir must be valid utf8"
-    );
-
-    for file_path in [["tftpboot", "pixie-uefi.efi"]] {
-        let mut path = options.storage_dir.clone();
-        for path_piece in file_path {
-            path = path.join(path_piece);
-        }
-        ensure!(path.is_file(), "{} not found", path.display());
-    }
+    let bootfile = options
+        .storage_dir
+        .join("tftpboot")
+        .join(dhcp::BOOTFILE_NAME);
+    ensure!(bootfile.is_file(), "{} not found", bootfile.display());
 
     let state = Arc::new(State::load(options.storage_dir)?);
 
@@ -161,7 +156,7 @@ async fn main() -> Result<()> {
 
     let _cancel_guard = state.cancel_token.clone().drop_guard();
 
-    let dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
+    let dhcp_task = flatten(tokio::spawn(dhcp::main(state.clone())));
     let tftp_task = flatten(tokio::spawn(tftp::main(state.clone())));
     let dns_task = flatten(tokio::spawn(dns::main(state.clone())));
     let http_task = flatten(tokio::spawn(http::main(state.clone())));
@@ -170,13 +165,7 @@ async fn main() -> Result<()> {
     let ping_task = flatten(tokio::spawn(ping::main(state.clone())));
 
     tokio::try_join!(
-        dnsmasq_task,
-        tftp_task,
-        dns_task,
-        http_task,
-        udp_task,
-        tcp_task,
-        ping_task
+        dhcp_task, tftp_task, dns_task, http_task, udp_task, tcp_task, ping_task
     )?;
 
     Ok(())
