@@ -67,12 +67,6 @@ interface={name}
         .collect::<Result<Vec<_>>>()?
         .join("\n");
 
-    let dns_upstream_conf = if state.config.hosts.dns_upstream {
-        ""
-    } else {
-        "no-resolv"
-    };
-
     write!(
         dnsmasq_conf,
         r#"
@@ -88,7 +82,7 @@ except-interface=lo
 user=root
 group=root
 bind-interfaces
-{dns_upstream_conf}
+port=0
 
 ### Common configuration
 

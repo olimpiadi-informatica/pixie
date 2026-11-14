@@ -1,3 +1,4 @@
+mod dns;
 mod dnsmasq;
 mod http;
 mod ping;
@@ -162,6 +163,7 @@ async fn main() -> Result<()> {
 
     let dnsmasq_task = flatten(tokio::spawn(dnsmasq::main(state.clone())));
     let tftp_task = flatten(tokio::spawn(tftp::main(state.clone())));
+    let dns_task = flatten(tokio::spawn(dns::main(state.clone())));
     let http_task = flatten(tokio::spawn(http::main(state.clone())));
     let udp_task = flatten(tokio::spawn(udp::main(state.clone())));
     let tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
@@ -170,6 +172,7 @@ async fn main() -> Result<()> {
     tokio::try_join!(
         dnsmasq_task,
         tftp_task,
+        dns_task,
         http_task,
         udp_task,
         tcp_task,
