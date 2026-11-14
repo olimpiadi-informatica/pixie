@@ -190,7 +190,7 @@ async fn handle_requests(
                 socket.send_to(&[], peer_addr).await?;
             }
             Ok(UdpRequest::ActionProgress(frac, tot)) => {
-                match find_mac(peer_addr.ip()) {
+                match find_mac(peer_addr.ip()).await {
                     Ok(peer_mac) => {
                         state.set_unit_progress(UnitSelector::MacAddr(peer_mac), Some((frac, tot)));
                     }

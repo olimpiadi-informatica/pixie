@@ -13,67 +13,62 @@ use ipnet::Ipv4Net;
 use macaddr::MacAddr6;
 use std::{
     fs,
-    io::{BufRead, BufReader},
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
-    process::{Child, Command, Stdio},
     sync::Arc,
+    time::Duration,
 };
-use tokio::{signal::unix::SignalKind, task::JoinHandle};
+use tokio::{net::UdpSocket, signal::unix::SignalKind, task::JoinHandle, time};
+
+fn lookup_proc_arp(ip: Ipv4Addr) -> Option<MacAddr6> {
+    let content = fs::read_to_string("/proc/net/arp").ok()?;
+    for line in content.lines().skip(1) {
+        let mut fields = line.split_whitespace();
+        let Some(Ok(entry_ip)) = fields.next().map(str::parse::<Ipv4Addr>) else {
+            continue;
+        };
+        let _hw_type = fields.next()?;
+        let flags = fields.next()?;
+        let hw_addr = fields.next()?;
+        if entry_ip == ip
+            && flags != "0x0"
+            && let Ok(mac) = hw_addr.parse::<MacAddr6>()
+            && !mac.is_nil()
+        {
+            return Some(mac);
+        }
+    }
+    None
+}
 
 /// Finds the mac address for the given ip.
 ///
-/// This function searches the address in the arp cache, if it is not available it tries to
-/// populate it by pinging the peer.
-fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
-    struct Zombie {
-        inner: Child,
-    }
-
-    impl Drop for Zombie {
-        fn drop(&mut self) {
-            self.inner.kill().unwrap();
-            self.inner.wait().unwrap();
-        }
-    }
-
+/// Searches `/proc/net/arp`, triggering kernel ARP resolution via a dummy UDP probe on miss.
+async fn find_mac(ip: IpAddr) -> Result<MacAddr6> {
     if ip.is_loopback() {
         bail!("localhost not supported");
     }
 
-    // Repeat twice, sending a ping if looking at ip neigh the first time fails.
-    for _ in 0..2 {
-        let mut child = Zombie {
-            inner: Command::new("ip")
-                .arg("neigh")
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()?,
-        };
-        let stdout = child.inner.stdout.take().unwrap();
-        let lines = BufReader::new(stdout).lines();
+    let IpAddr::V4(v4) = ip else {
+        bail!("IPv6 not supported");
+    };
 
-        for line in lines {
-            let line = line?;
-            let mut parts = line.split(' ');
-
-            if parts.next().and_then(|s| s.parse().ok()) == Some(ip) {
-                let mac = parts.nth(3).unwrap();
-                if let Ok(mac) = mac.parse() {
-                    return Ok(mac);
-                }
-            }
-        }
-
-        let _ = Command::new("ping")
-            .args([&ip.to_string(), "-c", "1", "-W", "0.1"])
-            .stdout(Stdio::null())
-            .spawn()?
-            .wait();
+    if let Some(mac) = lookup_proc_arp(v4) {
+        return Ok(mac);
     }
 
-    bail!("Mac address not found");
+    // Trigger kernel ARP resolution on cold cache.
+    if let Ok(sock) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await {
+        let _ = sock.send_to(&[], (v4, 9)).await;
+        for delay_ms in [10, 20, 30, 40] {
+            time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(mac) = lookup_proc_arp(v4) {
+                return Ok(mac);
+            }
+        }
+    }
+
+    bail!("Mac address not found for {v4}")
 }
 
 /// Find the network where the server has the given IP.

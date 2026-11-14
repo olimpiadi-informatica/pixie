@@ -53,9 +53,9 @@ group/image at once) are available from the web dashboard or the server's
   rustup toolchain install stable
   rustup target add x86_64-unknown-uefi
   ```
-* At runtime, `pixie-server` also needs `dnsmasq` and `iproute2` (`ip`)
-  installed, and must run as root (it needs raw sockets, DHCP/TFTP on port
-  69, and to manage `dnsmasq`).
+* At runtime, `pixie-server` also needs `dnsmasq` installed, and must run
+  as root (it needs raw sockets, DHCP/TFTP on port 69, and to manage
+  `dnsmasq`).
 
 ## Quickstart
 
