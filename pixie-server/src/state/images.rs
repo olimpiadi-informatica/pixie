@@ -205,10 +205,12 @@ impl State {
 
     pub fn delete_image(&self, full_name: &str) -> Result<()> {
         let mut it = full_name.split('@');
-        let name = it.next().expect("Invalid image name").to_owned();
+        let name = it.next().expect("Invalid image name");
         let _version = it.next().unwrap_or_default();
-        ensure!(it.next().is_none(), "Invalid image name");
-        ensure!(self.config.images.contains(&name), "Unknown image: {name}");
+        ensure!(
+            !name.is_empty() && !name.contains(['/', '\\']) && it.next().is_none(),
+            "Invalid image name"
+        );
 
         let mut res = Ok(());
         self.images_stats.send_modify(|images_stats| {

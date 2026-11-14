@@ -238,9 +238,9 @@ fn compute_hint(state: &State) -> Result<RegistrationInfo> {
         .iter()
         .fold((0, 0), |(r1, c1), &(r2, c2)| (r1.max(r2), c1.max(c2)));
 
-    let (row, col) = match mrow {
-        0 => (1, 1),
-        1 => (1, mcol + 1),
+    let (row, col) = match (mrow, mcol) {
+        (0, _) | (_, 0) => (1, 1),
+        (1, _) => (1, mcol + 1),
         _ => (last.row + last.col / mcol, last.col % mcol + 1),
     };
 

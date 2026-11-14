@@ -36,9 +36,14 @@ where
     U: PartialEq + Clone + Ord,
 {
     fn eq(&self, other: &Self) -> bool {
-        let mut tmp = self.0.clone();
-        tmp.sort();
-        tmp == other.0
+        if self.0.len() != other.0.len() {
+            return false;
+        }
+        let mut a = self.0.clone();
+        let mut b = other.0.clone();
+        a.sort();
+        b.sort();
+        a == b
     }
 }
 
@@ -61,5 +66,20 @@ impl<T, U> IntoIterator for Bijection<T, U> {
 impl<T, U> Default for Bijection<T, U> {
     fn default() -> Self {
         Self(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    #[test]
+    fn partial_eq_is_reflexive_and_order_independent() {
+        let a = Bijection(vec![(2u32, 20u32), (1, 10)]);
+        let b = Bijection(vec![(1u32, 10u32), (2, 20)]);
+        assert_eq!(a, a);
+        assert_eq!(a, b);
+        assert_eq!(b, a);
     }
 }
