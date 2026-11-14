@@ -14,6 +14,7 @@ mod images;
 mod units;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use hickory_resolver::Hosts;
 use pixie_shared::{
     ChunkHash, ChunkStats, ChunksStats, Config, Image, ImagesStats, RegistrationInfo, Unit,
 };
@@ -21,7 +22,7 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{ErrorKind, Write},
-    net::{IpAddr, Ipv4Addr},
+    net::Ipv4Addr,
     path::{Path, PathBuf},
     sync::{
         Mutex,
@@ -61,28 +62,32 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Builds a map from ip address to hostname parsing the hostfile at `path`.
-fn build_hostmap(path: Option<&Path>) -> Result<HashMap<Ipv4Addr, String>> {
+/// Parses an `/etc/hosts`-style file into a primary `IPv4 -> hostname` map (for DHCP/UI)
+/// and a `hickory_resolver::Hosts` table (including all host aliases and IPv6/PTR records for DNS).
+pub(crate) fn build_hostmap(path: Option<&Path>) -> Result<(HashMap<Ipv4Addr, String>, Hosts)> {
     let mut hostmap = HashMap::new();
+    let mut dns_hosts = Hosts::default();
     if let Some(path) = path {
-        let hosts =
-            hostfile::parse_file(path).map_err(|e| anyhow!("Error parsing host file: {e}"))?;
-        for mut host in hosts {
-            if let IpAddr::V4(ip) = host.ip {
-                let old = hostmap.insert(ip, std::mem::take(&mut host.names[0]));
-                if old.is_some() {
-                    log::warn!("Duplicated hostname for {ip}");
-                }
-            } else {
-                log::warn!(
-                    "ignoring non-IPv4 address {} for host {}",
-                    host.ip,
-                    host.names[0]
-                );
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("read hosts file: {}", path.display()))?;
+        dns_hosts
+            .read_hosts_conf(content.as_bytes())
+            .with_context(|| format!("parse DNS hosts file: {}", path.display()))?;
+        for line in content.lines() {
+            let line = line.strip_prefix('\u{feff}').unwrap_or(line);
+            let line = line.split_once('#').map_or(line, |(before, _)| before);
+            let mut fields = line.split_whitespace();
+            let (Some(Ok(ip)), Some(name)) =
+                (fields.next().map(str::parse::<Ipv4Addr>), fields.next())
+            else {
+                continue;
+            };
+            if hostmap.insert(ip, name.to_owned()).is_some() {
+                log::warn!("Duplicated hostname for {ip}");
             }
         }
     }
-    Ok(hostmap)
+    Ok((hostmap, dns_hosts))
 }
 
 /// See [the module-level documentation][self].
@@ -95,6 +100,8 @@ pub struct State {
     pub config: Config,
     /// The hostmap built from the hostmap file.
     pub hostmap: HashMap<Ipv4Addr, String>,
+    /// Static DNS hosts parsed from the hostmap file (including aliases).
+    pub dns_hosts: Hosts,
 
     units: watch::Sender<Vec<Unit>>,
     registration_hint: Mutex<Option<RegistrationInfo>>,
@@ -116,7 +123,7 @@ impl State {
                 .with_context(|| format!("deserialize config from {}", path.display()))?
         };
 
-        let hostmap = build_hostmap(config.hosts.hostsfile.as_deref())?;
+        let (hostmap, dns_hosts) = build_hostmap(config.hosts.hostsfile.as_deref())?;
 
         let units_path = storage_dir.join(REGISTERED_JSON);
         let units: Vec<Unit> = if units_path.exists() {
@@ -220,6 +227,7 @@ impl State {
             run_dir,
             config,
             hostmap,
+            dns_hosts,
             units,
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
@@ -234,5 +242,46 @@ impl Drop for State {
         // If we fail to remove the directory it's not an issue as it will be deleted on shutdown
         // and doesn't take much space.
         let _ = std::fs::remove_dir_all(&self.run_dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hickory_resolver::proto::{
+        op::Query,
+        rr::{Name, RecordType},
+    };
+    use std::str::FromStr;
+
+    #[test]
+    fn parse_hosts_supports_comments_aliases_and_ipv6() {
+        let path = std::env::temp_dir().join(format!("pixie-hosts-test-{}", std::process::id()));
+        std::fs::write(
+            &path,
+            "# header comment\n\
+             ip-10-0-137-140.ec2.internal ip-10-0-137-140\n\
+             10.0.0.10  node01.lab  node01 # inline comment\n\
+             ::1        localhost ip6-localhost\n",
+        )
+        .expect("write temp hosts");
+
+        let (hostmap, dns_hosts) = build_hostmap(Some(&path)).expect("build_hostmap");
+        assert_eq!(
+            hostmap
+                .get(&Ipv4Addr::new(10, 0, 0, 10))
+                .map(String::as_str),
+            Some("node01.lab")
+        );
+        for name in ["node01.lab.", "node01."] {
+            let q = Query::query(Name::from_str(name).expect("name"), RecordType::A);
+            assert!(dns_hosts.lookup_static_host(&q).is_some(), "missing {name}");
+        }
+        let q6 = Query::query(
+            Name::from_str("ip6-localhost.").expect("name"),
+            RecordType::AAAA,
+        );
+        assert!(dns_hosts.lookup_static_host(&q6).is_some());
+        let _ = std::fs::remove_file(&path);
     }
 }

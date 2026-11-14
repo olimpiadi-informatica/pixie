@@ -82,8 +82,8 @@ point) has the following top-level sections:
     that interface.
 * `hosts.hostsfile` — optional path to an `/etc/hosts`-style file used to
   give registered machines friendly hostnames.
-* `hosts.dns_upstream` — whether `dnsmasq` should forward DNS queries
-  upstream, or only answer for pixie's own hosts.
+* `hosts.dns_upstream` — whether `pixie-server`'s built-in DNS server should
+  forward unknown DNS queries upstream, or only answer for pixie's own hosts.
 * `http.listen_on` — address:port the admin dashboard/API is served on.
 * `groups` — a list of `[name, id]` pairs mapping human-readable group names
   (e.g. rooms) to the numeric id used in the static IP scheme.
