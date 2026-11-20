@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794331268835,
+  "lastUpdate": 1795180897408,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -467,6 +467,96 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec/decode_32_drops_stride32",
             "value": 491830,
             "range": "± 33518",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "55024474+Virv12@users.noreply.github.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "57965f663e7d92f9ec89b9f47f3b2c58beac64b2",
+          "message": "Fix and test ProxyDHCP on the second interface",
+          "timestamp": "2026-11-20T14:18:42+01:00",
+          "tree_id": "0f29df596369c9f281ab097d7b8214b897c02412",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/57965f663e7d92f9ec89b9f47f3b2c58beac64b2"
+        },
+        "date": 1795180896686,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec/roundtrip_20b",
+            "value": 69,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_200kib",
+            "value": 64284,
+            "range": "± 2345",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_4mib",
+            "value": 2800484,
+            "range": "± 5682",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/encode_4mib",
+            "value": 922369,
+            "range": "± 4759",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_0_drops",
+            "value": 431079,
+            "range": "± 1680",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_1_drop",
+            "value": 520797,
+            "range": "± 1040",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_4_drops_stride32",
+            "value": 928656,
+            "range": "± 3190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_stride32",
+            "value": 934080,
+            "range": "± 20431",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_burst",
+            "value": 934546,
+            "range": "± 1890",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_burst",
+            "value": 948489,
+            "range": "± 4933",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_stride32",
+            "value": 948911,
+            "range": "± 3008",
             "unit": "ns/iter"
           }
         ]
