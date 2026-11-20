@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795180897408,
+  "lastUpdate": 1795181098929,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -949,6 +949,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 10.413,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "55024474+Virv12@users.noreply.github.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "57965f663e7d92f9ec89b9f47f3b2c58beac64b2",
+          "message": "Fix and test ProxyDHCP on the second interface",
+          "timestamp": "2026-11-20T14:18:42+01:00",
+          "tree_id": "0f29df596369c9f281ab097d7b8214b897c02412",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/57965f663e7d92f9ec89b9f47f3b2c58beac64b2"
+        },
+        "date": 1795181098918,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 24.204,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 17.892,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 11.908,
             "unit": "s"
           }
         ]
