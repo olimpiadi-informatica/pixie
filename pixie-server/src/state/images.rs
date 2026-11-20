@@ -26,8 +26,8 @@ impl State {
         Ok(cdata)
     }
 
-    /// Store the given chunk to the database.
-    pub fn add_chunk(&self, data: &[u8]) -> Result<()> {
+    /// Store the given chunk to the database and return its decompressed BLAKE3 hash.
+    pub fn add_chunk(&self, data: &[u8]) -> Result<ChunkHash> {
         let mut res = Ok(());
         let dec = lz4_flex::decompress(data, MAX_CHUNK_SIZE)?;
         ensure!(
@@ -57,7 +57,7 @@ impl State {
             })();
             res.is_ok()
         });
-        res
+        res.map(|()| hash)
     }
 
     /// Finds and deletes all chunks which are not part of any image.
