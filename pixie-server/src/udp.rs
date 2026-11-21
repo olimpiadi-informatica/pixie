@@ -16,11 +16,12 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddrV4},
     ops::Bound,
     sync::Arc,
+    time::{Duration, Instant},
 };
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{self, Receiver, Sender},
-    time::{self, Duration, Instant},
+    time,
 };
 
 async fn broadcast_chunks(
@@ -30,9 +31,13 @@ async fn broadcast_chunks(
     broadcast_speed: u32,
     mut rx: Receiver<ChunkHash>,
 ) -> Result<()> {
+    const MIN_SLEEP: Duration = Duration::from_micros(100);
+    const MAX_BURST_LAG: Duration = Duration::from_micros(250);
+
     let mut queue = BTreeSet::<ChunkHash>::new();
     let mut write_buf = [0; UDP_BODY_LEN];
     let mut wait_for = Instant::now();
+    let mut delay = tokio_timerfd::Delay::new(wait_for)?;
     let mut index = [0; 32];
 
     loop {
@@ -78,12 +83,25 @@ async fn broadcast_chunks(
             continue;
         };
 
+        wait_for = wait_for.max(Instant::now());
+
         let chunks_addr = SocketAddrV4::new(chunks_broadcast, CHUNKS_PORT);
 
         let mut encoder = Encoder::new(cdata);
         write_buf[..32].clone_from_slice(&index);
         while let Some(len) = encoder.next_packet(&mut write_buf[32..]) {
-            time::sleep_until(wait_for).await;
+            let now = Instant::now();
+            if wait_for > now {
+                if wait_for - now >= MIN_SLEEP {
+                    delay.reset(wait_for);
+                    tokio::select! {
+                        res = &mut delay => res?,
+                        _ = state.cancel_token.cancelled() => return Ok(()),
+                    }
+                }
+            } else if now - wait_for > MAX_BURST_LAG {
+                wait_for = now - MAX_BURST_LAG;
+            }
 
             let sent_len = socket.send_to(&write_buf[..32 + len], chunks_addr).await?;
             ensure!(sent_len == 32 + len, "Could not send packet");
