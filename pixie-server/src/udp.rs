@@ -32,10 +32,11 @@ async fn broadcast_chunks(
     mut rx: Receiver<ChunkHash>,
     mut feedback_rx: Receiver<(Ipv4Addr, u32, u32)>,
 ) -> Result<()> {
-    const MIN_RATE: f64 = 500_000.0;
-    const INIT_RATE: f64 = 10_000_000.0;
-    const MAX_RATE: f64 = 1_125_000_000.0;
+    const MIN_RATE: f64 = 500_000.0; // 4 Mbps
+    const INIT_RATE: f64 = 10_000_000.0; // 80 Mbps
+    const MAX_RATE: f64 = 125_000_000.0; // 1 Gbps
     const TICK: Duration = Duration::from_millis(200);
+    const CUT_COOLDOWN: Duration = Duration::from_millis(500);
     const IDLE_RESET: Duration = Duration::from_secs(10);
     const MIN_SLEEP: Duration = Duration::from_micros(100);
     const MAX_BURST_LAG: Duration = Duration::from_micros(250);
@@ -47,7 +48,9 @@ async fn broadcast_chunks(
     let mut index = [0; 32];
     let mut seq: u32 = 0;
 
-    let mut rate_bps = INIT_RATE;
+    let mut rate_bytes_s = INIT_RATE;
+    let mut ceiling_bytes_s: Option<f64> = None;
+    let mut cooldown_until = wait_for;
     let mut tick_start = wait_for;
     let mut tick_bytes = 0u64;
     let mut tick_pkts = 0u64;
@@ -77,7 +80,9 @@ async fn broadcast_chunks(
                     while feedback_rx.try_recv().is_ok() {}
                     let idle = now.saturating_duration_since(idle_start);
                     if idle >= IDLE_RESET {
-                        rate_bps = INIT_RATE;
+                        rate_bytes_s = INIT_RATE;
+                        ceiling_bytes_s = None;
+                        cooldown_until = now;
                         clients.clear();
                         tick_bytes = 0;
                         tick_pkts = 0;
@@ -138,8 +143,13 @@ async fn broadcast_chunks(
                 Ok(sent_len) => sent_len,
                 Err(e) if e.kind() == ErrorKind::WouldBlock || e.raw_os_error() == Some(105) => {
                     log::warn!("UDP broadcast send congestion on {chunks_broadcast}: {e}");
-                    rate_bps = (rate_bps * 0.7).max(MIN_RATE);
-                    delay.reset(Instant::now() + Duration::from_millis(1));
+                    let now = Instant::now();
+                    if now >= cooldown_until {
+                        ceiling_bytes_s = Some(rate_bytes_s);
+                        rate_bytes_s = (rate_bytes_s * 0.85).max(MIN_RATE);
+                        cooldown_until = now + CUT_COOLDOWN;
+                    }
+                    delay.reset(now + Duration::from_millis(1));
                     tokio::select! {
                         res = &mut delay => res?,
                         _ = state.cancel_token.cancelled() => return Ok(()),
@@ -151,7 +161,7 @@ async fn broadcast_chunks(
             };
             ensure!(sent_len == total_len, "Could not send packet");
 
-            wait_for += Duration::from_secs_f64(sent_len as f64 / rate_bps);
+            wait_for += Duration::from_secs_f64(sent_len as f64 / rate_bytes_s);
             tick_bytes += sent_len as u64;
             tick_pkts += 1;
 
@@ -171,21 +181,36 @@ async fn broadcast_chunks(
                     losses.sort_by(f64::total_cmp);
                     let loss = losses[(losses.len() - 1).saturating_sub(losses.len() / 10)];
                     let achieved = tick_bytes as f64 / elapsed.as_secs_f64();
-                    let factor = if loss <= 0.001 && achieved >= rate_bps * 0.7 {
-                        1.25
-                    } else if loss <= 0.001 {
-                        1.0
-                    } else if loss <= 0.005 {
-                        0.95
+                    let new_rate = if loss <= 0.005 && achieved >= rate_bytes_s * 0.7 {
+                        if let Some(c) = ceiling_bytes_s
+                            && rate_bytes_s >= c * 1.35
+                        {
+                            ceiling_bytes_s = None;
+                        }
+                        let factor = match ceiling_bytes_s {
+                            Some(c) if rate_bytes_s >= c * 0.80 => 1.03,
+                            _ => 1.20,
+                        };
+                        rate_bytes_s * factor
+                    } else if loss <= 0.02 {
+                        rate_bytes_s
+                    } else if now >= cooldown_until {
+                        ceiling_bytes_s = Some(match ceiling_bytes_s {
+                            Some(c) => 0.5 * c + 0.5 * rate_bytes_s,
+                            None => rate_bytes_s,
+                        });
+                        cooldown_until = now + CUT_COOLDOWN;
+                        rate_bytes_s * 0.85
                     } else {
-                        ((1.0 - loss) * 0.85).clamp(0.25, 0.8)
-                    };
-                    let new_rate = (rate_bps * factor).clamp(MIN_RATE, MAX_RATE);
-                    if (new_rate - rate_bps).abs() >= 1.0 {
-                        rate_bps = new_rate;
+                        rate_bytes_s
+                    }
+                    .clamp(MIN_RATE, MAX_RATE);
+
+                    if (new_rate - rate_bytes_s).abs() >= 1.0 {
+                        rate_bytes_s = new_rate;
                         log::debug!(
                             "Broadcast speed for {chunks_broadcast}: {:.1} MB/s (loss {:.2}%)",
-                            rate_bps / 1_000_000.0,
+                            rate_bytes_s / 1_000_000.0,
                             loss * 100.0
                         );
                     }
