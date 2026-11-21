@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795181098929,
+  "lastUpdate": 1795272628947,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -557,6 +557,96 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec/decode_32_drops_stride32",
             "value": 948911,
             "range": "± 3008",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "49699333+dependabot[bot]@users.noreply.github.com",
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ec93eba7c31538cfc04a4c824cce313f40a032ac",
+          "message": "Bump axum from 0.7.9 to 0.8.9 in /pixie-server (#115)\n\n* Bump axum from 0.7.9 to 0.8.9 in /pixie-server\n\nBumps [axum](https://github.com/tokio-rs/axum) from 0.7.9 to 0.8.9.\n- [Release notes](https://github.com/tokio-rs/axum/releases)\n- [Changelog](https://github.com/tokio-rs/axum/blob/main/CHANGELOG.md)\n- [Commits](https://github.com/tokio-rs/axum/compare/axum-v0.7.9...axum-v0.8.9)\n\n---\nupdated-dependencies:\n- dependency-name: axum\n  dependency-version: 0.8.8\n  dependency-type: direct:production\n  update-type: version-update:semver-minor\n...\n\nSigned-off-by: dependabot[bot] <support@github.com>\n\n* Update axum route syntax to {param} for axum 0.8\n\n* Use fallback_service instead of nest_service(\"/\") for axum 0.8\n\n---------\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>\nCo-authored-by: Filippo Casarin <casarin.filippo17@gmail.com>",
+          "timestamp": "2026-11-21T15:48:35+01:00",
+          "tree_id": "46f667f9d8b5ee4669cc9ab53b4cb59c0ca9306d",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/ec93eba7c31538cfc04a4c824cce313f40a032ac"
+        },
+        "date": 1795272628641,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec/roundtrip_20b",
+            "value": 79,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_200kib",
+            "value": 68353,
+            "range": "± 459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_4mib",
+            "value": 4060267,
+            "range": "± 100330",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/encode_4mib",
+            "value": 685761,
+            "range": "± 14962",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_0_drops",
+            "value": 156850,
+            "range": "± 4649",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_1_drop",
+            "value": 247304,
+            "range": "± 6124",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_4_drops_stride32",
+            "value": 700497,
+            "range": "± 27349",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_stride32",
+            "value": 696548,
+            "range": "± 9563",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_burst",
+            "value": 693217,
+            "range": "± 6475",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_burst",
+            "value": 711999,
+            "range": "± 10186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_stride32",
+            "value": 712356,
+            "range": "± 9457",
             "unit": "ns/iter"
           }
         ]
