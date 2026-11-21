@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 use core::mem;
 use thiserror::Error;
 
-const PACKET_LEN: usize = UDP_BODY_LEN - 32;
+const PACKET_LEN: usize = UDP_BODY_LEN - crate::CHUNK_PACKET_PREFIX_LEN;
 const HEADER_LEN: usize = 2;
 const BODY_LEN: usize = PACKET_LEN - HEADER_LEN;
 

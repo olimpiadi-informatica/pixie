@@ -77,8 +77,8 @@ point) has the following top-level sections:
     server over that IP range, or `!proxy <ip>`, meaning pixie only answers
     PXE requests (ProxyDHCP) alongside another DHCP server already on the
     LAN, given as `<ip>`.
-  * `broadcast_speed` — rate limit, in bytes/second, for chunk broadcasts on
-    that interface.
+  (Chunk broadcast speed on each interface is auto-tuned dynamically based on
+  client packet-loss feedback.)
 * `hosts.hostsfile` — optional path to an `/etc/hosts`-style file used to
   give registered machines friendly hostnames.
 * `hosts.dns_upstream` — whether `pixie-server`'s built-in DNS server should

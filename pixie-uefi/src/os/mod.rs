@@ -20,7 +20,7 @@ mod logger;
 pub mod memory;
 pub mod net;
 mod send_wrapper;
-mod timer;
+pub mod timer;
 pub mod ui;
 pub mod util;
 
