@@ -192,19 +192,16 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     let router = Router::new()
         .route("/admin/status", get(status))
         .route("/admin/gc", get(gc))
-        .route("/admin/action/:unit_selector/:action", get(action))
+        .route("/admin/action/{unit_selector}/{action}", get(action))
         .route(
-            "/admin/curr_action/:unit_selector/:action",
+            "/admin/curr_action/{unit_selector}/{action}",
             get(curr_action),
         )
-        .route("/admin/image/:unit_selector/:image", get(image))
-        .route("/admin/forget/:unit_selector", get(forget))
-        .route("/admin/rollback/:image", get(rollback))
-        .route("/admin/delete/:image", get(delete_image))
-        .nest_service(
-            "/",
-            ServeDir::new(&admin_path).append_index_html_on_directories(true),
-        )
+        .route("/admin/image/{unit_selector}/{image}", get(image))
+        .route("/admin/forget/{unit_selector}", get(forget))
+        .route("/admin/rollback/{image}", get(rollback))
+        .route("/admin/delete/{image}", get(delete_image))
+        .fallback_service(ServeDir::new(&admin_path).append_index_html_on_directories(true))
         .layer(TraceLayer::new_for_http());
 
     let shutdown_token = state.cancel_token.clone().cancelled_owned();
