@@ -201,10 +201,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
         .route("/admin/forget/{unit_selector}", get(forget))
         .route("/admin/rollback/{image}", get(rollback))
         .route("/admin/delete/{image}", get(delete_image))
-        .nest_service(
-            "/",
-            ServeDir::new(&admin_path).append_index_html_on_directories(true),
-        )
+        .fallback_service(ServeDir::new(&admin_path).append_index_html_on_directories(true))
         .layer(TraceLayer::new_for_http());
 
     let shutdown_token = state.cancel_token.clone().cancelled_owned();
