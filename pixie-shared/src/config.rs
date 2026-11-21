@@ -22,8 +22,6 @@ pub struct InterfaceConfig {
     pub network: Ipv4Net,
     /// DHCP server.
     pub dhcp: DhcpMode,
-    /// Speed in bytes/second used to broadcast chunks.
-    pub broadcast_speed: u32,
 }
 
 /// Registered clients will always be assigned an IP in the form

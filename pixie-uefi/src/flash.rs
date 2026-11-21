@@ -12,13 +12,16 @@ use log::info;
 use lz4_flex::decompress;
 use pixie_shared::chunk_codec::Decoder;
 use pixie_shared::util::BytesFmt;
-use pixie_shared::{CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, TcpRequest, UdpRequest};
+use pixie_shared::{
+    CHUNK_PACKET_PREFIX_LEN, CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, TcpRequest, UdpRequest,
+};
 
 use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
 use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::timer::Timer;
 use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
 
@@ -75,6 +78,22 @@ fn handle_packet(
     assert_eq!(data.len(), size);
 
     Ok(Some((pos, data)))
+}
+
+async fn send_feedback(
+    socket: &UdpSocket,
+    server_addr: SocketAddrV4,
+    received: &mut u32,
+    lost: &mut u32,
+) -> Result<()> {
+    if *received > 0 || *lost > 0 {
+        let msg = postcard::to_allocvec(&UdpRequest::BroadcastFeedback {
+            received: mem::take(received),
+            lost: mem::take(lost),
+        })?;
+        socket.send_to(server_addr, &msg).await?;
+    }
+    Ok(())
 }
 
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
@@ -169,22 +188,40 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let task1 = async {
         let tx = tx;
         let mut last_seen = Vec::new();
+        let (mut last_seq, mut win_recv, mut win_lost) = (None::<u32>, 0u32, 0u32);
+        let mut last_fb = Timer::micros();
         let free_mem = memory::stats().free;
         let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
         log::debug!(
             "Free memory: {}. Max chunks in memory: {max_chunks}",
             BytesFmt(free_mem)
         );
+
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv_from(&mut buf));
             let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
             match select(recv, sleep).await {
                 Either::Left(((buf, _addr), _)) => {
+                    if buf.len() < CHUNK_PACKET_PREFIX_LEN + 2 {
+                        continue;
+                    }
                     stats.borrow_mut().pack_recv += 1;
-                    assert!(buf.len() >= 34);
+                    let seq = u32::from_le_bytes(buf[..4].try_into().unwrap());
+                    if let Some(prev) = last_seq {
+                        let gap = seq.wrapping_sub(prev).wrapping_sub(1);
+                        if gap < 100_000 {
+                            win_lost = win_lost.saturating_add(gap);
+                            last_seq = Some(seq);
+                        } else if seq.wrapping_sub(prev) < u32::MAX - 64 {
+                            last_seq = Some(seq);
+                        }
+                    } else {
+                        last_seq = Some(seq);
+                    }
+                    win_recv = win_recv.saturating_add(1);
 
                     let chunk =
-                        handle_packet(buf, &mut chunks_info, &mut received, &mut last_seen)?;
+                        handle_packet(&buf[4..], &mut chunks_info, &mut received, &mut last_seen)?;
                     if let Some((pos, data)) = chunk {
                         tx.send((pos, data)).await.expect("receiver was dropped");
                     }
@@ -196,8 +233,18 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                             .remove(&hash)
                             .expect("last_seen should contain only received chunks");
                     }
+
+                    let now_us = Timer::micros();
+                    let elapsed = now_us - last_fb;
+                    if elapsed >= 200_000 || (win_lost >= 16 && elapsed >= 50_000) {
+                        send_feedback(&socket, server_addr, &mut win_recv, &mut win_lost).await?;
+                        last_fb = now_us;
+                    }
                 }
                 Either::Right(((), _sleep)) => {
+                    send_feedback(&socket, server_addr, &mut win_recv, &mut win_lost).await?;
+                    last_fb = Timer::micros();
+
                     // TODO(virv): compute the number of chunks to request
                     let chunks: Vec<_> =
                         chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
@@ -207,6 +254,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                 }
             }
         }
+        send_feedback(&socket, server_addr, &mut win_recv, &mut win_lost).await?;
         Ok::<_, Error>(())
     };
 
