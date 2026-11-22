@@ -533,7 +533,11 @@ mod tests {
 
         // Idle >= IDLE_RESET resets back to INIT_RATE and clears ceiling.
         let (_tx, mut rx) = mpsc::channel(4);
-        rc.on_idle(cut_time + Duration::from_secs(12), Duration::from_secs(10), &mut rx);
+        rc.on_idle(
+            cut_time + Duration::from_secs(12),
+            Duration::from_secs(10),
+            &mut rx,
+        );
         assert_eq!(rc.rate_bytes_s, RateController::INIT_RATE);
         assert_eq!(rc.ceiling_bytes_s, None);
     }
