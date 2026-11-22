@@ -6,6 +6,7 @@ pub mod bijection;
 pub mod chunk_codec;
 #[cfg(feature = "std")]
 pub mod config;
+pub mod rpc;
 pub mod util;
 
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
@@ -33,6 +34,8 @@ pub const CHUNKS_PORT: u16 = ACTION_PORT + 1;
 pub const HINT_PORT: u16 = ACTION_PORT + 2;
 /// udp port for pings from workstations.
 pub const PING_PORT: u16 = ACTION_PORT + 3;
+/// udp port for reliable client-server RPC and bulk blob transfers.
+pub const RPC_PORT: u16 = ACTION_PORT + 4;
 
 /// The hash of a chunk of a disk.
 ///
@@ -99,7 +102,7 @@ pub struct ChunkStats {
 
 pub type ChunksStats = BTreeMap<ChunkHash, ChunkStats>;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegistrationInfo {
     pub group: String,
     pub row: u8,
