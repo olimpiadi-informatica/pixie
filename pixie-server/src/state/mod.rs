@@ -106,6 +106,7 @@ pub struct State {
     registration_hint: Mutex<Option<RegistrationInfo>>,
     images_stats: watch::Sender<ImagesStats>,
     chunks_stats: Mutex<ChunksStats>,
+    image_blobs: Mutex<HashMap<ChunkHash, Vec<u8>>>,
     dhcp_leases: Mutex<HashMap<Ipv4Addr, MacAddr6>>,
 
     /// Token to shutdown the entire server.
@@ -225,6 +226,7 @@ impl State {
             registration_hint: Mutex::new(None),
             images_stats: watch::Sender::new(images_stats),
             chunks_stats: Mutex::new(chunks_stats),
+            image_blobs: Mutex::new(HashMap::new()),
             dhcp_leases: Mutex::new(HashMap::new()),
             cancel_token,
         })

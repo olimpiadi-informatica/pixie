@@ -10,15 +10,16 @@ use core::net::{Ipv4Addr, SocketAddrV4};
 use core::time::Duration;
 
 use futures::future::{self, Either};
-use pixie_shared::{ACTION_PORT, Action, PING_PORT, TcpRequest, UdpRequest};
+use pixie_shared::{ACTION_PORT, Action, PING_PORT, UdpRequest};
 use uefi::{Status, entry};
 
 use crate::flash::flash;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
 use crate::os::ui::update_content;
 use crate::register::register;
+use crate::rpc::RpcClient;
 use crate::store::store;
 
 mod flash;
@@ -26,6 +27,7 @@ mod os;
 mod parse_disk;
 mod power_control;
 mod register;
+mod rpc;
 mod store;
 
 #[cfg(feature = "coverage")]
@@ -75,30 +77,9 @@ async fn shutdown() -> ! {
     power_control::shutdown()
 }
 
-async fn get_action(stream: &TcpStream) -> Result<Action> {
-    let msg = postcard::to_allocvec(&TcpRequest::GetAction)?;
-    stream.write_u64_le(msg.len() as u64).await?;
-    stream.write_all(&msg).await?;
-
-    let len = stream.read_u64_le().await? as usize;
-    let mut buf = vec![0; len];
-    stream.read_exact(&mut buf).await?;
-    let cmd = postcard::from_bytes(&buf)?;
-    Ok(cmd)
-}
-
-async fn complete_action(stream: &TcpStream) -> Result<()> {
-    let msg = postcard::to_allocvec(&TcpRequest::ActionComplete)?;
-    stream.write_u64_le(msg.len() as u64).await?;
-    stream.write_all(&msg).await?;
-
-    let len = stream.read_u64_le().await?;
-    assert_eq!(len, 0);
-    Ok(())
-}
-
 async fn run() -> Result<()> {
     let server = server_discover().await?;
+    let rpc = RpcClient::new(*server.ip()).await?;
 
     let mut last_was_wait = false;
 
@@ -119,10 +100,7 @@ async fn run() -> Result<()> {
             log::debug!("Sending request for command");
         }
 
-        let tcp = TcpStream::connect(server).await?;
-        let command = get_action(&tcp).await;
-        tcp.shutdown().await;
-        tcp.force_close().await;
+        let command = rpc.get_action().await;
 
         if let Err(e) = command {
             log::warn!("Error receiving action: {e}");
@@ -143,16 +121,15 @@ async fn run() -> Result<()> {
                     Action::Restart => {}
                     Action::Shutdown => shutdown().await,
                     Action::Register => {
-                        Executor::spawn("register", register(server)).join().await?
+                        Executor::spawn("register", register(*server.ip()))
+                            .join()
+                            .await?
                     }
                     Action::Store => Executor::spawn("store", store(server)).join().await?,
                     Action::Flash => Executor::spawn("flash", flash(server)).join().await?,
                 }
 
-                let tcp = TcpStream::connect(server).await?;
-                complete_action(&tcp).await?;
-                tcp.shutdown().await;
-                tcp.force_close().await;
+                rpc.complete_action().await?;
 
                 if command == Action::Restart {
                     power_control::reset()

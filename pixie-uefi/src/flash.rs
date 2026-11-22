@@ -13,28 +13,18 @@ use lz4_flex::decompress;
 use pixie_shared::chunk_codec::Decoder;
 use pixie_shared::util::BytesFmt;
 use pixie_shared::{
-    CHUNK_PACKET_PREFIX_LEN, CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, TcpRequest, UdpRequest,
+    CHUNK_PACKET_PREFIX_LEN, CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, UdpRequest,
 };
 
 use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::net::UdpSocket;
 use crate::os::timer::Timer;
 use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
-
-async fn fetch_image(stream: &TcpStream) -> Result<Image> {
-    let req = TcpRequest::GetImage;
-    let mut buf = postcard::to_allocvec(&req)?;
-    stream.write_u64_le(buf.len() as u64).await?;
-    stream.write_all(&buf).await?;
-    let len = stream.read_u64_le().await?;
-    buf.resize(len as usize, 0);
-    stream.read_exact(&mut buf).await?;
-    Ok(postcard::from_bytes(&buf)?)
-}
+use crate::rpc::RpcClient;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Stats {
@@ -140,12 +130,46 @@ impl FeedbackState {
     }
 }
 
+async fn fetch_image(server_addr: SocketAddrV4, hash: ChunkHash, len: usize) -> Result<Image> {
+    let socket = UdpSocket::bind(Some(CHUNKS_PORT)).await?;
+    let req = postcard::to_allocvec(&UdpRequest::RequestChunks(vec![hash]))?;
+    let mut decoder = Decoder::new(len);
+
+    socket.send_to(server_addr, &req).await?;
+    loop {
+        let recv = Box::pin(socket.recv_with(|pkt, _addr| {
+            if pkt.len() < CHUNK_PACKET_PREFIX_LEN + 2 || pkt[8..CHUNK_PACKET_PREFIX_LEN] != hash {
+                return None;
+            }
+            if let Err(e) = decoder.add_packet(&pkt[CHUNK_PACKET_PREFIX_LEN..]) {
+                log::warn!("Received invalid packet for image {hash:02x?}: {e}");
+                return None;
+            }
+            decoder.finish()
+        }));
+        let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
+        let res = match select(recv, sleep).await {
+            Either::Left((bytes, _)) => bytes,
+            Either::Right(((), _)) => {
+                socket.send_to(server_addr, &req).await?;
+                None
+            }
+        };
+        if let Some(bytes) = res {
+            if blake3::hash(&bytes).as_bytes() != &hash {
+                return Err(Error::msg("Image hash mismatch"));
+            }
+            return Ok(postcard::from_bytes(&bytes)?);
+        }
+    }
+}
+
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
-    let stream = TcpStream::connect(server_addr).await?;
-    let image = fetch_image(&stream).await?;
-    stream.shutdown().await;
-    // TODO(virv): this could be better
-    stream.force_close().await;
+    let (image_hash, image_len) = RpcClient::new(*server_addr.ip())
+        .await?
+        .get_image_info()
+        .await?;
+    let image = fetch_image(server_addr, image_hash, image_len).await?;
 
     let mut chunks_info = BTreeMap::new();
     for chunk in &image.disk {
@@ -223,7 +247,6 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
 
     let socket = UdpSocket::bind(Some(CHUNKS_PORT)).await?;
-    let mut buf = [0; ETH_PACKET_SIZE];
 
     let mut received = BTreeMap::new();
 
@@ -242,34 +265,38 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         );
 
         while !chunks_info.is_empty() {
-            let recv = Box::pin(socket.recv_from(&mut buf));
-            let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
-            match select(recv, sleep).await {
-                Either::Left(((buf, _addr), _)) => {
-                    if buf.len() < CHUNK_PACKET_PREFIX_LEN + 2 {
-                        continue;
-                    }
-                    stats.borrow_mut().pack_recv += 1;
-                    let seq = u32::from_le_bytes(buf[..4].try_into().unwrap());
-                    let tx_us = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-                    fb.record_packet(tx_us);
+            let recv = Box::pin(socket.recv_with(|pkt, _addr| {
+                if pkt.len() < CHUNK_PACKET_PREFIX_LEN + 2 {
+                    return Ok::<_, Error>(None);
+                }
+                stats.borrow_mut().pack_recv += 1;
+                let seq = u32::from_le_bytes(pkt[..4].try_into().unwrap());
+                let tx_us = u32::from_le_bytes(pkt[4..8].try_into().unwrap());
+                fb.record_packet(tx_us);
 
-                    if let Some(prev) = last_seq {
-                        let gap = seq.wrapping_sub(prev).wrapping_sub(1);
-                        if gap < 100_000 {
-                            fb.lost = fb.lost.saturating_add(gap);
-                            last_seq = Some(seq);
-                        } else if seq.wrapping_sub(prev) < u32::MAX - 64 {
-                            last_seq = Some(seq);
-                        }
-                    } else {
+                if let Some(prev) = last_seq {
+                    let gap = seq.wrapping_sub(prev).wrapping_sub(1);
+                    if gap < 100_000 {
+                        fb.lost = fb.lost.saturating_add(gap);
+                        last_seq = Some(seq);
+                    } else if seq.wrapping_sub(prev) < u32::MAX - 64 {
                         last_seq = Some(seq);
                     }
-                    fb.received = fb.received.saturating_add(1);
+                } else {
+                    last_seq = Some(seq);
+                }
+                fb.received = fb.received.saturating_add(1);
 
-                    let chunk =
-                        handle_packet(&buf[8..], &mut chunks_info, &mut received, &mut last_seen)?;
-                    if let Some((pos, data)) = chunk {
+                handle_packet(&pkt[8..], &mut chunks_info, &mut received, &mut last_seen)
+            }));
+            let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
+            let res = match select(recv, sleep).await {
+                Either::Left((chunk_res, _)) => Some(chunk_res),
+                Either::Right(((), _)) => None,
+            };
+            match res {
+                Some(chunk_res) => {
+                    if let Some((pos, data)) = chunk_res? {
                         tx.send((pos, data)).await.expect("receiver was dropped");
                     }
 
@@ -287,7 +314,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                         fb.send(&socket, server_addr).await?;
                     }
                 }
-                Either::Right(((), _sleep)) => {
+                None => {
                     fb.send(&socket, server_addr).await?;
 
                     // TODO(virv): compute the number of chunks to request

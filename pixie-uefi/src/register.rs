@@ -2,16 +2,17 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use core::net::SocketAddrV4;
+use core::net::Ipv4Addr;
 
 use futures::future::{Either, select};
-use pixie_shared::{HINT_PORT, HintPacket, RegistrationInfo, TcpRequest, UnitStats};
+use pixie_shared::{HINT_PORT, HintPacket, RegistrationInfo, UnitStats};
 use uefi::proto::console::text::{Color, Key, ScanCode};
 
 use crate::os::error::{Error, Result};
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
 use crate::os::ui::DrawArea;
 use crate::os::{input, ui};
+use crate::rpc::RpcClient;
 
 #[derive(Debug, Default)]
 struct Data {
@@ -19,7 +20,7 @@ struct Data {
     selected: usize,
 }
 
-pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
+pub async fn register(server_ip: Ipv4Addr) -> Result<()> {
     let data = Rc::new(RefCell::new(Data::default()));
     let data2 = data.clone();
 
@@ -165,16 +166,9 @@ pub async fn register(server_addr: SocketAddrV4) -> Result<()> {
         cpu: crate::os::util::get_cpu_model(),
     };
 
-    let msg = TcpRequest::Register(data.borrow().station.clone(), stat);
-    let buf = postcard::to_allocvec(&msg)?;
-    let stream = TcpStream::connect(server_addr).await?;
-    stream.write_u64_le(buf.len() as u64).await?;
-    stream.write_all(&buf).await?;
-    let len = stream.read_u64_le().await?;
-    assert_eq!(len, 0);
-    stream.shutdown().await;
-    // TODO(virv): this could be better
-    stream.force_close().await;
+    let station = data.borrow().station.clone();
+    let rpc = RpcClient::new(server_ip).await?;
+    rpc.register(station, stat).await?;
 
     log::info!("Registration successful! {:?}", data.borrow().station);
 

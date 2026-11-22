@@ -2,8 +2,8 @@ mod dhcp;
 mod dns;
 mod http;
 mod ping;
+mod rpc;
 mod state;
-mod tcp;
 mod tftp;
 mod udp;
 
@@ -161,11 +161,11 @@ async fn main() -> Result<()> {
     let dns_task = flatten(tokio::spawn(dns::main(state.clone())));
     let http_task = flatten(tokio::spawn(http::main(state.clone())));
     let udp_task = flatten(tokio::spawn(udp::main(state.clone())));
-    let tcp_task = flatten(tokio::spawn(tcp::main(state.clone())));
+    let rpc_task = flatten(tokio::spawn(rpc::main(state.clone())));
     let ping_task = flatten(tokio::spawn(ping::main(state.clone())));
 
     tokio::try_join!(
-        dhcp_task, tftp_task, dns_task, http_task, udp_task, tcp_task, ping_task
+        dhcp_task, tftp_task, dns_task, http_task, udp_task, rpc_task, ping_task
     )?;
 
     Ok(())
