@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795272908573,
+  "lastUpdate": 1795387473820,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -737,6 +737,96 @@ window.BENCHMARK_DATA = {
             "name": "chunk_codec/decode_32_drops_stride32",
             "value": 905317,
             "range": "± 4667",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "55024474+Virv12@users.noreply.github.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "0add4adc0bf4237245558316610da1acf4a4f515",
+          "message": "Use u64 in Timer::ensure_init and fix rustfmt",
+          "timestamp": "2026-11-22T23:42:40+01:00",
+          "tree_id": "6e1d2264221dba58992254e0aef137a3ee0bf117",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/0add4adc0bf4237245558316610da1acf4a4f515"
+        },
+        "date": 1795387473497,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "chunk_codec/roundtrip_20b",
+            "value": 118,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_200kib",
+            "value": 86270,
+            "range": "± 724",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/roundtrip_4mib",
+            "value": 4600044,
+            "range": "± 96695",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/encode_4mib",
+            "value": 881416,
+            "range": "± 2802",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_0_drops",
+            "value": 194068,
+            "range": "± 781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_1_drop",
+            "value": 307096,
+            "range": "± 6317",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_4_drops_stride32",
+            "value": 877848,
+            "range": "± 13680",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_stride32",
+            "value": 886056,
+            "range": "± 31594",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_16_drops_burst",
+            "value": 887147,
+            "range": "± 7140",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_burst",
+            "value": 876717,
+            "range": "± 3588",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "chunk_codec/decode_32_drops_stride32",
+            "value": 873743,
+            "range": "± 6713",
             "unit": "ns/iter"
           }
         ]
