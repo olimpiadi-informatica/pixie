@@ -80,12 +80,14 @@ fn handle_packet(
     Ok(Some((pos, data)))
 }
 
+const BASE_OWD_WINDOWS: usize = 5;
+
 struct FeedbackState {
     received: u32,
     lost: u32,
-    min_owd: Option<u32>,
-    delay_sum_us: u64,
-    delay_cnt: u32,
+    window_min_owd: Option<u32>,
+    base_history: [Option<u32>; BASE_OWD_WINDOWS],
+    base_idx: usize,
     last_fb: i64,
 }
 
@@ -94,9 +96,9 @@ impl FeedbackState {
         Self {
             received: 0,
             lost: 0,
-            min_owd: None,
-            delay_sum_us: 0,
-            delay_cnt: 0,
+            window_min_owd: None,
+            base_history: [None; BASE_OWD_WINDOWS],
+            base_idx: 0,
             last_fb: Timer::micros(),
         }
     }
@@ -104,20 +106,24 @@ impl FeedbackState {
     fn record_packet(&mut self, tx_us: u32) {
         let rx_us = Timer::micros() as u32;
         let owd = rx_us.wrapping_sub(tx_us);
-        self.min_owd = Some(match self.min_owd {
+        self.window_min_owd = Some(match self.window_min_owd {
             Some(m) if (owd.wrapping_sub(m) as i32) >= 0 => m,
             _ => owd,
         });
-        self.delay_sum_us += owd.wrapping_sub(self.min_owd.unwrap()) as u64;
-        self.delay_cnt = self.delay_cnt.saturating_add(1);
     }
 
     async fn send(&mut self, socket: &UdpSocket, server_addr: SocketAddrV4) -> Result<()> {
         self.last_fb = Timer::micros();
-        let cnt = mem::take(&mut self.delay_cnt);
-        let sum = mem::take(&mut self.delay_sum_us);
-        let queue_delay_us = if cnt > 0 {
-            (sum / cnt as u64) as u32
+        let queue_delay_us = if let Some(cur_min) = self.window_min_owd.take() {
+            self.base_history[self.base_idx] = Some(cur_min);
+            self.base_idx = (self.base_idx + 1) % BASE_OWD_WINDOWS;
+            let mut base = cur_min;
+            for m in self.base_history.into_iter().flatten() {
+                if (m.wrapping_sub(base) as i32) < 0 {
+                    base = m;
+                }
+            }
+            cur_min.wrapping_sub(base)
         } else {
             0
         };
