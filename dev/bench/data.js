@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795387473820,
+  "lastUpdate": 1795387657080,
   "repoUrl": "https://github.com/olimpiadi-informatica/pixie",
   "entries": {
     "Flash codec micro-benchmark (chunk_codec)": [
@@ -1297,6 +1297,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "flash, cached (qemu e2e)",
             "value": 13.165,
+            "unit": "s"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "veluca93@gmail.com",
+            "name": "Luca Versari",
+            "username": "veluca93"
+          },
+          "committer": {
+            "email": "55024474+Virv12@users.noreply.github.com",
+            "name": "Filippo Casarin",
+            "username": "Virv12"
+          },
+          "distinct": true,
+          "id": "0add4adc0bf4237245558316610da1acf4a4f515",
+          "message": "Use u64 in Timer::ensure_init and fix rustfmt",
+          "timestamp": "2026-11-22T23:42:40+01:00",
+          "tree_id": "6e1d2264221dba58992254e0aef137a3ee0bf117",
+          "url": "https://github.com/olimpiadi-informatica/pixie/commit/0add4adc0bf4237245558316610da1acf4a4f515"
+        },
+        "date": 1795387657055,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "store (qemu e2e)",
+            "value": 26.084,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cold (qemu e2e)",
+            "value": 18.454,
+            "unit": "s"
+          },
+          {
+            "name": "flash, cached (qemu e2e)",
+            "value": 13.975,
             "unit": "s"
           }
         ]
