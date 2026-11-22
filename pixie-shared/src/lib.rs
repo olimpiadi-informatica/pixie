@@ -22,8 +22,8 @@ pub use config::*;
 /// Maximum size in bytes for a chunk.
 pub const MAX_CHUNK_SIZE: usize = 1 << 22;
 
-/// Prefix bytes on every chunk broadcast UDP packet: 4-byte LE sequence number + 32-byte chunk hash.
-pub const CHUNK_PACKET_PREFIX_LEN: usize = 4 + OUT_LEN;
+/// Prefix bytes on every chunk broadcast UDP packet: 4-byte LE sequence number + 4-byte LE tx_us + 32-byte chunk hash.
+pub const CHUNK_PACKET_PREFIX_LEN: usize = 8 + OUT_LEN;
 
 pub const ACTION_PORT: u16 = 25640;
 
@@ -171,8 +171,12 @@ pub enum UdpRequest {
     ActionProgress(usize, usize),
     /// Requests the given chunks to be broadcasted by the server.
     RequestChunks(Vec<ChunkHash>),
-    /// Reports broadcast packet reception and loss counts since the previous report.
-    BroadcastFeedback { received: u32, lost: u32 },
+    /// Reports broadcast packet reception, loss, and queuing delay since the previous report.
+    BroadcastFeedback {
+        received: u32,
+        lost: u32,
+        queue_delay_us: u32,
+    },
 }
 
 /// A request for the tcp server.
