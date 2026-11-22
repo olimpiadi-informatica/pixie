@@ -4,6 +4,8 @@ extern crate alloc;
 
 pub mod bijection;
 pub mod chunk_codec;
+#[cfg(feature = "client-net")]
+pub mod client_net;
 #[cfg(feature = "std")]
 pub mod config;
 pub mod rpc;

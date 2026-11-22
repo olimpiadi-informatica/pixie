@@ -17,6 +17,7 @@ rand = "0.9"
 
 [features]
 std = ["ipnet", "macaddr", "serde/std"]
+client-net = []
 
 [lib]
 bench = false
