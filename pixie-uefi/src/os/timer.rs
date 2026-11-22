@@ -1,11 +1,11 @@
 use core::arch::x86_64::_rdtsc;
-use core::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use core::time::Duration;
 
 use smoltcp::time::Instant;
 
 static TICKS_AT_START: AtomicI64 = AtomicI64::new(0);
-static TICKS_PER_MICRO: AtomicI64 = AtomicI64::new(0);
+static US_PER_TICK_Q32: AtomicU64 = AtomicU64::new(0);
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 pub struct Timer {}
@@ -27,20 +27,18 @@ impl Timer {
         uefi::boot::stall(Duration::from_micros(20000));
         let tsc_after = rdtsc();
 
+        let dt_ticks = (tsc_after - tsc_before).max(1) as u128;
+        let us_per_tick_q32 = ((20_000u128 << 32) / dt_ticks) as u64;
         TICKS_AT_START.store(tsc_after, Ordering::Relaxed);
-        // TICKS_PER_MICRO is a multiple of 10 on every reasonable system.
-        TICKS_PER_MICRO.store(
-            (tsc_after - tsc_before) / (20000 * 10) * 10,
-            Ordering::Relaxed,
-        );
+        US_PER_TICK_Q32.store(us_per_tick_q32, Ordering::Relaxed);
         INITIALIZED.store(true, Ordering::Relaxed);
     }
 
     pub fn micros() -> i64 {
         Self::ensure_init();
-        let ticks_at_start = TICKS_AT_START.load(Ordering::Relaxed);
-        let ticks_per_micro = TICKS_PER_MICRO.load(Ordering::Relaxed);
-        (rdtsc() - ticks_at_start) / ticks_per_micro
+        let ticks = (rdtsc() - TICKS_AT_START.load(Ordering::Relaxed)).max(0) as u128;
+        let scale = US_PER_TICK_Q32.load(Ordering::Relaxed) as u128;
+        ((ticks * scale) >> 32) as i64
     }
 
     pub fn instant() -> Instant {
