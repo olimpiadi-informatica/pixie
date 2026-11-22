@@ -80,20 +80,58 @@ fn handle_packet(
     Ok(Some((pos, data)))
 }
 
-async fn send_feedback(
-    socket: &UdpSocket,
-    server_addr: SocketAddrV4,
-    received: &mut u32,
-    lost: &mut u32,
-) -> Result<()> {
-    if *received > 0 || *lost > 0 {
-        let msg = postcard::to_allocvec(&UdpRequest::BroadcastFeedback {
-            received: mem::take(received),
-            lost: mem::take(lost),
-        })?;
-        socket.send_to(server_addr, &msg).await?;
+struct FeedbackState {
+    received: u32,
+    lost: u32,
+    min_owd: Option<u32>,
+    delay_sum_us: u64,
+    delay_cnt: u32,
+    last_fb: i64,
+}
+
+impl FeedbackState {
+    fn new() -> Self {
+        Self {
+            received: 0,
+            lost: 0,
+            min_owd: None,
+            delay_sum_us: 0,
+            delay_cnt: 0,
+            last_fb: Timer::micros(),
+        }
     }
-    Ok(())
+
+    fn record_packet(&mut self, tx_us: u32) {
+        let rx_us = Timer::micros() as u32;
+        let owd = rx_us.wrapping_sub(tx_us);
+        self.min_owd = Some(match self.min_owd {
+            Some(m) if (owd.wrapping_sub(m) as i32) >= 0 => m,
+            _ => owd,
+        });
+        self.delay_sum_us += owd.wrapping_sub(self.min_owd.unwrap()) as u64;
+        self.delay_cnt = self.delay_cnt.saturating_add(1);
+    }
+
+    async fn send(&mut self, socket: &UdpSocket, server_addr: SocketAddrV4) -> Result<()> {
+        self.last_fb = Timer::micros();
+        let cnt = mem::take(&mut self.delay_cnt);
+        let sum = mem::take(&mut self.delay_sum_us);
+        let queue_delay_us = if cnt > 0 {
+            (sum / cnt as u64) as u32
+        } else {
+            0
+        };
+
+        if self.received > 0 || self.lost > 0 {
+            let msg = postcard::to_allocvec(&UdpRequest::BroadcastFeedback {
+                received: mem::take(&mut self.received),
+                lost: mem::take(&mut self.lost),
+                queue_delay_us,
+            })?;
+            socket.send_to(server_addr, &msg).await?;
+        }
+        Ok(())
+    }
 }
 
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
@@ -188,8 +226,8 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let task1 = async {
         let tx = tx;
         let mut last_seen = Vec::new();
-        let (mut last_seq, mut win_recv, mut win_lost) = (None::<u32>, 0u32, 0u32);
-        let mut last_fb = Timer::micros();
+        let mut last_seq = None::<u32>;
+        let mut fb = FeedbackState::new();
         let free_mem = memory::stats().free;
         let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
         log::debug!(
@@ -207,10 +245,13 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                     }
                     stats.borrow_mut().pack_recv += 1;
                     let seq = u32::from_le_bytes(buf[..4].try_into().unwrap());
+                    let tx_us = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+                    fb.record_packet(tx_us);
+
                     if let Some(prev) = last_seq {
                         let gap = seq.wrapping_sub(prev).wrapping_sub(1);
                         if gap < 100_000 {
-                            win_lost = win_lost.saturating_add(gap);
+                            fb.lost = fb.lost.saturating_add(gap);
                             last_seq = Some(seq);
                         } else if seq.wrapping_sub(prev) < u32::MAX - 64 {
                             last_seq = Some(seq);
@@ -218,10 +259,10 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                     } else {
                         last_seq = Some(seq);
                     }
-                    win_recv = win_recv.saturating_add(1);
+                    fb.received = fb.received.saturating_add(1);
 
                     let chunk =
-                        handle_packet(&buf[4..], &mut chunks_info, &mut received, &mut last_seen)?;
+                        handle_packet(&buf[8..], &mut chunks_info, &mut received, &mut last_seen)?;
                     if let Some((pos, data)) = chunk {
                         tx.send((pos, data)).await.expect("receiver was dropped");
                     }
@@ -235,15 +276,13 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                     }
 
                     let now_us = Timer::micros();
-                    let elapsed = now_us - last_fb;
-                    if elapsed >= 200_000 || (win_lost >= 16 && elapsed >= 50_000) {
-                        send_feedback(&socket, server_addr, &mut win_recv, &mut win_lost).await?;
-                        last_fb = now_us;
+                    let elapsed = now_us - fb.last_fb;
+                    if elapsed >= 200_000 || (fb.lost >= 16 && elapsed >= 50_000) {
+                        fb.send(&socket, server_addr).await?;
                     }
                 }
                 Either::Right(((), _sleep)) => {
-                    send_feedback(&socket, server_addr, &mut win_recv, &mut win_lost).await?;
-                    last_fb = Timer::micros();
+                    fb.send(&socket, server_addr).await?;
 
                     // TODO(virv): compute the number of chunks to request
                     let chunks: Vec<_> =
@@ -254,7 +293,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                 }
             }
         }
-        send_feedback(&socket, server_addr, &mut win_recv, &mut win_lost).await?;
+        fb.send(&socket, server_addr).await?;
         Ok::<_, Error>(())
     };
 

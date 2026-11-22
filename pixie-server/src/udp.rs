@@ -25,12 +25,19 @@ use tokio::{
     time,
 };
 
+struct ClientFeedback {
+    peer: Ipv4Addr,
+    received: u32,
+    lost: u32,
+    queue_delay_us: u32,
+}
+
 async fn broadcast_chunks(
     state: &State,
     socket: &UdpSocket,
     chunks_broadcast: Ipv4Addr,
     mut rx: Receiver<ChunkHash>,
-    mut feedback_rx: Receiver<(Ipv4Addr, u32, u32)>,
+    mut feedback_rx: Receiver<ClientFeedback>,
 ) -> Result<()> {
     const MIN_RATE: f64 = 500_000.0; // 4 Mbps
     const INIT_RATE: f64 = 10_000_000.0; // 80 Mbps
@@ -43,18 +50,20 @@ async fn broadcast_chunks(
 
     let mut queue = BTreeSet::<ChunkHash>::new();
     let mut write_buf = [0; UDP_BODY_LEN];
-    let mut wait_for = Instant::now();
+    let start_time = Instant::now();
+    let mut wait_for = start_time;
     let mut delay = tokio_timerfd::Delay::new(wait_for)?;
     let mut index = [0; 32];
     let mut seq: u32 = 0;
 
     let mut rate_bytes_s = INIT_RATE;
     let mut ceiling_bytes_s: Option<f64> = None;
+    let mut clean_ticks = 0u32;
     let mut cooldown_until = wait_for;
     let mut tick_start = wait_for;
     let mut tick_bytes = 0u64;
     let mut tick_pkts = 0u64;
-    let mut clients = HashMap::<Ipv4Addr, (u64, u64)>::new();
+    let mut clients = HashMap::<Ipv4Addr, (u64, u64, u32)>::new();
 
     loop {
         let get_index = async {
@@ -82,6 +91,7 @@ async fn broadcast_chunks(
                     if idle >= IDLE_RESET {
                         rate_bytes_s = INIT_RATE;
                         ceiling_bytes_s = None;
+                        clean_ticks = 0;
                         cooldown_until = now;
                         clients.clear();
                         tick_bytes = 0;
@@ -119,7 +129,7 @@ async fn broadcast_chunks(
         let chunks_addr = SocketAddrV4::new(chunks_broadcast, CHUNKS_PORT);
 
         let mut encoder = Encoder::new(cdata);
-        write_buf[4..CHUNK_PACKET_PREFIX_LEN].copy_from_slice(&index);
+        write_buf[8..CHUNK_PACKET_PREFIX_LEN].copy_from_slice(&index);
         while let Some(len) = encoder.next_packet(&mut write_buf[CHUNK_PACKET_PREFIX_LEN..]) {
             let mut now = Instant::now();
             if wait_for > now {
@@ -136,6 +146,8 @@ async fn broadcast_chunks(
             }
 
             write_buf[..4].copy_from_slice(&seq.to_le_bytes());
+            let tx_us = start_time.elapsed().as_micros() as u32;
+            write_buf[4..8].copy_from_slice(&tx_us.to_le_bytes());
             seq = seq.wrapping_add(1);
 
             let total_len = CHUNK_PACKET_PREFIX_LEN + len;
@@ -147,6 +159,7 @@ async fn broadcast_chunks(
                     if now >= cooldown_until {
                         ceiling_bytes_s = Some(rate_bytes_s);
                         rate_bytes_s = (rate_bytes_s * 0.85).max(MIN_RATE);
+                        clean_ticks = 0;
                         cooldown_until = now + CUT_COOLDOWN;
                     }
                     delay.reset(now + Duration::from_millis(1));
@@ -166,52 +179,67 @@ async fn broadcast_chunks(
             tick_pkts += 1;
 
             if now >= tick_start + TICK {
-                while let Ok((peer, received, lost)) = feedback_rx.try_recv() {
-                    let entry = clients.entry(peer).or_default();
-                    entry.0 += received as u64;
-                    entry.1 += lost as u64;
+                while let Ok(fb) = feedback_rx.try_recv() {
+                    let entry = clients.entry(fb.peer).or_default();
+                    entry.0 += fb.received as u64;
+                    entry.1 += fb.lost as u64;
+                    entry.2 = entry.2.max(fb.queue_delay_us);
                 }
-                let mut losses: Vec<f64> = clients
-                    .drain()
-                    .filter(|&(_, (r, l))| r + l > 0)
-                    .map(|(_, (r, l))| l as f64 / (r + l) as f64)
-                    .collect();
+                let mut losses = Vec::new();
+                let mut max_qdelay_us = 0u32;
+                for (_, (r, l, qd)) in clients.drain() {
+                    if r + l > 0 {
+                        losses.push(l as f64 / (r + l) as f64);
+                    }
+                    max_qdelay_us = max_qdelay_us.max(qd);
+                }
                 let elapsed = now.saturating_duration_since(tick_start);
                 if !losses.is_empty() && tick_pkts >= 16 && !elapsed.is_zero() {
                     losses.sort_by(f64::total_cmp);
                     let loss = losses[(losses.len() - 1).saturating_sub(losses.len() / 10)];
                     let achieved = tick_bytes as f64 / elapsed.as_secs_f64();
-                    let new_rate = if loss <= 0.005 && achieved >= rate_bytes_s * 0.7 {
-                        if let Some(c) = ceiling_bytes_s
-                            && rate_bytes_s >= c * 1.35
+                    let new_rate =
+                        if (loss > 0.02 || max_qdelay_us > 3_000) && now >= cooldown_until {
+                            ceiling_bytes_s = Some(match ceiling_bytes_s {
+                                Some(c) => 0.5 * c + 0.5 * rate_bytes_s,
+                                None => rate_bytes_s,
+                            });
+                            clean_ticks = 0;
+                            cooldown_until = now + CUT_COOLDOWN;
+                            rate_bytes_s * 0.88
+                        } else if loss <= 0.005
+                            && max_qdelay_us <= 2_000
+                            && achieved >= rate_bytes_s * 0.7
                         {
-                            ceiling_bytes_s = None;
+                            clean_ticks += 1;
+                            if let Some(c) = ceiling_bytes_s
+                                && rate_bytes_s >= c * 1.35
+                            {
+                                ceiling_bytes_s = None;
+                            }
+                            match ceiling_bytes_s {
+                                Some(c) if rate_bytes_s >= c * 0.85 => {
+                                    if clean_ticks >= 2 {
+                                        clean_ticks = 0;
+                                        rate_bytes_s * 1.03
+                                    } else {
+                                        rate_bytes_s
+                                    }
+                                }
+                                _ => rate_bytes_s * 1.15,
+                            }
+                        } else {
+                            rate_bytes_s
                         }
-                        let factor = match ceiling_bytes_s {
-                            Some(c) if rate_bytes_s >= c * 0.80 => 1.03,
-                            _ => 1.20,
-                        };
-                        rate_bytes_s * factor
-                    } else if loss <= 0.02 {
-                        rate_bytes_s
-                    } else if now >= cooldown_until {
-                        ceiling_bytes_s = Some(match ceiling_bytes_s {
-                            Some(c) => 0.5 * c + 0.5 * rate_bytes_s,
-                            None => rate_bytes_s,
-                        });
-                        cooldown_until = now + CUT_COOLDOWN;
-                        rate_bytes_s * 0.85
-                    } else {
-                        rate_bytes_s
-                    }
-                    .clamp(MIN_RATE, MAX_RATE);
+                        .clamp(MIN_RATE, MAX_RATE);
 
                     if (new_rate - rate_bytes_s).abs() >= 1.0 {
                         rate_bytes_s = new_rate;
                         log::debug!(
-                            "Broadcast speed for {chunks_broadcast}: {:.1} MB/s (loss {:.2}%)",
+                            "Broadcast speed for {chunks_broadcast}: {:.1} MB/s (loss {:.2}%, qdelay {:.1}ms)",
                             rate_bytes_s / 1_000_000.0,
-                            loss * 100.0
+                            loss * 100.0,
+                            max_qdelay_us as f64 / 1000.0,
                         );
                     }
                 }
@@ -301,7 +329,7 @@ async fn broadcast_hint(state: &State, socket: &UdpSocket, ip: Ipv4Addr) -> Resu
 struct NetChannels {
     net: Ipv4Net,
     chunk_tx: Sender<ChunkHash>,
-    feedback_tx: Sender<(Ipv4Addr, u32, u32)>,
+    feedback_tx: Sender<ClientFeedback>,
 }
 
 async fn handle_requests(
@@ -341,14 +369,23 @@ async fn handle_requests(
                     entry.chunk_tx.send(hash).await?;
                 }
             }
-            Ok(UdpRequest::BroadcastFeedback { received, lost }) => {
+            Ok(UdpRequest::BroadcastFeedback {
+                received,
+                lost,
+                queue_delay_us,
+            }) => {
                 let IpAddr::V4(peer_ip) = peer_addr.ip() else {
                     continue;
                 };
                 let Some(entry) = net_tx.iter().find(|c| c.net.contains(&peer_ip)) else {
                     continue;
                 };
-                let _ = entry.feedback_tx.try_send((peer_ip, received, lost));
+                let _ = entry.feedback_tx.try_send(ClientFeedback {
+                    peer: peer_ip,
+                    received,
+                    lost,
+                    queue_delay_us,
+                });
             }
             Err(e) => {
                 log::warn!("Invalid request from {peer_addr}: {e}");
