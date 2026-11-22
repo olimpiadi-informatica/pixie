@@ -32,6 +32,181 @@ struct ClientFeedback {
     queue_delay_us: u32,
 }
 
+struct RateController {
+    rate_bytes_s: f64,
+    ceiling_bytes_s: Option<f64>,
+    clean_ticks: u32,
+    cooldown_until: Instant,
+    tick_start: Instant,
+    tick_bytes: u64,
+    tick_pkts: u64,
+    clients: HashMap<Ipv4Addr, (u64, u64, u32)>,
+}
+
+impl RateController {
+    const MIN_RATE: f64 = 500_000.0; // 4 Mbps
+    const INIT_RATE: f64 = 10_000_000.0; // 80 Mbps
+    const MAX_RATE: f64 = 125_000_000.0; // 1 Gbps
+    const TICK: Duration = Duration::from_millis(200);
+    const CUT_COOLDOWN: Duration = Duration::from_millis(500);
+    const IDLE_RESET: Duration = Duration::from_secs(10);
+    const LOSS_CUT: f64 = 0.02;
+    const LOSS_GROW: f64 = 0.005;
+    const QDELAY_CUT_US: u32 = 3_000;
+    const QDELAY_GROW_US: u32 = 2_000;
+
+    fn new(now: Instant) -> Self {
+        Self {
+            rate_bytes_s: Self::INIT_RATE,
+            ceiling_bytes_s: None,
+            clean_ticks: 0,
+            cooldown_until: now,
+            tick_start: now,
+            tick_bytes: 0,
+            tick_pkts: 0,
+            clients: HashMap::new(),
+        }
+    }
+
+    fn packet_delay(&self, sent_len: usize) -> Duration {
+        Duration::from_secs_f64(sent_len as f64 / self.rate_bytes_s)
+    }
+
+    fn on_idle(
+        &mut self,
+        now: Instant,
+        idle: Duration,
+        feedback_rx: &mut Receiver<ClientFeedback>,
+    ) {
+        while feedback_rx.try_recv().is_ok() {}
+        if idle >= Self::IDLE_RESET {
+            self.rate_bytes_s = Self::INIT_RATE;
+            self.ceiling_bytes_s = None;
+            self.clean_ticks = 0;
+            self.cooldown_until = now;
+            self.clients.clear();
+            self.tick_bytes = 0;
+            self.tick_pkts = 0;
+            self.tick_start = now;
+        } else {
+            self.tick_start += idle;
+        }
+    }
+
+    fn cut(&mut self, now: Instant, factor: f64) -> bool {
+        if now < self.cooldown_until {
+            return false;
+        }
+        self.ceiling_bytes_s = Some(match self.ceiling_bytes_s {
+            Some(c) => 0.5 * c + 0.5 * self.rate_bytes_s,
+            None => self.rate_bytes_s,
+        });
+        self.clean_ticks = 0;
+        self.cooldown_until = now + Self::CUT_COOLDOWN;
+        let new_rate = (self.rate_bytes_s * factor).clamp(Self::MIN_RATE, Self::MAX_RATE);
+        let changed = (new_rate - self.rate_bytes_s).abs() >= 1.0;
+        self.rate_bytes_s = new_rate;
+        changed
+    }
+
+    fn on_send_congestion(&mut self, now: Instant) {
+        self.cut(now, 0.85);
+    }
+
+    fn update_rate(
+        &mut self,
+        now: Instant,
+        loss: f64,
+        qdelay_us: u32,
+        achieved_bytes_s: f64,
+    ) -> bool {
+        if loss > Self::LOSS_CUT || qdelay_us > Self::QDELAY_CUT_US {
+            return self.cut(now, 0.88);
+        }
+        if loss <= Self::LOSS_GROW
+            && qdelay_us <= Self::QDELAY_GROW_US
+            && achieved_bytes_s >= self.rate_bytes_s * 0.7
+        {
+            self.clean_ticks += 1;
+            if let Some(c) = self.ceiling_bytes_s
+                && self.rate_bytes_s >= c * 1.35
+            {
+                self.ceiling_bytes_s = None;
+            }
+            let factor = match self.ceiling_bytes_s {
+                Some(c) if self.rate_bytes_s >= c * 0.85 => {
+                    if self.clean_ticks >= 2 {
+                        self.clean_ticks = 0;
+                        1.03
+                    } else {
+                        1.0
+                    }
+                }
+                _ => 1.15,
+            };
+            let new_rate = (self.rate_bytes_s * factor).clamp(Self::MIN_RATE, Self::MAX_RATE);
+            let changed = (new_rate - self.rate_bytes_s).abs() >= 1.0;
+            self.rate_bytes_s = new_rate;
+            return changed;
+        }
+        false
+    }
+
+    fn percentile_90<T: Copy>(vals: &mut [T], cmp: impl Fn(&T, &T) -> std::cmp::Ordering) -> T {
+        vals.sort_by(cmp);
+        vals[(vals.len() - 1).saturating_sub(vals.len() / 10)]
+    }
+
+    fn on_packet_sent(
+        &mut self,
+        now: Instant,
+        sent_len: usize,
+        feedback_rx: &mut Receiver<ClientFeedback>,
+        broadcast_ip: Ipv4Addr,
+    ) {
+        self.tick_bytes += sent_len as u64;
+        self.tick_pkts += 1;
+        if now < self.tick_start + Self::TICK {
+            return;
+        }
+
+        while let Ok(fb) = feedback_rx.try_recv() {
+            let entry = self.clients.entry(fb.peer).or_default();
+            entry.0 += fb.received as u64;
+            entry.1 += fb.lost as u64;
+            entry.2 = entry.2.max(fb.queue_delay_us);
+        }
+
+        let mut losses = Vec::new();
+        let mut qdelays = Vec::new();
+        for (_, (r, l, qd)) in self.clients.drain() {
+            if r + l > 0 {
+                losses.push(l as f64 / (r + l) as f64);
+                qdelays.push(qd);
+            }
+        }
+
+        let elapsed = now.saturating_duration_since(self.tick_start);
+        if !losses.is_empty() && self.tick_pkts >= 16 && !elapsed.is_zero() {
+            let loss = Self::percentile_90(&mut losses, f64::total_cmp);
+            let qdelay_us = Self::percentile_90(&mut qdelays, Ord::cmp);
+            let achieved = self.tick_bytes as f64 / elapsed.as_secs_f64();
+            if self.update_rate(now, loss, qdelay_us, achieved) {
+                log::debug!(
+                    "Broadcast speed for {broadcast_ip}: {:.1} MB/s (loss {:.2}%, qdelay {:.1}ms)",
+                    self.rate_bytes_s / 1_000_000.0,
+                    loss * 100.0,
+                    qdelay_us as f64 / 1000.0,
+                );
+            }
+        }
+
+        self.tick_start = now;
+        self.tick_bytes = 0;
+        self.tick_pkts = 0;
+    }
+}
+
 async fn broadcast_chunks(
     state: &State,
     socket: &UdpSocket,
@@ -39,12 +214,6 @@ async fn broadcast_chunks(
     mut rx: Receiver<ChunkHash>,
     mut feedback_rx: Receiver<ClientFeedback>,
 ) -> Result<()> {
-    const MIN_RATE: f64 = 500_000.0; // 4 Mbps
-    const INIT_RATE: f64 = 10_000_000.0; // 80 Mbps
-    const MAX_RATE: f64 = 125_000_000.0; // 1 Gbps
-    const TICK: Duration = Duration::from_millis(200);
-    const CUT_COOLDOWN: Duration = Duration::from_millis(500);
-    const IDLE_RESET: Duration = Duration::from_secs(10);
     const MIN_SLEEP: Duration = Duration::from_micros(100);
     const MAX_BURST_LAG: Duration = Duration::from_micros(250);
 
@@ -55,15 +224,7 @@ async fn broadcast_chunks(
     let mut delay = tokio_timerfd::Delay::new(wait_for)?;
     let mut index = [0; 32];
     let mut seq: u32 = 0;
-
-    let mut rate_bytes_s = INIT_RATE;
-    let mut ceiling_bytes_s: Option<f64> = None;
-    let mut clean_ticks = 0u32;
-    let mut cooldown_until = wait_for;
-    let mut tick_start = wait_for;
-    let mut tick_bytes = 0u64;
-    let mut tick_pkts = 0u64;
-    let mut clients = HashMap::<Ipv4Addr, (u64, u64, u32)>::new();
+    let mut rate = RateController::new(start_time);
 
     loop {
         let get_index = async {
@@ -86,20 +247,8 @@ async fn broadcast_chunks(
                     let idle_start = Instant::now();
                     let hash = rx.recv().await;
                     let now = Instant::now();
-                    while feedback_rx.try_recv().is_ok() {}
                     let idle = now.saturating_duration_since(idle_start);
-                    if idle >= IDLE_RESET {
-                        rate_bytes_s = INIT_RATE;
-                        ceiling_bytes_s = None;
-                        clean_ticks = 0;
-                        cooldown_until = now;
-                        clients.clear();
-                        tick_bytes = 0;
-                        tick_pkts = 0;
-                        tick_start = now;
-                    } else {
-                        tick_start += idle;
-                    }
+                    rate.on_idle(now, idle, &mut feedback_rx);
                     wait_for = wait_for.max(now);
                     hash
                 }
@@ -156,12 +305,7 @@ async fn broadcast_chunks(
                 Err(e) if e.kind() == ErrorKind::WouldBlock || e.raw_os_error() == Some(105) => {
                     log::warn!("UDP broadcast send congestion on {chunks_broadcast}: {e}");
                     let now = Instant::now();
-                    if now >= cooldown_until {
-                        ceiling_bytes_s = Some(rate_bytes_s);
-                        rate_bytes_s = (rate_bytes_s * 0.85).max(MIN_RATE);
-                        clean_ticks = 0;
-                        cooldown_until = now + CUT_COOLDOWN;
-                    }
+                    rate.on_send_congestion(now);
                     delay.reset(now + Duration::from_millis(1));
                     tokio::select! {
                         res = &mut delay => res?,
@@ -174,79 +318,8 @@ async fn broadcast_chunks(
             };
             ensure!(sent_len == total_len, "Could not send packet");
 
-            wait_for += Duration::from_secs_f64(sent_len as f64 / rate_bytes_s);
-            tick_bytes += sent_len as u64;
-            tick_pkts += 1;
-
-            if now >= tick_start + TICK {
-                while let Ok(fb) = feedback_rx.try_recv() {
-                    let entry = clients.entry(fb.peer).or_default();
-                    entry.0 += fb.received as u64;
-                    entry.1 += fb.lost as u64;
-                    entry.2 = entry.2.max(fb.queue_delay_us);
-                }
-                let mut losses = Vec::new();
-                let mut max_qdelay_us = 0u32;
-                for (_, (r, l, qd)) in clients.drain() {
-                    if r + l > 0 {
-                        losses.push(l as f64 / (r + l) as f64);
-                    }
-                    max_qdelay_us = max_qdelay_us.max(qd);
-                }
-                let elapsed = now.saturating_duration_since(tick_start);
-                if !losses.is_empty() && tick_pkts >= 16 && !elapsed.is_zero() {
-                    losses.sort_by(f64::total_cmp);
-                    let loss = losses[(losses.len() - 1).saturating_sub(losses.len() / 10)];
-                    let achieved = tick_bytes as f64 / elapsed.as_secs_f64();
-                    let new_rate =
-                        if (loss > 0.02 || max_qdelay_us > 3_000) && now >= cooldown_until {
-                            ceiling_bytes_s = Some(match ceiling_bytes_s {
-                                Some(c) => 0.5 * c + 0.5 * rate_bytes_s,
-                                None => rate_bytes_s,
-                            });
-                            clean_ticks = 0;
-                            cooldown_until = now + CUT_COOLDOWN;
-                            rate_bytes_s * 0.88
-                        } else if loss <= 0.005
-                            && max_qdelay_us <= 2_000
-                            && achieved >= rate_bytes_s * 0.7
-                        {
-                            clean_ticks += 1;
-                            if let Some(c) = ceiling_bytes_s
-                                && rate_bytes_s >= c * 1.35
-                            {
-                                ceiling_bytes_s = None;
-                            }
-                            match ceiling_bytes_s {
-                                Some(c) if rate_bytes_s >= c * 0.85 => {
-                                    if clean_ticks >= 2 {
-                                        clean_ticks = 0;
-                                        rate_bytes_s * 1.03
-                                    } else {
-                                        rate_bytes_s
-                                    }
-                                }
-                                _ => rate_bytes_s * 1.15,
-                            }
-                        } else {
-                            rate_bytes_s
-                        }
-                        .clamp(MIN_RATE, MAX_RATE);
-
-                    if (new_rate - rate_bytes_s).abs() >= 1.0 {
-                        rate_bytes_s = new_rate;
-                        log::debug!(
-                            "Broadcast speed for {chunks_broadcast}: {:.1} MB/s (loss {:.2}%, qdelay {:.1}ms)",
-                            rate_bytes_s / 1_000_000.0,
-                            loss * 100.0,
-                            max_qdelay_us as f64 / 1000.0,
-                        );
-                    }
-                }
-                tick_start = now;
-                tick_bytes = 0;
-                tick_pkts = 0;
-            }
+            wait_for += rate.packet_delay(sent_len);
+            rate.on_packet_sent(now, sent_len, &mut feedback_rx, chunks_broadcast);
         }
     }
 
@@ -427,4 +500,41 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     futures::future::try_join_all(tasks).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_controller_ramp_cut_cooldown_and_idle_reset() {
+        let t0 = Instant::now();
+        let mut rc = RateController::new(t0);
+        let init = rc.rate_bytes_s;
+
+        // Clean tick grows by 15% when no ceiling is set.
+        assert!(rc.update_rate(t0 + Duration::from_millis(200), 0.0, 0, init));
+        let r1 = rc.rate_bytes_s;
+        assert!((r1 - init * 1.15).abs() < 1e-3);
+
+        // Loss above threshold cuts by 0.88x and sets ceiling; second cut inside cooldown is skipped.
+        let cut_time = t0 + Duration::from_millis(600);
+        assert!(rc.update_rate(cut_time, 0.03, 0, r1));
+        let after_cut = rc.rate_bytes_s;
+        assert!((after_cut - r1 * 0.88).abs() < 1e-3);
+        assert_eq!(rc.ceiling_bytes_s, Some(r1));
+        assert!(!rc.update_rate(cut_time + Duration::from_millis(200), 0.0, 5_000, after_cut));
+        assert_eq!(rc.rate_bytes_s, after_cut);
+
+        // Above 0.85 * ceiling: first clean tick holds, second grows by 1.03x.
+        assert!(!rc.update_rate(cut_time + Duration::from_millis(400), 0.0, 0, after_cut));
+        assert!(rc.update_rate(cut_time + Duration::from_millis(600), 0.0, 0, after_cut));
+        assert!((rc.rate_bytes_s - after_cut * 1.03).abs() < 1e-3);
+
+        // Idle >= IDLE_RESET resets back to INIT_RATE and clears ceiling.
+        let (_tx, mut rx) = mpsc::channel(4);
+        rc.on_idle(cut_time + Duration::from_secs(12), Duration::from_secs(10), &mut rx);
+        assert_eq!(rc.rate_bytes_s, RateController::INIT_RATE);
+        assert_eq!(rc.ceiling_bytes_s, None);
+    }
 }
