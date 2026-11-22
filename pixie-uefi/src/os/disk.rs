@@ -25,6 +25,8 @@ fn open_disk(handle: Handle) -> Result<ScopedProtocol<BlockIO>> {
     Ok(bio)
 }
 
+const MAX_IO_BYTES: usize = 256 * 1024;
+
 #[derive(Debug)]
 pub struct DiskPartition {
     pub byte_start: u64,
@@ -122,32 +124,47 @@ impl Disk {
         Ok(())
     }
 
-    pub async fn read(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
-        Executor::sched_yield().await;
-        self.read_sync(offset, buf)
+    pub async fn read(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<()> {
+        let block_size = self.block.media().block_size() as usize;
+        let max_io = (MAX_IO_BYTES / block_size).max(1) * block_size;
+        while !buf.is_empty() {
+            Executor::sched_yield().await;
+            let step = max_io - (offset % block_size as u64) as usize;
+            let len = buf.len().min(step);
+            let (head, tail) = buf.split_at_mut(len);
+            self.read_sync(offset, head)?;
+            offset += len as u64;
+            buf = tail;
+        }
+        Ok(())
     }
 
     pub fn write_sync(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
         let block_size = self.block.media().block_size() as u64;
         let media_id = self.block.media().media_id();
         let start_block = offset / block_size;
         let end_block = (offset + buf.len() as u64).div_ceil(block_size);
         let num_blocks = end_block - start_block;
-        if buf.len() as u64 != num_blocks * block_size
-            || !(buf.as_ptr() as usize).is_multiple_of(16)
-        {
-            //log::warn!(
-            //    "Unaligned write: offset {}, block size {}, buf addr {:p}, buf len {}",
-            //    offset,
-            //    block_size,
-            //    buf.as_ptr(),
-            //    buf.len()
-            //);
-            let mut buf2 = vec![0u8; (num_blocks * block_size) as usize + 15];
+        let total_bytes = (num_blocks * block_size) as usize;
+        if buf.len() != total_bytes || !(buf.as_ptr() as usize).is_multiple_of(16) {
+            let mut buf2 = vec![0u8; total_bytes + 15];
             let delta = buf2.as_ptr().align_offset(16);
-            let buf2 = &mut buf2[delta..delta + (num_blocks * block_size) as usize];
-            self.block.read_blocks(media_id, start_block, buf2)?;
+            let buf2 = &mut buf2[delta..delta + total_bytes];
             let start_offset = (offset % block_size) as usize;
+            if start_offset != 0 {
+                self.block
+                    .read_blocks(media_id, start_block, &mut buf2[..block_size as usize])?;
+            }
+            if start_offset + buf.len() != total_bytes && (num_blocks > 1 || start_offset == 0) {
+                self.block.read_blocks(
+                    media_id,
+                    end_block - 1,
+                    &mut buf2[total_bytes - block_size as usize..],
+                )?;
+            }
             buf2[start_offset..start_offset + buf.len()].copy_from_slice(buf);
             self.block.write_blocks(media_id, start_block, buf2)?;
         } else {
@@ -156,9 +173,18 @@ impl Disk {
         Ok(())
     }
 
-    pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
-        Executor::sched_yield().await;
-        self.write_sync(offset, buf)
+    pub async fn write(&mut self, mut offset: u64, mut buf: &[u8]) -> Result<()> {
+        let block_size = self.block.media().block_size() as usize;
+        let max_io = (MAX_IO_BYTES / block_size).max(1) * block_size;
+        while !buf.is_empty() {
+            Executor::sched_yield().await;
+            let step = max_io - (offset % block_size as u64) as usize;
+            let len = buf.len().min(step);
+            self.write_sync(offset, &buf[..len])?;
+            offset += len as u64;
+            buf = &buf[len..];
+        }
+        Ok(())
     }
 
     #[allow(clippy::type_complexity)]

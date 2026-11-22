@@ -36,6 +36,7 @@ mod tcp;
 mod udp;
 
 pub const ETH_PACKET_SIZE: usize = 1514;
+const MAX_RX_BATCH: usize = 1024;
 
 static EPHEMERAL_PORT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -201,9 +202,18 @@ fn poll() -> Option<u64> {
     } = data.as_mut().unwrap();
 
     let status_out = interface.poll_egress(now, device, socket_set);
-    let status_in = interface.poll_ingress_single(now, device, socket_set);
+    let mut rx_any = false;
+    for _ in 0..MAX_RX_BATCH {
+        if interface.poll_ingress_single(now, device, socket_set) == PollIngressSingleResult::None {
+            break;
+        }
+        rx_any = true;
+    }
+    if rx_any {
+        let _ = interface.poll_egress(now, device, socket_set);
+    }
 
-    if status_in == PollIngressSingleResult::None && status_out == PollResult::None {
+    if !rx_any && status_out == PollResult::None {
         return interface.poll_delay(now, socket_set).map(|x| x.micros());
     }
 
