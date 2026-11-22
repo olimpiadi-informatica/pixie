@@ -101,6 +101,38 @@ impl State {
         }
     }
 
+    /// Returns `(blake3_hash, byte_len)` for the named image and caches its serialized bytes for
+    /// broadcast FEC delivery.
+    pub fn get_image_info(&self, image: &str) -> Result<Option<(ChunkHash, usize)>> {
+        let Some(data) = self.get_image_serialized(image)? else {
+            return Ok(None);
+        };
+        let hash = *blake3::hash(&data).as_bytes();
+        let len = data.len();
+        let mut blobs = self
+            .image_blobs
+            .lock()
+            .expect("image_blobs lock is poisoned");
+        if blobs.len() >= 16 && !blobs.contains_key(&hash) {
+            blobs.clear();
+        }
+        blobs.insert(hash, data);
+        Ok(Some((hash, len)))
+    }
+
+    /// Looks up a chunk or cached serialized image by hash for `CHUNKS_PORT` FEC broadcasting.
+    pub fn get_broadcast_blob(&self, hash: ChunkHash) -> Result<Option<Vec<u8>>> {
+        if let Some(cdata) = self.get_chunk_cdata(hash)? {
+            return Ok(Some(cdata));
+        }
+        Ok(self
+            .image_blobs
+            .lock()
+            .expect("image_blobs lock is poisoned")
+            .get(&hash)
+            .cloned())
+    }
+
     /// Assumes that new_image is valid
     fn write_image(
         &self,

@@ -266,7 +266,7 @@ async fn broadcast_chunks(
         };
 
         let Some(cdata) = state
-            .get_chunk_cdata(index)
+            .get_broadcast_blob(index)
             .with_context(|| format!("get chunk {}", hex::encode(index)))?
         else {
             log::warn!("Chunk {} not found", hex::encode(index));

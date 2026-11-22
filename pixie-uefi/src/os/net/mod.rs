@@ -24,7 +24,6 @@ use crate::os::boot_options::BootOptions;
 use crate::os::executor::Executor;
 use crate::os::executor::event::{Event as ExecutorEvent, EventTrigger};
 use crate::os::net::interface::SnpDevice;
-pub use crate::os::net::tcp::TcpStream;
 pub use crate::os::net::udp::UdpSocket;
 use crate::os::send_wrapper::SendWrapper;
 use crate::os::timer::rdtsc;
@@ -32,7 +31,6 @@ use crate::os::ui;
 
 mod interface;
 mod speed;
-mod tcp;
 mod udp;
 
 pub const ETH_PACKET_SIZE: usize = 1514;

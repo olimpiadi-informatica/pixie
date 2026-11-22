@@ -182,41 +182,6 @@ pub enum UdpRequest {
     },
 }
 
-/// A request for the tcp server.
-///
-/// Over a single tcp connection multiple request can be sent.
-/// Each request is encoded as:
-/// - request length with 8 bytes;
-/// - request content encoded with postcard;
-///
-/// To each request the server will reply with a message in the same format:
-/// - request length with 8 bytes;
-/// - response content encoded with postcard;
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum TcpRequest {
-    /// Checks if the server contains the chunk in the database.
-    /// The server will reply with a bool.
-    HasChunk(ChunkHash),
-    /// Asks the server the [`Image`], the image name is deduced by the client configuration.
-    /// The server replies with the requested [`Image`].
-    GetImage,
-    /// Registers the client with the given info.
-    /// The response is empty.
-    Register(RegistrationInfo, UnitStats),
-    /// Uploads the given chunk to the server, the content is already compressed.
-    /// The response is empty.
-    UploadChunk(Vec<u8>),
-    /// Uploads the [`Image`] to the server, the image name is deduced by the client configuration.
-    /// The response is empty.
-    UploadImage(Image),
-    /// Asks the server for the client action to run.
-    /// The server will reply with an [`Action`].
-    GetAction,
-    /// Tells the server that the action is complete and can proced to the next action.
-    /// The response is emtpy.
-    ActionComplete,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg(feature = "std")]
 pub enum StatusUpdate {

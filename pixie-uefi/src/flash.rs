@@ -13,28 +13,18 @@ use lz4_flex::decompress;
 use pixie_shared::chunk_codec::Decoder;
 use pixie_shared::util::BytesFmt;
 use pixie_shared::{
-    CHUNK_PACKET_PREFIX_LEN, CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, TcpRequest, UdpRequest,
+    CHUNK_PACKET_PREFIX_LEN, CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, UdpRequest,
 };
 
 use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, TcpStream, UdpSocket};
+use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
 use crate::os::timer::Timer;
 use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
-
-async fn fetch_image(stream: &TcpStream) -> Result<Image> {
-    let req = TcpRequest::GetImage;
-    let mut buf = postcard::to_allocvec(&req)?;
-    stream.write_u64_le(buf.len() as u64).await?;
-    stream.write_all(&buf).await?;
-    let len = stream.read_u64_le().await?;
-    buf.resize(len as usize, 0);
-    stream.read_exact(&mut buf).await?;
-    Ok(postcard::from_bytes(&buf)?)
-}
+use crate::rpc::RpcClient;
 
 #[derive(Clone, PartialEq, Eq)]
 struct Stats {
@@ -140,12 +130,44 @@ impl FeedbackState {
     }
 }
 
+async fn fetch_image(server_addr: SocketAddrV4, hash: ChunkHash, len: usize) -> Result<Image> {
+    let socket = UdpSocket::bind(Some(CHUNKS_PORT)).await?;
+    let req = postcard::to_allocvec(&UdpRequest::RequestChunks(vec![hash]))?;
+    let mut decoder = Decoder::new(len);
+    let mut buf = [0; ETH_PACKET_SIZE];
+
+    socket.send_to(server_addr, &req).await?;
+    loop {
+        let recv = Box::pin(socket.recv_from(&mut buf));
+        let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
+        let rx_len = match select(recv, sleep).await {
+            Either::Left(((pkt, _), _)) => Some(pkt.len()),
+            Either::Right(((), _)) => None,
+        };
+        if let Some(rx_len) = rx_len {
+            let pkt = &buf[..rx_len];
+            if pkt.len() >= CHUNK_PACKET_PREFIX_LEN + 2 && pkt[8..CHUNK_PACKET_PREFIX_LEN] == hash {
+                if let Err(e) = decoder.add_packet(&pkt[CHUNK_PACKET_PREFIX_LEN..]) {
+                    log::warn!("Received invalid packet for image {hash:02x?}: {e}");
+                } else if let Some(bytes) = decoder.finish() {
+                    if blake3::hash(&bytes).as_bytes() != &hash {
+                        return Err(Error::msg("Image hash mismatch"));
+                    }
+                    return Ok(postcard::from_bytes(&bytes)?);
+                }
+            }
+        } else {
+            socket.send_to(server_addr, &req).await?;
+        }
+    }
+}
+
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
-    let stream = TcpStream::connect(server_addr).await?;
-    let image = fetch_image(&stream).await?;
-    stream.shutdown().await;
-    // TODO(virv): this could be better
-    stream.force_close().await;
+    let (image_hash, image_len) = RpcClient::new(*server_addr.ip())
+        .await?
+        .get_image_info()
+        .await?;
+    let image = fetch_image(server_addr, image_hash, image_len).await?;
 
     let mut chunks_info = BTreeMap::new();
     for chunk in &image.disk {
