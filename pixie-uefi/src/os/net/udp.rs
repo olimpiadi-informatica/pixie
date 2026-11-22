@@ -1,93 +1,81 @@
-use core::future::{Future, poll_fn};
-use core::net::{IpAddr, SocketAddrV4};
+use alloc::collections::VecDeque;
+use core::future::poll_fn;
+use core::net::SocketAddrV4;
 use core::task::Poll;
-
-use smoltcp::iface::SocketHandle;
-use smoltcp::socket::udp::{self, Socket};
-use smoltcp::wire::IpEndpoint;
 
 use crate::os::error::Result;
 use crate::os::net::speed::{RX_SPEED, TX_SPEED};
-use crate::os::net::{ETH_PACKET_SIZE, with_net};
+use crate::os::net::{ETH_PACKET_SIZE, UdpSocketSlot, with_net};
 
 pub struct UdpSocket {
-    handle: SocketHandle,
+    slot_idx: usize,
 }
 
 impl UdpSocket {
     pub async fn bind(listen_port: Option<u16>) -> Result<UdpSocket> {
         super::wait_for_ip().await;
-        const UDP_BUF_SIZE: usize = 1 << 22;
-        const UDP_PACKET_BUF_SIZE: usize = 1 << 10;
-        let rx_buffer = udp::PacketBuffer::new(
-            vec![udp::PacketMetadata::EMPTY; UDP_PACKET_BUF_SIZE],
-            vec![0; UDP_BUF_SIZE],
-        );
-        let tx_buffer = udp::PacketBuffer::new(
-            vec![udp::PacketMetadata::EMPTY; UDP_PACKET_BUF_SIZE],
-            vec![0; UDP_BUF_SIZE],
-        );
-
-        let mut udp_socket = Socket::new(rx_buffer, tx_buffer);
-        let sport = listen_port.unwrap_or_else(super::get_ephemeral_port);
-        udp_socket.bind(sport)?;
-
-        let handle = with_net(|n| n.socket_set.add(udp_socket));
-
-        Ok(UdpSocket { handle })
+        let slot_idx = with_net(|net| {
+            let port = listen_port.unwrap_or_else(|| net.alloc_ephemeral_port());
+            let slot = UdpSocketSlot {
+                port,
+                queue: VecDeque::new(),
+                recv_waker: None,
+            };
+            if let Some(idx) = net.sockets.iter().position(Option::is_none) {
+                net.sockets[idx] = Some(slot);
+                idx
+            } else {
+                net.sockets.push(Some(slot));
+                net.sockets.len() - 1
+            }
+        });
+        Ok(UdpSocket { slot_idx })
     }
 
-    pub fn send_to<'a>(
-        &'a self,
-        addr: SocketAddrV4,
-        data: &'a [u8],
-    ) -> impl Future<Output = Result<()>> + 'a {
-        let endpoint = IpEndpoint {
-            addr: (*addr.ip()).into(),
-            port: addr.port(),
-        };
+    pub async fn send_to(&self, addr: SocketAddrV4, data: &[u8]) -> Result<()> {
+        with_net(|net| {
+            let src_port = net.sockets[self.slot_idx].as_ref().unwrap().port;
+            net.send_udp(*addr.ip(), src_port, addr.port(), data);
+            TX_SPEED.add_bytes(data.len());
+        });
+        Ok(())
+    }
 
+    /// Receives a packet zero-copy directly from the NIC RX pool and returns the buffer slot once
+    /// `f` completes.
+    pub async fn recv_with<R>(&self, f: impl FnOnce(&[u8], SocketAddrV4) -> R) -> R {
+        let mut f = Some(f);
         poll_fn(move |cx| {
             with_net(|net| {
-                let socket = net.socket_set.get_mut::<Socket>(self.handle);
-                if !socket.can_send() {
-                    socket.register_send_waker(cx.waker());
-                    Poll::Pending
+                let slot = net.sockets[self.slot_idx].as_mut().unwrap();
+                if let Some(pkt) = slot.queue.pop_front() {
+                    RX_SPEED.add_bytes(pkt.len);
+                    let ret = {
+                        let payload =
+                            &net.rx_pool.buf(pkt.buf_idx)[pkt.offset..pkt.offset + pkt.len];
+                        f.take().unwrap()(payload, pkt.src)
+                    };
+                    net.rx_pool.free(pkt.buf_idx);
+                    Poll::Ready(ret)
                 } else {
-                    let status = socket.send_slice(data, endpoint);
-                    TX_SPEED.add_bytes(data.len());
-                    Poll::Ready(status.map_err(|e| e.into()))
+                    slot.recv_waker = Some(cx.waker().clone());
+                    Poll::Pending
                 }
             })
         })
+        .await
     }
 
     pub async fn recv_from<'a>(
         &self,
         buf: &'a mut [u8; ETH_PACKET_SIZE],
     ) -> (&'a mut [u8], SocketAddrV4) {
-        let buf2 = &mut *buf;
-        let (len, addr) = poll_fn(move |cx| {
-            with_net(|net| {
-                let socket = net.socket_set.get_mut::<Socket>(self.handle);
-                if !socket.can_recv() {
-                    socket.register_recv_waker(cx.waker());
-                    Poll::Pending
-                } else {
-                    // Cannot fail if can_recv() returned true.
-                    let recvd = socket.recv_slice(buf2).unwrap();
-                    let IpAddr::V4(ip) = (recvd.1).endpoint.addr.into() else {
-                        unreachable!();
-                    };
-                    let port = (recvd.1).endpoint.port;
-                    Poll::Ready((recvd.0, SocketAddrV4::new(ip, port)))
-                }
+        let (len, addr) = self
+            .recv_with(|payload, addr| {
+                buf[..payload.len()].copy_from_slice(payload);
+                (payload.len(), addr)
             })
-        })
-        .await;
-
-        RX_SPEED.add_bytes(len);
-
+            .await;
         (&mut buf[..len], addr)
     }
 }
@@ -95,8 +83,11 @@ impl UdpSocket {
 impl Drop for UdpSocket {
     fn drop(&mut self) {
         with_net(|net| {
-            net.socket_set.get_mut::<Socket>(self.handle).close();
-            net.socket_set.remove(self.handle);
-        })
+            if let Some(slot) = net.sockets[self.slot_idx].take() {
+                for pkt in slot.queue {
+                    net.rx_pool.free(pkt.buf_idx);
+                }
+            }
+        });
     }
 }

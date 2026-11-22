@@ -26,8 +26,6 @@ macro_rules! err {
 }
 
 err!(uefi::Error);
-err!(smoltcp::socket::udp::BindError);
-err!(smoltcp::socket::udp::SendError);
 err!(postcard::Error);
 err!(lz4_flex::block::DecompressError);
 err!(gpt_disk_io::DiskError<Error>);

@@ -20,7 +20,7 @@ use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
+use crate::os::net::UdpSocket;
 use crate::os::timer::Timer;
 use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
@@ -134,30 +134,32 @@ async fn fetch_image(server_addr: SocketAddrV4, hash: ChunkHash, len: usize) -> 
     let socket = UdpSocket::bind(Some(CHUNKS_PORT)).await?;
     let req = postcard::to_allocvec(&UdpRequest::RequestChunks(vec![hash]))?;
     let mut decoder = Decoder::new(len);
-    let mut buf = [0; ETH_PACKET_SIZE];
 
     socket.send_to(server_addr, &req).await?;
     loop {
-        let recv = Box::pin(socket.recv_from(&mut buf));
-        let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
-        let rx_len = match select(recv, sleep).await {
-            Either::Left(((pkt, _), _)) => Some(pkt.len()),
-            Either::Right(((), _)) => None,
-        };
-        if let Some(rx_len) = rx_len {
-            let pkt = &buf[..rx_len];
-            if pkt.len() >= CHUNK_PACKET_PREFIX_LEN + 2 && pkt[8..CHUNK_PACKET_PREFIX_LEN] == hash {
-                if let Err(e) = decoder.add_packet(&pkt[CHUNK_PACKET_PREFIX_LEN..]) {
-                    log::warn!("Received invalid packet for image {hash:02x?}: {e}");
-                } else if let Some(bytes) = decoder.finish() {
-                    if blake3::hash(&bytes).as_bytes() != &hash {
-                        return Err(Error::msg("Image hash mismatch"));
-                    }
-                    return Ok(postcard::from_bytes(&bytes)?);
-                }
+        let recv = Box::pin(socket.recv_with(|pkt, _addr| {
+            if pkt.len() < CHUNK_PACKET_PREFIX_LEN + 2 || pkt[8..CHUNK_PACKET_PREFIX_LEN] != hash {
+                return None;
             }
-        } else {
-            socket.send_to(server_addr, &req).await?;
+            if let Err(e) = decoder.add_packet(&pkt[CHUNK_PACKET_PREFIX_LEN..]) {
+                log::warn!("Received invalid packet for image {hash:02x?}: {e}");
+                return None;
+            }
+            decoder.finish()
+        }));
+        let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
+        let res = match select(recv, sleep).await {
+            Either::Left((bytes, _)) => bytes,
+            Either::Right(((), _)) => {
+                socket.send_to(server_addr, &req).await?;
+                None
+            }
+        };
+        if let Some(bytes) = res {
+            if blake3::hash(&bytes).as_bytes() != &hash {
+                return Err(Error::msg("Image hash mismatch"));
+            }
+            return Ok(postcard::from_bytes(&bytes)?);
         }
     }
 }
@@ -245,7 +247,6 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
 
     let socket = UdpSocket::bind(Some(CHUNKS_PORT)).await?;
-    let mut buf = [0; ETH_PACKET_SIZE];
 
     let mut received = BTreeMap::new();
 
@@ -264,34 +265,38 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         );
 
         while !chunks_info.is_empty() {
-            let recv = Box::pin(socket.recv_from(&mut buf));
-            let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
-            match select(recv, sleep).await {
-                Either::Left(((buf, _addr), _)) => {
-                    if buf.len() < CHUNK_PACKET_PREFIX_LEN + 2 {
-                        continue;
-                    }
-                    stats.borrow_mut().pack_recv += 1;
-                    let seq = u32::from_le_bytes(buf[..4].try_into().unwrap());
-                    let tx_us = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-                    fb.record_packet(tx_us);
+            let recv = Box::pin(socket.recv_with(|pkt, _addr| {
+                if pkt.len() < CHUNK_PACKET_PREFIX_LEN + 2 {
+                    return Ok::<_, Error>(None);
+                }
+                stats.borrow_mut().pack_recv += 1;
+                let seq = u32::from_le_bytes(pkt[..4].try_into().unwrap());
+                let tx_us = u32::from_le_bytes(pkt[4..8].try_into().unwrap());
+                fb.record_packet(tx_us);
 
-                    if let Some(prev) = last_seq {
-                        let gap = seq.wrapping_sub(prev).wrapping_sub(1);
-                        if gap < 100_000 {
-                            fb.lost = fb.lost.saturating_add(gap);
-                            last_seq = Some(seq);
-                        } else if seq.wrapping_sub(prev) < u32::MAX - 64 {
-                            last_seq = Some(seq);
-                        }
-                    } else {
+                if let Some(prev) = last_seq {
+                    let gap = seq.wrapping_sub(prev).wrapping_sub(1);
+                    if gap < 100_000 {
+                        fb.lost = fb.lost.saturating_add(gap);
+                        last_seq = Some(seq);
+                    } else if seq.wrapping_sub(prev) < u32::MAX - 64 {
                         last_seq = Some(seq);
                     }
-                    fb.received = fb.received.saturating_add(1);
+                } else {
+                    last_seq = Some(seq);
+                }
+                fb.received = fb.received.saturating_add(1);
 
-                    let chunk =
-                        handle_packet(&buf[8..], &mut chunks_info, &mut received, &mut last_seen)?;
-                    if let Some((pos, data)) = chunk {
+                handle_packet(&pkt[8..], &mut chunks_info, &mut received, &mut last_seen)
+            }));
+            let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
+            let res = match select(recv, sleep).await {
+                Either::Left((chunk_res, _)) => Some(chunk_res),
+                Either::Right(((), _)) => None,
+            };
+            match res {
+                Some(chunk_res) => {
+                    if let Some((pos, data)) = chunk_res? {
                         tx.send((pos, data)).await.expect("receiver was dropped");
                     }
 
@@ -309,7 +314,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                         fb.send(&socket, server_addr).await?;
                     }
                 }
-                Either::Right(((), _sleep)) => {
+                None => {
                     fb.send(&socket, server_addr).await?;
 
                     // TODO(virv): compute the number of chunks to request
