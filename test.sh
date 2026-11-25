@@ -31,9 +31,16 @@ pushd pixie-drivers
 RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-drivers-%m-%p.profraw cargo +$NIGHTLY test --no-fail-fast
 popd
 
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=prof-out/test-pixie-client-%m-%p.profraw cargo +$NIGHTLY test --manifest-path pixie-client/Cargo.toml --target x86_64-unknown-linux-gnu --no-fail-fast
+
 pushd pixie-client
-RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-client-%m-%p.profraw cargo +$NIGHTLY test --target x86_64-unknown-linux-gnu --no-fail-fast
-RUSTFLAGS='-Cinstrument-coverage -Zno-profiler-runtime' cargo +$NIGHTLY build -F coverage
+cargo +$NIGHTLY build -F coverage \
+  -Z profile-rustflags \
+  --config 'profile.dev.rustflags=["-Cinstrument-coverage", "-Zno-profiler-runtime"]' \
+  --config 'profile.dev.package."*".rustflags=[]' \
+  --config 'profile.dev.package.pixie-kernel.rustflags=["-Cinstrument-coverage", "-Zno-profiler-runtime"]' \
+  --config 'profile.dev.package.pixie-drivers.rustflags=["-Cinstrument-coverage", "-Zno-profiler-runtime"]' \
+  --config 'profile.dev.package.pixie-shared.rustflags=["-Cinstrument-coverage", "-Zno-profiler-runtime"]'
 popd
 
 pushd pixie-web
@@ -45,7 +52,7 @@ RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/build-pixie-ser
 popd
 
 mkdir -p "${STORAGE_DIR}/tftpboot" "${STORAGE_DIR}/images" "${STORAGE_DIR}/chunks" "${STORAGE_DIR}/admin"
-cp "pixie-client/target/x86_64-unknown-uefi/debug/pixie-client.efi" "${STORAGE_DIR}/tftpboot/"
+cp "pixie-client/target/x86_64-sse41-unknown-uefi/debug/pixie-client.efi" "${STORAGE_DIR}/tftpboot/"
 cp -r pixie-web/dist/* "${STORAGE_DIR}/admin/"
 
 [ -f "${STORAGE_DIR}/config.yaml" ] || cp pixie-server/example.config.yaml "${STORAGE_DIR}/config.yaml"
@@ -91,7 +98,7 @@ fi
 "$LLVM_COV" show \
   -instr-profile=prof-out/pixie.profdata \
   -object pixie-server/target/debug/pixie-server \
-  -object pixie-client/target/x86_64-unknown-uefi/debug/pixie-client.efi \
+  -object pixie-client/target/x86_64-sse41-unknown-uefi/debug/pixie-client.efi \
   $TEST_OBJECTS \
   "${DEMANGLER_ARGS[@]}" \
   --ignore-filename-regex='/.cargo' \

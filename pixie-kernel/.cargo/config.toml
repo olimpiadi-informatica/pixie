@@ -1,2 +1,7 @@
 [build]
-target = "x86_64-unknown-uefi"
+target = "../x86_64-sse41-unknown-uefi.json"
+
+[unstable]
+build-std = ["core", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true

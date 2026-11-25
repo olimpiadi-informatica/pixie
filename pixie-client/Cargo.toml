@@ -40,3 +40,9 @@ panic = "abort"
 opt-level = "s"
 codegen-units = 1
 lto = true
+
+[profile.release.package.blake3]
+opt-level = 3
+
+[profile.release.package.lz4_flex]
+opt-level = 3

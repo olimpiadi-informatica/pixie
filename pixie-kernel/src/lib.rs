@@ -41,6 +41,7 @@ where
 
     unsafe {
         arch::io::cli();
+        arch::enable_sse();
     }
     raw_fb::init(&boot_info);
     logger::init();

@@ -18,8 +18,9 @@ jobs:
       - name: Install rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          components: rustfmt, clippy
-          target: wasm32-unknown-unknown, x86_64-unknown-uefi
+          toolchain: nightly-2026-05-23
+          components: rustfmt, clippy, rust-src
+          target: wasm32-unknown-unknown
           cache-workspaces: |
             pixie-client
             pixie-drivers
@@ -63,8 +64,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: nightly-2026-05-23
-          components: llvm-tools
-          target: wasm32-unknown-unknown, x86_64-unknown-uefi
+          components: llvm-tools, rust-src
+          target: wasm32-unknown-unknown
           cache-workspaces: |
             pixie-client
             pixie-drivers

@@ -197,26 +197,64 @@ impl BootOptions {
     }
 
     pub fn boot_entry_info(entry: &[u8]) -> Option<String> {
+        let (code_units, _) = Self::parse_load_option_header(entry)?;
+        String::from_utf16(&code_units).ok()
+    }
+
+    pub fn current_boot_mac() -> Option<[u8; 6]> {
+        let current = Self::current()?;
+        let entry = Self::get(current);
+        Self::entry_mac(&entry)
+    }
+
+    fn entry_mac(entry: &[u8]) -> Option<[u8; 6]> {
+        let (_, fp_list) = Self::parse_load_option_header(entry)?;
+        let mut pos = 0;
+        while pos + 4 <= fp_list.len() {
+            let dev_type = fp_list[pos];
+            let sub_type = fp_list[pos + 1];
+            let node_len = u16::from_le_bytes([fp_list[pos + 2], fp_list[pos + 3]]) as usize;
+            if node_len < 4 || pos + node_len > fp_list.len() {
+                break;
+            }
+            if dev_type == 0x7F && sub_type == 0xFF {
+                break;
+            }
+            // Messaging Device Path (0x03), MAC Address (0x0B): payload starts with 32-byte EFI_MAC_ADDRESS
+            if dev_type == 0x03 && sub_type == 0x0B && node_len >= 10 {
+                let mac = &fp_list[pos + 4..pos + 10];
+                if crate::boot_info::is_valid_mac(mac) {
+                    let mut out = [0u8; 6];
+                    out.copy_from_slice(mac);
+                    return Some(out);
+                }
+            }
+            pos += node_len;
+        }
+        None
+    }
+
+    fn parse_load_option_header(entry: &[u8]) -> Option<(Vec<u16>, &[u8])> {
         if entry.len() < 8 {
             return None;
         }
+        let fp_len = u16::from_le_bytes([entry[4], entry[5]]) as usize;
+        let mut offset = 6;
+        let mut code_units = Vec::new();
         let mut nul_found = false;
-        let (pairs, _) = entry[6..].as_chunks::<2>();
-        let code_units: Vec<u16> = pairs
-            .iter()
-            .map(|&c| u16::from_le_bytes(c))
-            .take_while(|&ch| {
-                if ch == 0 {
-                    nul_found = true;
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect();
+        while offset + 1 < entry.len() {
+            let ch = u16::from_le_bytes([entry[offset], entry[offset + 1]]);
+            offset += 2;
+            if ch == 0 {
+                nul_found = true;
+                break;
+            }
+            code_units.push(ch);
+        }
         if !nul_found {
             return None;
         }
-        String::from_utf16(&code_units).ok()
+        let fp_end = offset.checked_add(fp_len)?.min(entry.len());
+        Some((code_units, &entry[offset..fp_end]))
     }
 }

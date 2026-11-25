@@ -1,10 +1,12 @@
 use spin::Mutex;
-use uefi::Identify;
 use uefi::boot::{self, OpenProtocolAttributes, OpenProtocolParams, SearchType};
 use uefi::mem::memory_map::{MemoryMapOwned, MemoryType};
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
+use uefi::proto::device_path::{DevicePath, DeviceSubType, DeviceType};
+use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::network::snp::{NetworkState, SimpleNetwork};
 use uefi::table::cfg::ConfigTableEntry;
+use uefi::{Handle, Identify};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FbPixelFormat {
@@ -26,8 +28,72 @@ pub struct BootInfo {
 
 pub static BOOT_INFO: Mutex<Option<BootInfo>> = Mutex::new(None);
 
-fn is_valid_mac(mac: &[u8]) -> bool {
+pub(crate) fn is_valid_mac(mac: &[u8]) -> bool {
     mac.len() == 6 && mac.iter().any(|&b| b != 0) && mac != [0xFF; 6]
+}
+
+fn snp_handle_mac(handle: Handle) -> Option<[u8; 6]> {
+    let snp = unsafe {
+        boot::open_protocol::<SimpleNetwork>(
+            OpenProtocolParams {
+                handle,
+                agent: boot::image_handle(),
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )
+    }
+    .ok()?;
+    let mode = snp.mode();
+    let cur = &mode.current_address.0[..6];
+    let perm = &mode.permanent_address.0[..6];
+    let slice = if is_valid_mac(cur) {
+        cur
+    } else if is_valid_mac(perm) {
+        perm
+    } else {
+        return None;
+    };
+    let mut mac = [0u8; 6];
+    mac.copy_from_slice(slice);
+    Some(mac)
+}
+
+fn loaded_image_boot_mac() -> Option<[u8; 6]> {
+    let li = unsafe {
+        boot::open_protocol::<LoadedImage>(
+            OpenProtocolParams {
+                handle: boot::image_handle(),
+                agent: boot::image_handle(),
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )
+    }
+    .ok()?;
+    let dev_handle = li.device()?;
+    if let Ok(dp) = unsafe {
+        boot::open_protocol::<DevicePath>(
+            OpenProtocolParams {
+                handle: dev_handle,
+                agent: boot::image_handle(),
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )
+    } {
+        for node in dp.node_iter() {
+            if node.full_type() == (DeviceType::MESSAGING, DeviceSubType::MESSAGING_MAC_ADDRESS)
+                && node.data().len() >= 6
+                && is_valid_mac(&node.data()[..6])
+            {
+                let mut mac = [0u8; 6];
+                mac.copy_from_slice(&node.data()[..6]);
+                return Some(mac);
+            }
+        }
+    }
+    snp_handle_mac(dev_handle)
 }
 
 pub fn collect_and_exit_boot_services() -> (BootInfo, MemoryMapOwned) {
@@ -37,6 +103,11 @@ pub fn collect_and_exit_boot_services() -> (BootInfo, MemoryMapOwned) {
 
     // 2. Cache UEFI BootCurrent / BootOrder / BootXXXX before exiting boot services
     crate::boot_options::BootOptions::init_pre_ebs();
+
+    // Identify the NIC handle / MAC that actually loaded pixie-client.efi so dual-NIC
+    // systems with multiple active SNP handles don't arbitrarily pick handle 0.
+    let boot_mac =
+        loaded_image_boot_mac().or_else(crate::boot_options::BootOptions::current_boot_mac);
 
     // 3. Stop UEFI SimpleNetwork (SNP / UNDI) on all handles and capture best active MAC
     let mut best_mac: Option<(u8, [u8; 6])> = None;
@@ -65,6 +136,9 @@ pub fn collect_and_exit_boot_services() -> (BootInfo, MemoryMapOwned) {
 
                 if let Some((mac_slice, has_current)) = chosen {
                     let mut score = 0u8;
+                    if boot_mac.is_some_and(|bm| bm == mac_slice) {
+                        score += 16;
+                    }
                     if mode.state == NetworkState::INITIALIZED {
                         score += 4;
                     }
@@ -92,7 +166,7 @@ pub fn collect_and_exit_boot_services() -> (BootInfo, MemoryMapOwned) {
             }
         }
     }
-    let uefi_mac = best_mac.map(|(_, m)| m);
+    let uefi_mac = best_mac.map(|(_, m)| m).or(boot_mac);
 
     // 4. Locate GOP Framebuffer
     let (framebuffer_base, framebuffer_size, fb_width, fb_height, fb_stride, pixel_format) =
