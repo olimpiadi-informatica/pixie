@@ -20,7 +20,7 @@
   "linker-flavor": "msvc-lld",
   "linker-is-gnu": false,
   "lld-flavor": "link",
-  "llvm-target": "x86_64-unknown-windows",
+  "llvm-target": "x86_64-unknown-uefi",
   "max-atomic-width": 64,
   "os": "uefi",
   "panic-strategy": "abort",

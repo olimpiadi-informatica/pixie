@@ -13,7 +13,7 @@ mkdir -p prof-out
 # has) introduced codegen regressions that only show up on the exotic
 # `-C instrument-coverage` + no_std + SIMD combination pixie-client builds with,
 # so bump this deliberately rather than silently drifting.
-NIGHTLY=nightly-2026-05-23
+NIGHTLY=nightly-2026-11-25
 if ! rustc +$NIGHTLY -V &>/dev/null; then
   NIGHTLY=nightly
 fi
@@ -31,7 +31,7 @@ pushd pixie-drivers
 RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=../prof-out/test-pixie-drivers-%m-%p.profraw cargo +$NIGHTLY test --no-fail-fast
 popd
 
-RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE=prof-out/test-pixie-client-%m-%p.profraw cargo +$NIGHTLY test --manifest-path pixie-client/Cargo.toml --target x86_64-unknown-linux-gnu --no-fail-fast
+RUSTFLAGS='-C instrument-coverage' LLVM_PROFILE_FILE="${SELFDIR}/prof-out/test-pixie-client-%m-%p.profraw" cargo +$NIGHTLY test --manifest-path pixie-client/Cargo.toml --target x86_64-unknown-linux-gnu --no-fail-fast
 
 pushd pixie-client
 cargo +$NIGHTLY build -F coverage \

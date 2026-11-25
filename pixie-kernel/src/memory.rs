@@ -18,6 +18,8 @@ struct FrameBitmap {
 }
 
 impl FrameBitmap {
+    // Only evaluated at compile time to initialize static `FRAME_ALLOCATOR`.
+    #[allow(clippy::large_unopt_stack_frames)]
     const fn new() -> Self {
         Self {
             words: [0; BITMAP_WORDS],

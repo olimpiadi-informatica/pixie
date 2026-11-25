@@ -30,7 +30,7 @@ RELEASE_FLAG=""
 TARGET_DIR="debug"
 [ "$RELEASE" ] && TARGET_DIR="release"
 
-NIGHTLY=nightly-2026-05-23
+NIGHTLY=nightly-2026-11-25
 if ! rustc +$NIGHTLY -V &>/dev/null; then
   NIGHTLY=nightly
 fi
