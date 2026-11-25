@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::collections::btree_map::Entry;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::fmt::Write;
@@ -181,20 +182,21 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         .await?;
     let image = fetch_image(server_addr, image_hash, image_len).await?;
 
-    let mut chunks_info = BTreeMap::new();
+    let mut hash_meta = BTreeMap::new();
+    let mut occurrences = Vec::with_capacity(image.disk.len());
     for chunk in &image.disk {
-        chunks_info
+        hash_meta
             .entry(chunk.hash)
-            .or_insert((chunk.size, chunk.csize, Vec::new()))
-            .2
-            .push(chunk.start);
+            .or_insert((chunk.size, chunk.csize));
+        occurrences.push((chunk.start, chunk.hash, chunk.size));
     }
+    occurrences.sort_unstable_by_key(|&(offset, _, _)| offset);
 
-    info!("Obtained chunks; {} distinct chunks", chunks_info.len());
+    info!("Obtained chunks; {} distinct chunks", hash_meta.len());
 
     let stats = RefCell::new(Stats {
         chunks: image.disk.len(),
-        unique: chunks_info.len(),
+        unique: hash_meta.len(),
         fetch: 0,
         recv: 0,
         pack_recv: 0,
@@ -232,38 +234,66 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let mut disk = disk::Disk::largest().await;
 
     let mut scan_buf = vec![0u8; MAX_CHUNK_SIZE];
+    let mut valid_source: BTreeMap<ChunkHash, usize> = BTreeMap::new();
+    let mut mismatched: BTreeMap<ChunkHash, Vec<usize>> = BTreeMap::new();
+    let mut need_fetch = 0usize;
     let mut last_draw_us = Timer::micros();
-    for (scanned, (hash, (size, csize, pos))) in mem::take(&mut chunks_info).into_iter().enumerate()
-    {
+    for (scanned, (offset, hash, size)) in occurrences.into_iter().enumerate() {
         if size > scan_buf.len() {
             scan_buf.resize(size, 0);
         }
         let buf = &mut scan_buf[..size];
-        let mut found = None;
-        for &offset in &pos {
-            disk.read(offset as u64, buf).await?;
-            if blake3::hash(buf).as_bytes() == &hash {
-                found = Some(offset);
-                break;
-            }
-        }
-        if let Some(found) = found {
-            for &offset in &pos {
-                if offset != found {
-                    disk.write(offset as u64, buf).await?;
+        disk.read(offset as u64, buf).await?;
+        if blake3::hash(buf).as_bytes() == &hash {
+            if let Entry::Vacant(e) = valid_source.entry(hash) {
+                e.insert(offset);
+                if mismatched.contains_key(&hash) {
+                    need_fetch -= 1;
                 }
             }
-        } else {
-            chunks_info.insert(hash, (size, csize, pos));
-            stats.borrow_mut().fetch = chunks_info.len();
+        } else if let Entry::Vacant(e) = mismatched.entry(hash) {
+            e.insert(vec![offset]);
+            if !valid_source.contains_key(&hash) {
+                need_fetch += 1;
+            }
+        } else if let Some(offsets) = mismatched.get_mut(&hash) {
+            offsets.push(offset);
         }
         let now_us = Timer::micros();
         if now_us.saturating_sub(last_draw_us) >= 100_000 || (scanned & 63) == 63 {
+            stats.borrow_mut().fetch = need_fetch;
             update_content(draw);
             last_draw_us = now_us;
         }
     }
+
+    let mut chunks_info = BTreeMap::new();
+    let mut local_repairs = Vec::new();
+    for (hash, offsets) in mismatched {
+        let &(size, csize) = hash_meta
+            .get(&hash)
+            .expect("mismatched hash missing from hash_meta");
+        if let Some(&src_offset) = valid_source.get(&hash) {
+            local_repairs.push((src_offset, size, offsets));
+        } else {
+            chunks_info.insert(hash, (size, csize, offsets));
+        }
+    }
+    local_repairs.sort_unstable_by_key(|&(src_offset, _, _)| src_offset);
+    for (src_offset, size, dst_offsets) in local_repairs {
+        if size > scan_buf.len() {
+            scan_buf.resize(size, 0);
+        }
+        let buf = &mut scan_buf[..size];
+        disk.read(src_offset as u64, buf).await?;
+        for dst_offset in dst_offsets {
+            if dst_offset != src_offset {
+                disk.write(dst_offset as u64, buf).await?;
+            }
+        }
+    }
     drop(scan_buf);
+    stats.borrow_mut().fetch = chunks_info.len();
     update_content(draw);
 
     info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
@@ -361,7 +391,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
 
                     let now_us = Timer::micros();
                     let elapsed = now_us - fb.last_fb;
-                    if elapsed >= 200_000 || (fb.lost >= 16 && elapsed >= 50_000) {
+                    if elapsed >= 100_000 || (fb.lost >= 16 && elapsed >= 50_000) {
                         fb.send(&socket, server_addr).await?;
                     }
                 }

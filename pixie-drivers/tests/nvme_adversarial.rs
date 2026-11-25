@@ -43,6 +43,8 @@ struct NvmeSimState {
     dstrd: u8,
     cns2_behavior: Cns2Behavior,
     delay_cqe_yields: usize,
+    reverse_cqe_batch: bool,
+    max_in_flight_io_cmds: usize,
 
     // MMIO register state
     cc: u32,
@@ -107,6 +109,8 @@ impl NvmeSimState {
             dstrd,
             cns2_behavior,
             delay_cqe_yields,
+            reverse_cqe_batch: false,
+            max_in_flight_io_cmds: 0,
 
             cc: 0,
             csts: 0,
@@ -230,6 +234,9 @@ impl NvmeSimState {
             }
         }
         self.pending_cqes.retain(|item| item.remaining_yields > 0);
+        if self.reverse_cqe_batch {
+            ready.reverse();
+        }
         for cqe in ready {
             self.commit_cqe(cqe);
         }
@@ -446,8 +453,10 @@ impl NvmeSimState {
         let iosq_size = self.iosq_size;
         let iocq_base = self.iocq_base;
         let iocq_size = self.iocq_size;
+        let mut batch_cmds = 0usize;
 
         while self.iosq_head != new_tail {
+            batch_cmds += 1;
             let idx = self.iosq_head as usize;
             self.iosq_head = ((idx + 1) % iosq_size) as u16;
 
@@ -525,6 +534,13 @@ impl NvmeSimState {
             };
             self.enqueue_or_commit_cqe(cqe);
         }
+        let live = self
+            .pending_cqes
+            .iter()
+            .filter(|item| !item.is_admin)
+            .count()
+            .max(batch_cmds);
+        self.max_in_flight_io_cmds = self.max_in_flight_io_cmds.max(live);
     }
 
     fn mmio_read32(&self, addr: u64) -> u32 {
@@ -935,4 +951,67 @@ fn test_nvme_quirk_delayed_cqe_and_phase_tag_wraparound() {
         "Expected yield_now() to be polled during delayed CQE waits, got {}",
         st.yield_count
     );
+}
+
+#[test]
+fn test_nvme_pipelined_multislot_read_write_out_of_order_cqe() {
+    // Subtest A: MDTS=7 (512 KiB per command, 8 I/O slots = 4 MiB total), delayed + out-of-order CQEs.
+    {
+        let hal = MockNvmeHal::new(16384, 0, Cns2Behavior::Normal, 2);
+        {
+            let mut st = hal.state.lock().unwrap();
+            st.mdts = 7; // 2^7 * 4 KiB = 512 KiB
+            st.reverse_cqe_batch = true;
+        }
+        let mut disk = block_on(NvmeDisk::open(dummy_nvme_pci(), BAR0, hal.clone()))
+            .expect("NvmeDisk::open should succeed");
+        assert_eq!(disk.max_transfer_bytes(), 512 * 1024);
+
+        let six_mib = 6 * 1024 * 1024;
+        let payload: Vec<u8> = (0usize..six_mib)
+            .map(|i| ((i.wrapping_mul(29) ^ (i >> 11) ^ 0x3C) & 0xFF) as u8)
+            .collect();
+        block_on(disk.write(1024 * 1024, &payload)).expect("Pipelined 6 MiB write should succeed");
+
+        let mut readback = vec![0u8; six_mib];
+        block_on(disk.read(1024 * 1024, &mut readback))
+            .expect("Pipelined 6 MiB read should succeed");
+        assert_eq!(readback, payload);
+
+        let st = hal.state.lock().unwrap();
+        assert_eq!(st.max_pages_per_cmd, 128);
+        assert!(
+            st.max_in_flight_io_cmds >= 4,
+            "Expected >= 4 concurrent in-flight I/O commands, got {}",
+            st.max_in_flight_io_cmds
+        );
+    }
+
+    // Subtest B: MDTS=0 (unlimited -> capped at NVME_MAX_DMA_PAGES=256 = 1 MiB, 4 slots = 4 MiB).
+    {
+        let hal = MockNvmeHal::new(10240, 0, Cns2Behavior::Normal, 1);
+        {
+            let mut st = hal.state.lock().unwrap();
+            st.mdts = 0;
+        }
+        let mut disk = block_on(NvmeDisk::open(dummy_nvme_pci(), BAR0, hal.clone()))
+            .expect("NvmeDisk::open should succeed with MDTS=0");
+        assert_eq!(disk.max_transfer_bytes(), 1024 * 1024);
+
+        let four_mib = 4 * 1024 * 1024;
+        let payload: Vec<u8> = (0usize..four_mib)
+            .map(|i| ((i.wrapping_mul(17) ^ (i >> 9) ^ 0xA7) & 0xFF) as u8)
+            .collect();
+        block_on(disk.write(512 * 1024, &payload))
+            .expect("Pipelined 4 MiB MDTS=0 write should succeed");
+
+        let mut readback = vec![0u8; four_mib];
+        block_on(disk.read(512 * 1024, &mut readback))
+            .expect("Pipelined 4 MiB MDTS=0 read should succeed");
+        assert_eq!(readback, payload);
+
+        let st = hal.state.lock().unwrap();
+        assert_eq!(st.max_pages_per_cmd, 256);
+        assert_eq!(st.max_in_flight_io_cmds, 4);
+    }
 }

@@ -8,7 +8,9 @@ use crate::hal::{DmaBuffer, Hal, PAGE_SIZE, alloc_dma_buffers};
 use crate::pci::PciDevice;
 
 pub const NVME_QUEUE_ENTRIES: usize = 64;
-pub const NVME_MAX_DMA_PAGES: usize = 64; // 256 KiB per I/O command via PRP list
+pub const NVME_MAX_DMA_PAGES: usize = 256; // 1 MiB per I/O command via PRP list (<= 512 entries per 4 KiB PRP page)
+pub const NVME_IO_SLOTS: usize = 8;
+const NVME_MAX_TOTAL_IO_DMA_BYTES: usize = 4 * 1024 * 1024;
 
 const NVME_REG_CAP: u64 = 0x0000;
 const NVME_REG_INTMS: u64 = 0x000C;
@@ -75,14 +77,44 @@ impl NvmeQueue {
     }
 }
 
+struct NvmeIoSlot {
+    prp_list: DmaBuffer,
+    data: DmaBuffer,
+}
+
+#[derive(Clone, Copy)]
+struct InFlightIo {
+    cid: u16,
+    buf_offset: usize,
+    len: usize,
+}
+
+enum IoBuf<'a> {
+    Read(&'a mut [u8]),
+    Write(&'a [u8]),
+}
+
+impl IoBuf<'_> {
+    fn len(&self) -> usize {
+        match self {
+            IoBuf::Read(b) => b.len(),
+            IoBuf::Write(b) => b.len(),
+        }
+    }
+
+    fn is_write(&self) -> bool {
+        matches!(self, IoBuf::Write(_))
+    }
+}
+
 pub struct NvmeDisk<H: Hal> {
     pub pci: PciDevice,
     pub bar0: u64,
     pub hal: H,
     admin_q: NvmeQueue,
     io_q: NvmeQueue,
-    prp_list: DmaBuffer,
-    data: DmaBuffer,
+    admin_buf: DmaBuffer,
+    io_slots: Vec<NvmeIoSlot>,
     queue_entries: u16,
     namespace: u32,
     block_size: u64,
@@ -117,11 +149,8 @@ impl<H: Hal> NvmeDisk<H> {
         pci.enable_bus_mastering(&hal);
         hal.map_mmio(bar0, 0x4000);
 
-        let [admin_sq, admin_cq, io_sq, io_cq, prp_list, data] = alloc_dma_buffers(
-            &hal,
-            [1, 1, 1, 1, 1, NVME_MAX_DMA_PAGES],
-            "Out of DMA memory for NVMe",
-        )?;
+        let [admin_sq, admin_cq, io_sq, io_cq, admin_buf] =
+            alloc_dma_buffers(&hal, [1, 1, 1, 1, 1], "Out of DMA memory for NVMe")?;
 
         let mut disk = Self {
             pci,
@@ -129,13 +158,13 @@ impl<H: Hal> NvmeDisk<H> {
             hal,
             admin_q: NvmeQueue::new(admin_sq, admin_cq, 0),
             io_q: NvmeQueue::new(io_sq, io_cq, 1),
-            prp_list,
-            data,
+            admin_buf,
+            io_slots: Vec::new(),
             queue_entries: NVME_QUEUE_ENTRIES as u16,
             namespace: 0,
             block_size: 512,
             blocks: 0,
-            max_transfer_bytes: NVME_MAX_DMA_PAGES * PAGE_SIZE,
+            max_transfer_bytes: PAGE_SIZE,
             doorbell_stride: 4,
             ready_timeout_us: COMMAND_TIMEOUT_MICROS,
             poisoned: false,
@@ -209,12 +238,24 @@ impl<H: Hal> NvmeDisk<H> {
 
         // Identify Controller (CNS = 1)
         let (mdts, nn) = self.identify_controller().await?;
-        let max_pages = if mdts == 0 {
+        let slot_pages = if mdts == 0 {
             NVME_MAX_DMA_PAGES
         } else {
             (1usize << (mdts as usize).min(20)).min(NVME_MAX_DMA_PAGES)
         };
-        self.max_transfer_bytes = (max_pages * PAGE_SIZE).max(PAGE_SIZE);
+        self.max_transfer_bytes = (slot_pages * PAGE_SIZE).max(PAGE_SIZE);
+
+        let target_slots = (NVME_MAX_TOTAL_IO_DMA_BYTES / (slot_pages * PAGE_SIZE))
+            .clamp(1, NVME_IO_SLOTS)
+            .min((self.queue_entries as usize).saturating_sub(1))
+            .max(1);
+        for _ in 0..target_slots {
+            match alloc_dma_buffers(&self.hal, [1, slot_pages], "Out of DMA memory for NVMe") {
+                Ok([prp_list, data]) => self.io_slots.push(NvmeIoSlot { prp_list, data }),
+                Err(e) if self.io_slots.is_empty() => return Err(e),
+                Err(_) => break,
+            }
+        }
 
         // Set Features (Number of Queues, FID = 0x07) requesting 1 SQ / 1 CQ before creating I/O queues.
         self.submit_admin(NvmeCommand {
@@ -278,18 +319,18 @@ impl<H: Hal> NvmeDisk<H> {
 
     async fn identify_controller(&mut self) -> Result<(u8, u32)> {
         unsafe {
-            self.data.as_mut_slice()[..PAGE_SIZE].fill(0);
+            self.admin_buf.as_mut_slice()[..PAGE_SIZE].fill(0);
         }
         self.submit_admin(NvmeCommand {
             cdw0: 0x06,
             nsid: 0,
-            prp1: self.data.phys,
+            prp1: self.admin_buf.phys,
             cdw10: 0x01, // CNS = 1 (Identify Controller)
             ..Default::default()
         })
         .await?;
 
-        let identify = unsafe { &self.data.as_slice()[..PAGE_SIZE] };
+        let identify = unsafe { &self.admin_buf.as_slice()[..PAGE_SIZE] };
         let mdts = identify[77];
         let nn = u32::from_le_bytes(identify[516..520].try_into().unwrap());
         Ok((mdts, nn))
@@ -297,18 +338,18 @@ impl<H: Hal> NvmeDisk<H> {
 
     async fn active_namespaces(&mut self) -> Result<Vec<u32>> {
         unsafe {
-            self.data.as_mut_slice()[..PAGE_SIZE].fill(0);
+            self.admin_buf.as_mut_slice()[..PAGE_SIZE].fill(0);
         }
         self.submit_admin(NvmeCommand {
             cdw0: 0x06,
             nsid: 0,
-            prp1: self.data.phys,
+            prp1: self.admin_buf.phys,
             cdw10: 0x02, // CNS = 2 (Active Namespace ID List)
             ..Default::default()
         })
         .await?;
 
-        let bytes = unsafe { &self.data.as_slice()[..PAGE_SIZE] };
+        let bytes = unsafe { &self.admin_buf.as_slice()[..PAGE_SIZE] };
         let mut ns_list = Vec::new();
         for &chunk in bytes.as_chunks::<4>().0 {
             let ns = u32::from_le_bytes(chunk);
@@ -322,18 +363,18 @@ impl<H: Hal> NvmeDisk<H> {
 
     async fn identify_namespace(&mut self, namespace: u32) -> Result<(u64, u64)> {
         unsafe {
-            self.data.as_mut_slice()[..PAGE_SIZE].fill(0);
+            self.admin_buf.as_mut_slice()[..PAGE_SIZE].fill(0);
         }
         self.submit_admin(NvmeCommand {
             cdw0: 0x06,
             nsid: namespace,
-            prp1: self.data.phys,
+            prp1: self.admin_buf.phys,
             cdw10: 0x00, // CNS = 0 (Identify Namespace)
             ..Default::default()
         })
         .await?;
 
-        let identify = unsafe { &self.data.as_slice()[..PAGE_SIZE] };
+        let identify = unsafe { &self.admin_buf.as_slice()[..PAGE_SIZE] };
         let blocks = u64::from_le_bytes(identify[0..8].try_into().unwrap());
         if blocks == 0 {
             return Err(Error::msg("NVMe namespace has 0 blocks"));
@@ -366,14 +407,7 @@ impl<H: Hal> NvmeDisk<H> {
         Ok((blocks, block_size))
     }
 
-    async fn submit_queue(
-        hal: &H,
-        bar0: u64,
-        queue_entries: u16,
-        doorbell_stride: u64,
-        q: &mut NvmeQueue,
-        mut command: NvmeCommand,
-    ) -> core::result::Result<(), SubmitErr> {
+    fn enqueue_sqe(q: &mut NvmeQueue, queue_entries: u16, mut command: NvmeCommand) -> u16 {
         let cid = q.next_cid;
         q.next_cid = q.next_cid.wrapping_add(1);
         command.cdw0 = (command.cdw0 & 0xFFFF) | ((cid as u32) << 16);
@@ -382,8 +416,41 @@ impl<H: Hal> NvmeDisk<H> {
         unsafe {
             ptr::write_volatile((q.sq.virt as *mut NvmeCommand).add(slot), command);
         }
-        fence(Ordering::SeqCst);
         q.sq_tail = (q.sq_tail + 1) % queue_entries;
+        cid
+    }
+
+    fn prepare_slot_prp(slot: &NvmeIoSlot, transfer_bytes: usize) -> (u64, u64) {
+        let num_pages = transfer_bytes.div_ceil(PAGE_SIZE).max(1);
+        let prp1 = slot.data.phys;
+        let prp2 = if num_pages == 1 {
+            0
+        } else if num_pages == 2 {
+            slot.data.phys + PAGE_SIZE as u64
+        } else {
+            let prp_entries = slot.prp_list.virt as *mut u64;
+            for i in 0..(num_pages - 1) {
+                let page_phys = slot.data.phys + ((i + 1) * PAGE_SIZE) as u64;
+                unsafe {
+                    ptr::write_volatile(prp_entries.add(i), page_phys);
+                }
+            }
+            fence(Ordering::SeqCst);
+            slot.prp_list.phys
+        };
+        (prp1, prp2)
+    }
+
+    async fn submit_queue(
+        hal: &H,
+        bar0: u64,
+        queue_entries: u16,
+        doorbell_stride: u64,
+        q: &mut NvmeQueue,
+        command: NvmeCommand,
+    ) -> core::result::Result<(), SubmitErr> {
+        let cid = Self::enqueue_sqe(q, queue_entries, command);
+        fence(Ordering::SeqCst);
 
         hal.mmio_write32(
             bar0 + NVME_REG_DOORBELL + (2 * q.qid as u64) * doorbell_stride,
@@ -485,23 +552,7 @@ impl<H: Hal> NvmeDisk<H> {
         blocks: u32,
         transfer_bytes: usize,
     ) -> Result<()> {
-        let num_pages = transfer_bytes.div_ceil(PAGE_SIZE).max(1);
-        let prp1 = self.data.phys;
-        let prp2 = if num_pages == 1 {
-            0
-        } else if num_pages == 2 {
-            self.data.phys + PAGE_SIZE as u64
-        } else {
-            let prp_entries = self.prp_list.virt as *mut u64;
-            for i in 0..(num_pages - 1) {
-                let page_phys = self.data.phys + ((i + 1) * PAGE_SIZE) as u64;
-                unsafe {
-                    ptr::write_volatile(prp_entries.add(i), page_phys);
-                }
-            }
-            fence(Ordering::SeqCst);
-            self.prp_list.phys
-        };
+        let (prp1, prp2) = Self::prepare_slot_prp(&self.io_slots[0], transfer_bytes);
 
         self.submit_io(NvmeCommand {
             cdw0: if write { 0x01 } else { 0x02 },
@@ -514,6 +565,165 @@ impl<H: Hal> NvmeDisk<H> {
             ..Default::default()
         })
         .await
+    }
+
+    async fn pipelined_io(&mut self, offset: u64, mut io_buf: IoBuf<'_>) -> Result<()> {
+        if self.poisoned {
+            return Err(Error::msg("NVMe controller poisoned after command timeout"));
+        }
+        let num_slots = self.io_slots.len().min(NVME_IO_SLOTS);
+        let bs = self.block_size as usize;
+        let max_transfer = self.max_transfer_bytes;
+        let start_lba = offset / self.block_size;
+        let total_len = io_buf.len();
+        let sq_db =
+            self.bar0 + NVME_REG_DOORBELL + (2 * self.io_q.qid as u64) * self.doorbell_stride;
+        let cq_db =
+            self.bar0 + NVME_REG_DOORBELL + (2 * self.io_q.qid as u64 + 1) * self.doorbell_stride;
+
+        let mut in_flight = [None::<InFlightIo>; NVME_IO_SLOTS];
+        let mut active = 0usize;
+        let mut next_off = 0usize;
+        let mut first_status_err = false;
+
+        while active > 0 || (!first_status_err && next_off < total_len) {
+            let mut submitted_any = false;
+            if !first_status_err && next_off < total_len {
+                for (slot_idx, tracked) in in_flight[..num_slots].iter_mut().enumerate() {
+                    if next_off >= total_len {
+                        break;
+                    }
+                    if tracked.is_some() {
+                        continue;
+                    }
+                    let chunk_len = (total_len - next_off).min(max_transfer);
+                    let blocks = (chunk_len / bs) as u32;
+                    let lba = start_lba + (next_off as u64) / self.block_size;
+                    if let IoBuf::Write(src) = io_buf {
+                        unsafe {
+                            self.io_slots[slot_idx].data.as_mut_slice()[..chunk_len]
+                                .copy_from_slice(&src[next_off..next_off + chunk_len]);
+                        }
+                    }
+                    let (prp1, prp2) = Self::prepare_slot_prp(&self.io_slots[slot_idx], chunk_len);
+                    let cid = Self::enqueue_sqe(
+                        &mut self.io_q,
+                        self.queue_entries,
+                        NvmeCommand {
+                            cdw0: if io_buf.is_write() { 0x01 } else { 0x02 },
+                            nsid: self.namespace,
+                            prp1,
+                            prp2,
+                            cdw10: lba as u32,
+                            cdw11: (lba >> 32) as u32,
+                            cdw12: blocks - 1,
+                            ..Default::default()
+                        },
+                    );
+                    *tracked = Some(InFlightIo {
+                        cid,
+                        buf_offset: next_off,
+                        len: chunk_len,
+                    });
+                    active += 1;
+                    next_off += chunk_len;
+                    submitted_any = true;
+                }
+            }
+
+            if submitted_any {
+                fence(Ordering::SeqCst);
+                self.hal.mmio_write32(sq_db, self.io_q.sq_tail as u32);
+            }
+
+            if active == 0 {
+                break;
+            }
+
+            let start = self.hal.micros();
+            let mut completed_tracked = false;
+            for _ in 0..MAX_POLL_YIELDS {
+                let mut drained_any = false;
+                loop {
+                    let cqe_ptr = unsafe {
+                        (self.io_q.cq.virt as *const NvmeCompletion).add(self.io_q.cq_head as usize)
+                    };
+                    let status = unsafe { ptr::read_volatile(&raw const (*cqe_ptr).status) };
+                    if ((status & 1) != 0) != self.io_q.cq_phase {
+                        break;
+                    }
+                    fence(Ordering::Acquire);
+                    let comp_cid = unsafe { ptr::read_volatile(&raw const (*cqe_ptr).cid) };
+                    self.io_q.cq_head += 1;
+                    if self.io_q.cq_head >= self.queue_entries {
+                        self.io_q.cq_head = 0;
+                        self.io_q.cq_phase = !self.io_q.cq_phase;
+                    }
+                    drained_any = true;
+
+                    if let Some((slot_idx, entry)) = in_flight[..num_slots]
+                        .iter_mut()
+                        .enumerate()
+                        .find_map(|(i, slot)| slot.filter(|e| e.cid == comp_cid).map(|e| (i, e)))
+                    {
+                        in_flight[slot_idx] = None;
+                        active -= 1;
+                        completed_tracked = true;
+                        if (status & 0xFFFE) != 0 {
+                            first_status_err = true;
+                        } else if let IoBuf::Read(ref mut dst) = io_buf {
+                            unsafe {
+                                dst[entry.buf_offset..entry.buf_offset + entry.len]
+                                    .copy_from_slice(
+                                        &self.io_slots[slot_idx].data.as_slice()[..entry.len],
+                                    );
+                            }
+                        }
+                    }
+                }
+                if drained_any {
+                    self.hal.mmio_write32(cq_db, self.io_q.cq_head as u32);
+                }
+                if completed_tracked || active == 0 {
+                    break;
+                }
+                if self.hal.micros().saturating_sub(start) > COMMAND_TIMEOUT_MICROS {
+                    self.poisoned = true;
+                    self.write32(NVME_REG_CC, 0);
+                    return Err(Error::msg("NVMe command timed out"));
+                }
+                self.hal.yield_now().await;
+            }
+            if !completed_tracked && active > 0 {
+                self.poisoned = true;
+                self.write32(NVME_REG_CC, 0);
+                return Err(Error::msg("NVMe command timed out"));
+            }
+        }
+
+        if first_status_err {
+            return Err(Error::msg("NVMe command completed with error status"));
+        }
+        Ok(())
+    }
+
+    fn check_io_bounds(
+        &self,
+        offset: u64,
+        len: usize,
+        overflow_err: &'static str,
+        oob_err: &'static str,
+    ) -> Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        let end = offset
+            .checked_add(len as u64)
+            .ok_or_else(|| Error::msg(overflow_err))?;
+        if end > self.size() {
+            return Err(Error::msg(oob_err));
+        }
+        Ok(())
     }
 
     pub fn size(&self) -> u64 {
@@ -536,9 +746,26 @@ impl<H: Hal> NvmeDisk<H> {
         self.max_transfer_bytes
     }
 
+    fn can_use_pipelined_io(&self, offset: u64, len: usize) -> bool {
+        let bs = self.block_size as usize;
+        len > self.max_transfer_bytes
+            && self.io_slots.len() > 1
+            && offset.is_multiple_of(bs as u64)
+            && len.is_multiple_of(bs)
+    }
+
     /// Asynchronously reads `buf.len()` bytes starting at byte `offset` on the disk.
-    /// Supports arbitrary byte offsets/lengths and multi-page transfers up to `max_transfer_bytes` (256 KiB) per command using PRP1 + PRP2 / PRP lists.
+    /// Supports arbitrary byte offsets/lengths and pipelined multi-slot transfers up to `max_transfer_bytes` per command.
     pub async fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        self.check_io_bounds(
+            offset,
+            buf.len(),
+            "NVMe read offset overflow",
+            "NVMe read out of bounds",
+        )?;
+        if self.can_use_pipelined_io(offset, buf.len()) {
+            return self.pipelined_io(offset, IoBuf::Read(buf)).await;
+        }
         read_bytes(
             self,
             offset,
@@ -550,8 +777,17 @@ impl<H: Hal> NvmeDisk<H> {
     }
 
     /// Asynchronously writes `buf.len()` bytes starting at byte `offset` on the disk.
-    /// Handles unaligned head/tail blocks via read-modify-write and transfers up to `max_transfer_bytes` (256 KiB) per command.
+    /// Handles unaligned head/tail blocks via read-modify-write and pipelined multi-slot aligned transfers.
     pub async fn write(&mut self, offset: u64, buf: &[u8]) -> Result<()> {
+        self.check_io_bounds(
+            offset,
+            buf.len(),
+            "NVMe write offset overflow",
+            "NVMe write out of bounds",
+        )?;
+        if self.can_use_pipelined_io(offset, buf.len()) {
+            return self.pipelined_io(offset, IoBuf::Write(buf)).await;
+        }
         write_bytes(
             self,
             offset,
@@ -592,11 +828,11 @@ impl<H: Hal> BlockDeviceIo for NvmeDisk<H> {
     }
 
     fn dma_slice(&self) -> &[u8] {
-        unsafe { self.data.as_slice() }
+        unsafe { self.io_slots[0].data.as_slice() }
     }
 
     fn dma_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { self.data.as_mut_slice() }
+        unsafe { self.io_slots[0].data.as_mut_slice() }
     }
 
     async fn transfer_blocks(
@@ -648,8 +884,11 @@ impl<H: Hal> Drop for NvmeDisk<H> {
             self.hal.free_dma(self.admin_q.cq);
             self.hal.free_dma(self.io_q.sq);
             self.hal.free_dma(self.io_q.cq);
-            self.hal.free_dma(self.prp_list);
-            self.hal.free_dma(self.data);
+            self.hal.free_dma(self.admin_buf);
+            for slot in &self.io_slots {
+                self.hal.free_dma(slot.prp_list);
+                self.hal.free_dma(slot.data);
+            }
         }
     }
 }

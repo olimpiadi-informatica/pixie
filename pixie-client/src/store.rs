@@ -1,5 +1,6 @@
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::fmt::Write;
 use core::net::SocketAddrV4;
 
@@ -12,6 +13,7 @@ use pixie_shared::{Chunk, ChunkHash, Image, MAX_CHUNK_SIZE, Offset, UdpRequest};
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::net::UdpSocket;
+use crate::os::timer::Timer;
 use crate::os::ui::DrawArea;
 use crate::os::{disk, memory, ui};
 use crate::rpc::RpcClient;
@@ -109,23 +111,43 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     }));
     ui::update_content(draw);
 
-    let (tx, rx) = thingbuf::mpsc::channel(channel_size);
+    let (tx, rx) = thingbuf::mpsc::channel::<(Chunk, Option<Vec<u8>>)>(channel_size);
+    let last_draw_us = Cell::new(Timer::micros());
+    let maybe_draw = || {
+        let now = Timer::micros();
+        if now.saturating_sub(last_draw_us.get()) >= 100_000 {
+            ui::update_content(draw);
+            last_draw_us.set(now);
+        }
+    };
 
     let task1 = async {
         let tx = tx;
+        let mut read_buf = vec![0u8; MAX_CHUNK_SIZE];
+        let mut seen_hashes: BTreeMap<ChunkHash, usize> = BTreeMap::new();
         for chunk_info in chunks {
-            let mut data = vec![0; chunk_info.size];
-            disk.read(chunk_info.start as u64, &mut data).await?;
-            let cdata = compress(&data);
-            let hash = blake3::hash(&data).into();
+            if chunk_info.size > read_buf.len() {
+                read_buf.resize(chunk_info.size, 0);
+            }
+            let data = &mut read_buf[..chunk_info.size];
+            disk.read(chunk_info.start as u64, data).await?;
+            let hash: ChunkHash = blake3::hash(data).into();
+            let (csize, cdata) = if let Some(&csize) = seen_hashes.get(&hash) {
+                (csize, None)
+            } else {
+                let cdata = compress(data);
+                let csize = cdata.len();
+                seen_hashes.insert(hash, csize);
+                (csize, Some(cdata))
+            };
             let chunk = Chunk {
                 hash,
                 start: chunk_info.start,
                 size: chunk_info.size,
-                csize: cdata.len(),
+                csize,
             };
             stats.borrow_mut().as_pushing_chunks_mut().read_chunks += 1;
-            ui::update_content(draw);
+            maybe_draw();
             tx.send((chunk, cdata)).await.expect("receiver dropped");
         }
         Ok::<_, Error>(())
@@ -134,8 +156,8 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     let task2 = async {
         let mut uploaded_chunks = Vec::new();
         let mut batch = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
-        let mut uploaded_in_batch: Vec<ChunkHash> = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
         let mut progress_buf = [0u8; 32];
+        let mut last_progress_us = Timer::micros();
         while let Some(first) = rx.recv().await {
             batch.clear();
             batch.push(first);
@@ -146,14 +168,23 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 batch.push(item);
             }
 
-            let hashes: Vec<_> = batch.iter().map(|(c, _)| c.hash).collect();
-            let present = rpc.has_chunks(hashes).await?;
+            let hashes: Vec<_> = batch
+                .iter()
+                .filter_map(|(c, cdata)| cdata.as_ref().map(|_| c.hash))
+                .collect();
+            let present = if hashes.is_empty() {
+                Vec::new()
+            } else {
+                rpc.has_chunks(hashes).await?
+            };
 
-            uploaded_in_batch.clear();
-            for ((chunk, cdata), has_chunk) in batch.drain(..).zip(present) {
-                if !has_chunk && !uploaded_in_batch.contains(&chunk.hash) {
-                    rpc.upload_chunk(&cdata).await?;
-                    uploaded_in_batch.push(chunk.hash);
+            let mut present_iter = present.into_iter();
+            for (chunk, cdata) in batch.drain(..) {
+                if let Some(cdata) = cdata {
+                    let has_chunk = present_iter.next().unwrap_or(false);
+                    if !has_chunk {
+                        rpc.upload_chunk(&cdata).await?;
+                    }
                 }
                 uploaded_chunks.push(chunk);
 
@@ -167,18 +198,28 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                     pc.tsize = total_size;
                     pc.tcsize = total_csize;
                 }
-                ui::update_content(draw);
-                let pkt = postcard::to_slice(
-                    &UdpRequest::ActionProgress(uploaded_chunks.len(), total),
-                    &mut progress_buf,
-                )?;
-                udp.send_to(server_address, pkt).await?;
+                maybe_draw();
+                let now_us = Timer::micros();
+                if now_us.saturating_sub(last_progress_us) >= 100_000 {
+                    let pkt = postcard::to_slice(
+                        &UdpRequest::ActionProgress(uploaded_chunks.len(), total),
+                        &mut progress_buf,
+                    )?;
+                    udp.send_to(server_address, pkt).await?;
+                    last_progress_us = now_us;
+                }
             }
         }
+        let pkt = postcard::to_slice(
+            &UdpRequest::ActionProgress(uploaded_chunks.len(), total),
+            &mut progress_buf,
+        )?;
+        udp.send_to(server_address, pkt).await?;
         Ok::<_, Error>(uploaded_chunks)
     };
 
     let ((), chunk_hashes) = futures::try_join!(task1, task2)?;
+    ui::update_content(draw);
 
     rpc.upload_image(&Image {
         boot_option_id: boid,

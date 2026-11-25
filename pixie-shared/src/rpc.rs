@@ -122,7 +122,7 @@ pub struct SackSender {
 }
 
 impl SackSender {
-    const WINDOW: usize = 48;
+    const WINDOW: usize = 64;
 
     pub fn new(total_len: usize) -> Self {
         let num_blocks = total_len.div_ceil(RPC_BLOCK_SIZE);

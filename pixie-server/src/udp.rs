@@ -45,9 +45,10 @@ struct RateController {
 
 impl RateController {
     const MIN_RATE: f64 = 500_000.0; // 4 Mbps
-    const INIT_RATE: f64 = 10_000_000.0; // 80 Mbps
+    const INIT_RATE: f64 = 20_000_000.0; // 160 Mbps
     const MAX_RATE: f64 = 125_000_000.0; // 1 Gbps
-    const TICK: Duration = Duration::from_millis(200);
+    const SLOW_START_GROW: f64 = 1.75;
+    const TICK: Duration = Duration::from_millis(100);
     const CUT_COOLDOWN: Duration = Duration::from_millis(500);
     const IDLE_RESET: Duration = Duration::from_secs(10);
     const LOSS_CUT: f64 = 0.02;
@@ -134,6 +135,7 @@ impl RateController {
                 self.ceiling_bytes_s = None;
             }
             let factor = match self.ceiling_bytes_s {
+                None => Self::SLOW_START_GROW,
                 Some(c) if self.rate_bytes_s >= c * 0.85 => {
                     if self.clean_ticks >= 2 {
                         self.clean_ticks = 0;
@@ -142,7 +144,7 @@ impl RateController {
                         1.0
                     }
                 }
-                _ => 1.15,
+                Some(_) => 1.15,
             };
             let new_rate = (self.rate_bytes_s * factor).clamp(Self::MIN_RATE, Self::MAX_RATE);
             let changed = (new_rate - self.rate_bytes_s).abs() >= 1.0;
@@ -511,11 +513,12 @@ mod tests {
         let t0 = Instant::now();
         let mut rc = RateController::new(t0);
         let init = rc.rate_bytes_s;
+        assert_eq!(init, RateController::INIT_RATE);
 
-        // Clean tick grows by 15% when no ceiling is set.
-        assert!(rc.update_rate(t0 + Duration::from_millis(200), 0.0, 0, init));
+        // Slow-start: clean tick grows exponentially when no ceiling is set.
+        assert!(rc.update_rate(t0 + Duration::from_millis(100), 0.0, 0, init));
         let r1 = rc.rate_bytes_s;
-        assert!((r1 - init * 1.15).abs() < 1e-3);
+        assert!((r1 - init * RateController::SLOW_START_GROW).abs() < 1e-3);
 
         // Loss above threshold cuts by 0.88x and sets ceiling; second cut inside cooldown is skipped.
         let cut_time = t0 + Duration::from_millis(600);
@@ -523,18 +526,28 @@ mod tests {
         let after_cut = rc.rate_bytes_s;
         assert!((after_cut - r1 * 0.88).abs() < 1e-3);
         assert_eq!(rc.ceiling_bytes_s, Some(r1));
-        assert!(!rc.update_rate(cut_time + Duration::from_millis(200), 0.0, 5_000, after_cut));
+        assert!(!rc.update_rate(cut_time + Duration::from_millis(100), 0.0, 5_000, after_cut));
         assert_eq!(rc.rate_bytes_s, after_cut);
 
         // Above 0.85 * ceiling: first clean tick holds, second grows by 1.03x.
-        assert!(!rc.update_rate(cut_time + Duration::from_millis(400), 0.0, 0, after_cut));
-        assert!(rc.update_rate(cut_time + Duration::from_millis(600), 0.0, 0, after_cut));
-        assert!((rc.rate_bytes_s - after_cut * 1.03).abs() < 1e-3);
+        assert!(!rc.update_rate(cut_time + Duration::from_millis(200), 0.0, 0, after_cut));
+        assert!(rc.update_rate(cut_time + Duration::from_millis(300), 0.0, 0, after_cut));
+        let after_ca = rc.rate_bytes_s;
+        assert!((after_ca - after_cut * 1.03).abs() < 1e-3);
+
+        // Second cut after cooldown drops rate below 0.85 * ceiling; avoidance grows by 1.15x (not slow-start).
+        let cut2_time = cut_time + Duration::from_millis(600);
+        assert!(rc.update_rate(cut2_time, 0.03, 0, after_ca));
+        let below_thresh = rc.rate_bytes_s;
+        let new_ceiling = rc.ceiling_bytes_s.unwrap();
+        assert!(below_thresh < new_ceiling * 0.85);
+        assert!(rc.update_rate(cut2_time + Duration::from_millis(100), 0.0, 0, below_thresh));
+        assert!((rc.rate_bytes_s - below_thresh * 1.15).abs() < 1e-3);
 
         // Idle >= IDLE_RESET resets back to INIT_RATE and clears ceiling.
         let (_tx, mut rx) = mpsc::channel(4);
         rc.on_idle(
-            cut_time + Duration::from_secs(12),
+            cut2_time + Duration::from_secs(12),
             Duration::from_secs(10),
             &mut rx,
         );
