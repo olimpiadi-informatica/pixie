@@ -51,7 +51,7 @@ group/image at once) are available from the web dashboard or the server's
   ```sh
   yay -S rustup upx trunk
   rustup toolchain install stable
-  rustup target add x86_64-unknown-uefi
+  rustup target add wasm32-unknown-unknown x86_64-unknown-uefi
   ```
 * `pixie-server` must run as root (it needs device-bound sockets and
   privileged ports 53, 67, and 69 for DNS, DHCP, and TFTP).

@@ -56,8 +56,10 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
             Err(e) => Err(e)?,
         }
     };
-    file.write_all(data)
-        .with_context(|| format!("write to file: {}", tmp_path.display()))?;
+    if let Err(e) = file.write_all(data) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e).with_context(|| format!("write to file: {}", tmp_path.display()));
+    }
     std::mem::drop(file);
     std::fs::rename(&tmp_path, path)?;
     Ok(())
@@ -162,43 +164,61 @@ impl State {
         let chunks_dir = storage_dir.join(CHUNKS_DIR);
         let mut chunks_stats: ChunksStats = std::fs::read_dir(&chunks_dir)
             .with_context(|| format!("open chunks dir: {}", chunks_dir.display()))?
-            .map(|file| {
-                let file = file?;
-                let metadata = file.metadata()?;
-                let csize = metadata.len();
+            .filter_map(|file| {
+                let file = match file {
+                    Ok(f) => f,
+                    Err(e) => return Some(Err(e.into())),
+                };
+                if file.path().extension().is_some_and(|ext| ext == "tmp") {
+                    let _ = std::fs::remove_file(file.path());
+                    return None;
+                }
+                Some((|| {
+                    let metadata = file.metadata()?;
+                    let csize = metadata.len();
 
-                let name = file
-                    .file_name()
-                    .to_str()
-                    .and_then(|s| hex::decode(s).ok())
-                    .and_then(|s| ChunkHash::try_from(&s[..]).ok())
-                    .with_context(|| format!("invalid chunk name: {:?}", file.file_name()))?;
+                    let name = file
+                        .file_name()
+                        .to_str()
+                        .and_then(|s| hex::decode(s).ok())
+                        .and_then(|s| ChunkHash::try_from(&s[..]).ok())
+                        .with_context(|| format!("invalid chunk name: {:?}", file.file_name()))?;
 
-                Ok((name, ChunkStats { csize, ref_cnt: 0 }))
+                    Ok((name, ChunkStats { csize, ref_cnt: 0 }))
+                })())
             })
             .collect::<Result<_>>()?;
 
         let images_dir = storage_dir.join(IMAGES_DIR);
         let images = std::fs::read_dir(&images_dir)
             .with_context(|| format!("open images dir: {}", images_dir.display()))?
-            .map(|image_entry| {
-                let image_entry = image_entry?;
+            .filter_map(|image_entry| {
+                let image_entry = match image_entry {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e.into())),
+                };
                 let path = image_entry.path();
-                let image_name = image_entry
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| anyhow!("invalid image name {:?}", image_entry.file_name()))?;
-                let content = std::fs::read(&path)
-                    .with_context(|| format!("read image file: {}", path.display()))?;
-                let image = postcard::from_bytes::<Image>(&content)
-                    .with_context(|| format!("deserialize image from {}", path.display()))?;
-                for chunk in &image.disk {
-                    let chunk_stats = chunks_stats
-                        .get_mut(&chunk.hash)
-                        .with_context(|| format!("chunk {} not found", hex::encode(chunk.hash)))?;
-                    chunk_stats.ref_cnt += 1;
+                if path.extension().is_some_and(|ext| ext == "tmp") {
+                    let _ = std::fs::remove_file(&path);
+                    return None;
                 }
-                Ok((image_name, (image.size(), image.csize())))
+                Some((|| {
+                    let image_name = image_entry
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| anyhow!("invalid image name {:?}", image_entry.file_name()))?;
+                    let content = std::fs::read(&path)
+                        .with_context(|| format!("read image file: {}", path.display()))?;
+                    let image = postcard::from_bytes::<Image>(&content)
+                        .with_context(|| format!("deserialize image from {}", path.display()))?;
+                    for chunk in &image.disk {
+                        let chunk_stats = chunks_stats.get_mut(&chunk.hash).with_context(|| {
+                            format!("chunk {} not found", hex::encode(chunk.hash))
+                        })?;
+                        chunk_stats.ref_cnt += 1;
+                    }
+                    Ok((image_name, (image.size(), image.csize())))
+                })())
             })
             .collect::<Result<_>>()?;
 

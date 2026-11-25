@@ -34,6 +34,7 @@ jobs:
             cargo clippy -- -D warnings
             popd
           done
+          cargo clippy --manifest-path pixie-shared/Cargo.toml --all-features --all-targets -- -D warnings
 
   test:
     name: Test
