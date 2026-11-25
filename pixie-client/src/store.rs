@@ -12,12 +12,15 @@ use pixie_shared::{Chunk, ChunkHash, Image, MAX_CHUNK_SIZE, Offset, UdpRequest};
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
+use crate::os::executor::Executor;
 use crate::os::net::UdpSocket;
 use crate::os::timer::Timer;
 use crate::os::ui::DrawArea;
 use crate::os::{disk, memory, ui};
 use crate::rpc::RpcClient;
-use crate::{MIN_MEMORY, parse_disk};
+use crate::{
+    MIN_MEMORY, build_contiguous_batches, hash_cooperative, is_all_zero, parse_disk, zero_hash,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkInfo {
@@ -94,9 +97,14 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     let mut total_size = 0;
     let mut total_csize = 0;
 
+    const READ_BATCH_BYTES: usize = 2 * MAX_CHUNK_SIZE; // 8 MiB per NVMe read-ahead batch
+    const READ_QUEUE_DEPTH: usize = 4; // 32 MiB bounded read-ahead pool
+    const ZERO_YIELD_SLICE: usize = 512 * 1024;
+
     let free_mem = memory::stats().free;
-    let channel_size =
-        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).clamp(32, 128);
+    let usable_mem =
+        free_mem.saturating_sub(MIN_MEMORY + (READ_QUEUE_DEPTH * READ_BATCH_BYTES) as u64) as usize;
+    let channel_size = (usable_mem / (4 * MAX_CHUNK_SIZE)).clamp(32, 128);
     log::debug!(
         "Free memory: {}. Channel size: {channel_size}",
         BytesFmt(free_mem)
@@ -111,6 +119,15 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     }));
     ui::update_content(draw);
 
+    let batches = build_contiguous_batches(&chunks, READ_BATCH_BYTES, |c| (c.start, c.size));
+    let (free_tx, free_rx) = thingbuf::mpsc::channel::<Vec<u8>>(READ_QUEUE_DEPTH);
+    for _ in 0..READ_QUEUE_DEPTH {
+        free_tx
+            .try_send(vec![0u8; READ_BATCH_BYTES])
+            .expect("pre-seeding free read buffers");
+    }
+    let (filled_tx, filled_rx) = thingbuf::mpsc::channel::<(usize, Vec<u8>)>(READ_QUEUE_DEPTH);
+
     let (tx, rx) = thingbuf::mpsc::channel::<(Chunk, Option<Vec<u8>>)>(channel_size);
     let last_draw_us = Cell::new(Timer::micros());
     let maybe_draw = || {
@@ -121,39 +138,75 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
         }
     };
 
-    let task1 = async {
-        let tx = tx;
-        let mut read_buf = vec![0u8; MAX_CHUNK_SIZE];
-        let mut seen_hashes: BTreeMap<ChunkHash, usize> = BTreeMap::new();
-        for chunk_info in chunks {
-            if chunk_info.size > read_buf.len() {
-                read_buf.resize(chunk_info.size, 0);
+    let reader_task = async {
+        let filled_tx = filled_tx;
+        let free_rx = free_rx;
+        for (b_idx, &(b_off, b_len, _)) in batches.iter().enumerate() {
+            let Some(mut buf) = free_rx.recv().await else {
+                break;
+            };
+            if b_len > buf.len() {
+                buf.resize(b_len, 0);
             }
-            let data = &mut read_buf[..chunk_info.size];
-            disk.read(chunk_info.start as u64, data).await?;
-            let hash: ChunkHash = blake3::hash(data).into();
-            let (csize, cdata) = if let Some(&csize) = seen_hashes.get(&hash) {
-                (csize, None)
-            } else {
-                let cdata = compress(data);
-                let csize = cdata.len();
-                seen_hashes.insert(hash, csize);
-                (csize, Some(cdata))
-            };
-            let chunk = Chunk {
-                hash,
-                start: chunk_info.start,
-                size: chunk_info.size,
-                csize,
-            };
-            stats.borrow_mut().as_pushing_chunks_mut().read_chunks += 1;
-            maybe_draw();
-            tx.send((chunk, cdata)).await.expect("receiver dropped");
+            disk.read(b_off, &mut buf[..b_len]).await?;
+            if filled_tx.send((b_idx, buf)).await.is_err() {
+                break;
+            }
         }
         Ok::<_, Error>(())
     };
 
-    let task2 = async {
+    let hash_task = async {
+        let tx = tx;
+        let free_tx = free_tx;
+        let mut seen_hashes: BTreeMap<ChunkHash, usize> = BTreeMap::new();
+        let mut zero_hashes: BTreeMap<usize, ChunkHash> = BTreeMap::new();
+        let mut zero_bytes_since_yield = 0usize;
+        while let Some((b_idx, buf)) = filled_rx.recv().await {
+            let (b_off, _, ref b_range) = batches[b_idx];
+            for chunk_info in &chunks[b_range.clone()] {
+                let rel = chunk_info.start - b_off as usize;
+                let data = &buf[rel..rel + chunk_info.size];
+                let hash: ChunkHash = if is_all_zero(data) {
+                    zero_bytes_since_yield += data.len();
+                    if zero_bytes_since_yield >= ZERO_YIELD_SLICE {
+                        zero_bytes_since_yield = 0;
+                        Executor::sched_yield().await;
+                    }
+                    *zero_hashes
+                        .entry(data.len())
+                        .or_insert_with(|| zero_hash(data.len()))
+                } else {
+                    zero_bytes_since_yield = 0;
+                    hash_cooperative(data).await
+                };
+                let (csize, cdata) = if let Some(&csize) = seen_hashes.get(&hash) {
+                    (csize, None)
+                } else {
+                    let cdata = compress(data);
+                    if data.len() >= 256 * 1024 {
+                        Executor::sched_yield().await;
+                    }
+                    let csize = cdata.len();
+                    seen_hashes.insert(hash, csize);
+                    (csize, Some(cdata))
+                };
+                let chunk = Chunk {
+                    hash,
+                    start: chunk_info.start,
+                    size: chunk_info.size,
+                    csize,
+                };
+                stats.borrow_mut().as_pushing_chunks_mut().read_chunks += 1;
+                maybe_draw();
+                tx.send((chunk, cdata)).await.expect("receiver dropped");
+            }
+            let _ = free_tx.send(buf).await;
+        }
+        Ok::<_, Error>(())
+    };
+
+    let upload_task = async {
         let mut uploaded_chunks = Vec::new();
         let mut batch = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
         let mut progress_buf = [0u8; 32];
@@ -218,7 +271,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
         Ok::<_, Error>(uploaded_chunks)
     };
 
-    let ((), chunk_hashes) = futures::try_join!(task1, task2)?;
+    let ((), (), chunk_hashes) = futures::try_join!(reader_task, hash_task, upload_task)?;
     ui::update_content(draw);
 
     rpc.upload_image(&Image {
