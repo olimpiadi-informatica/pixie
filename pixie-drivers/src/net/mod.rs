@@ -1,4 +1,5 @@
 pub mod e1000;
+pub mod igb;
 pub mod igc;
 pub(crate) mod intel;
 pub mod rtl;

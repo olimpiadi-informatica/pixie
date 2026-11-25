@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use crate::hal::{DmaBuffer, Hal, PAGE_SIZE, alloc_dma_buffers};
 use crate::net::is_valid_mac;
 
-pub const NUM_RX_DESC: usize = 256;
+pub const NUM_RX_DESC: usize = 1024;
 pub const NUM_TX_DESC: usize = 128;
 pub const BUFFER_SIZE: usize = 2048;
 
@@ -22,6 +22,72 @@ pub struct RxDesc {
     pub status: u8,
     pub errors: u8,
     pub special: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdvRxDesc {
+    pub lo: u64,
+    pub status_error: u32,
+    pub length: u16,
+    pub vlan: u16,
+}
+
+const _: () = assert!(core::mem::size_of::<AdvRxDesc>() == core::mem::size_of::<RxDesc>());
+
+trait IntelRxDesc: Copy {
+    fn arm(buffer_addr: u64) -> Self;
+    unsafe fn is_done(desc_ptr: *const Self) -> bool;
+    /// Reads descriptor status after `DD == 1` has been observed and an `Acquire` fence executed.
+    /// Returns `(is_eop, has_fatal_error, length)`.
+    unsafe fn read_completed(desc_ptr: *const Self) -> (bool, bool, u16);
+}
+
+impl IntelRxDesc for RxDesc {
+    fn arm(buffer_addr: u64) -> Self {
+        Self {
+            buffer_addr,
+            ..Default::default()
+        }
+    }
+
+    unsafe fn is_done(desc_ptr: *const Self) -> bool {
+        let status = unsafe { ptr::read_volatile(&raw const (*desc_ptr).status) };
+        (status & 1) != 0
+    }
+
+    unsafe fn read_completed(desc_ptr: *const Self) -> (bool, bool, u16) {
+        const RX_FATAL_ERRORS: u8 = 0x97; // CE(0x01) | SE(0x02) | SEQ(0x04) | CXE(0x10) | RXE(0x80)
+        let status = unsafe { ptr::read_volatile(&raw const (*desc_ptr).status) };
+        let errors = unsafe { ptr::read_volatile(&raw const (*desc_ptr).errors) };
+        let length = unsafe { ptr::read_volatile(&raw const (*desc_ptr).length) };
+        ((status & 2) != 0, (errors & RX_FATAL_ERRORS) != 0, length)
+    }
+}
+
+impl IntelRxDesc for AdvRxDesc {
+    fn arm(buffer_addr: u64) -> Self {
+        Self {
+            lo: buffer_addr,
+            ..Default::default()
+        }
+    }
+
+    unsafe fn is_done(desc_ptr: *const Self) -> bool {
+        let status_error = unsafe { ptr::read_volatile(&raw const (*desc_ptr).status_error) };
+        (status_error & 1) != 0
+    }
+
+    unsafe fn read_completed(desc_ptr: *const Self) -> (bool, bool, u16) {
+        const RX_ADV_FATAL_ERRORS: u32 = 0x9700_0000; // CE | SE | SEQ | CXE | RXE
+        let status_error = unsafe { ptr::read_volatile(&raw const (*desc_ptr).status_error) };
+        let length = unsafe { ptr::read_volatile(&raw const (*desc_ptr).length) };
+        (
+            (status_error & 2) != 0,
+            (status_error & RX_ADV_FATAL_ERRORS) != 0,
+            length,
+        )
+    }
 }
 
 #[repr(C)]
@@ -221,35 +287,38 @@ impl IntelRings {
         Ok(())
     }
 
-    pub(crate) fn has_packets(&self) -> bool {
-        let rx_descs = self.rx_ring.virt as *const RxDesc;
-        let status = unsafe { ptr::read_volatile(&raw const (*rx_descs.add(self.rx_cur)).status) };
-        (status & 1) != 0
+    fn has_packets_with<D: IntelRxDesc>(&self) -> bool {
+        let rx_descs = self.rx_ring.virt as *const D;
+        unsafe { D::is_done(rx_descs.add(self.rx_cur)) }
     }
 
-    pub(crate) fn receive<F: FnMut(u32)>(
+    pub(crate) fn has_packets(&self) -> bool {
+        self.has_packets_with::<RxDesc>()
+    }
+
+    pub(crate) fn has_packets_adv(&self) -> bool {
+        self.has_packets_with::<AdvRxDesc>()
+    }
+
+    fn receive_with<D: IntelRxDesc, F: FnMut(u32)>(
         &mut self,
         buf: &mut [u8],
         mut write_rdt: F,
     ) -> Option<usize> {
-        const RX_FATAL_ERRORS: u8 = 0x97; // CE(0x01) | SE(0x02) | SEQ(0x04) | CXE(0x10) | RXE(0x80)
-        let rx_descs = self.rx_ring.virt as *mut RxDesc;
+        let rx_descs = self.rx_ring.virt as *mut D;
 
         for _ in 0..NUM_RX_DESC {
             let idx = self.rx_cur;
             let desc_ptr = unsafe { rx_descs.add(idx) };
-            // Read status (DD bit) first, followed by an Acquire fence, before reading
+            // Read DD bit first, followed by an Acquire fence, before reading
             // errors/length so concurrent NIC DMA cannot tear descriptor fields.
-            let status = unsafe { ptr::read_volatile(&raw const (*desc_ptr).status) };
-            if (status & 1) == 0 {
+            if !unsafe { D::is_done(desc_ptr) } {
                 return None;
             }
 
             fence(Ordering::Acquire);
-            let errors = unsafe { ptr::read_volatile(&raw const (*desc_ptr).errors) };
-            let length = unsafe { ptr::read_volatile(&raw const (*desc_ptr).length) };
+            let (is_eop, has_error, length) = unsafe { D::read_completed(desc_ptr) };
             let buf_phys = self.rx_bufs.phys + (idx * BUFFER_SIZE) as u64;
-            let is_eop = (status & 2) != 0;
 
             let drop_frame = if self.rx_in_jumbo {
                 if is_eop {
@@ -260,18 +329,12 @@ impl IntelRings {
                 self.rx_in_jumbo = true;
                 true
             } else {
-                (errors & RX_FATAL_ERRORS) != 0 || length == 0 || (length as usize) > BUFFER_SIZE
+                has_error || length == 0 || (length as usize) > BUFFER_SIZE
             };
 
             if drop_frame {
                 unsafe {
-                    ptr::write_volatile(
-                        desc_ptr,
-                        RxDesc {
-                            buffer_addr: buf_phys,
-                            ..Default::default()
-                        },
-                    );
+                    ptr::write_volatile(desc_ptr, D::arm(buf_phys));
                 }
                 fence(Ordering::SeqCst);
                 self.rx_cur = (idx + 1) % NUM_RX_DESC;
@@ -283,13 +346,7 @@ impl IntelRings {
             let pkt_ptr = unsafe { self.rx_bufs.virt.add(idx * BUFFER_SIZE) };
             unsafe {
                 ptr::copy_nonoverlapping(pkt_ptr, buf.as_mut_ptr(), copy_len);
-                ptr::write_volatile(
-                    desc_ptr,
-                    RxDesc {
-                        buffer_addr: buf_phys,
-                        ..Default::default()
-                    },
-                );
+                ptr::write_volatile(desc_ptr, D::arm(buf_phys));
             }
             fence(Ordering::SeqCst);
 
@@ -298,6 +355,18 @@ impl IntelRings {
             return Some(copy_len);
         }
         None
+    }
+
+    pub(crate) fn receive<F: FnMut(u32)>(&mut self, buf: &mut [u8], write_rdt: F) -> Option<usize> {
+        self.receive_with::<RxDesc, F>(buf, write_rdt)
+    }
+
+    pub(crate) fn receive_adv<F: FnMut(u32)>(
+        &mut self,
+        buf: &mut [u8],
+        write_rdt: F,
+    ) -> Option<usize> {
+        self.receive_with::<AdvRxDesc, F>(buf, write_rdt)
     }
 
     pub(crate) fn free<H: Hal>(&self, hal: &H) {

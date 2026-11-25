@@ -130,20 +130,17 @@ async fn fetch_image(server_addr: SocketAddrV4, hash: ChunkHash, len: usize) -> 
     }
 }
 
-pub fn handle_packet(
+pub fn feed_packet(
     buf: &[u8],
-    chunks_info: &mut BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
+    chunks_info: &BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
     received: &mut BTreeMap<ChunkHash, Decoder>,
     last_seen: &mut Vec<ChunkHash>,
-) -> Result<Option<(Vec<usize>, Vec<u8>)>> {
+) -> Option<(ChunkHash, usize, Vec<u8>)> {
     if buf.len() < 34 {
-        return Ok(None);
+        return None;
     }
     let hash: ChunkHash = buf[..32].try_into().unwrap();
-    let &(size, csize, _) = match chunks_info.get(&hash) {
-        Some(info) => info,
-        None => return Ok(None),
-    };
+    let &(size, csize, _) = chunks_info.get(&hash)?;
 
     let decoder = received.entry(hash).or_insert_with(|| Decoder::new(csize));
     if last_seen.last() != Some(&hash) {
@@ -153,33 +150,28 @@ pub fn handle_packet(
 
     if let Err(e) = decoder.add_packet(&buf[32..]) {
         log::warn!("Received invalid packet for chunk {hash:02x?}: {e}");
-        return Ok(None);
+        return None;
     }
-    let Some(cdata) = decoder.finish() else {
-        return Ok(None);
-    };
+    let cdata = decoder.finish()?;
 
     received.remove(&hash);
     last_seen.retain(|x| x != &hash);
 
-    let data = match decompress(&cdata, size) {
-        Ok(d) if d.len() == size && blake3::hash(&d).as_bytes() == &hash => d,
-        Ok(d) => {
-            log::warn!(
-                "Decompressed chunk {hash:02x?} size/hash mismatch (got {} bytes, expected {size}); re-fetching",
-                d.len()
-            );
-            return Ok(None);
-        }
-        Err(e) => {
-            log::warn!("Failed to decompress chunk {hash:02x?}: {e}; re-fetching");
-            return Ok(None);
-        }
-    };
+    Some((hash, size, cdata))
+}
 
-    let (_, _, pos) = chunks_info.remove(&hash).unwrap();
-
-    Ok(Some((pos, data)))
+async fn hash_matches_cooperative(data: &[u8], expected: &ChunkHash) -> bool {
+    const HASH_SLICE: usize = 256 * 1024;
+    let mut hasher = blake3::Hasher::new();
+    let mut chunks = data.chunks(HASH_SLICE);
+    if let Some(first) = chunks.next() {
+        hasher.update(first);
+    }
+    for slice in chunks {
+        Executor::sched_yield().await;
+        hasher.update(slice);
+    }
+    hasher.finalize().as_bytes() == expected
 }
 
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
@@ -321,7 +313,12 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                 }
                 fb.received = fb.received.saturating_add(1);
 
-                handle_packet(&pkt[8..], &mut chunks_info, &mut received, &mut last_seen)
+                Ok(feed_packet(
+                    &pkt[8..],
+                    &chunks_info,
+                    &mut received,
+                    &mut last_seen,
+                ))
             }));
             let sleep = Box::pin(Executor::sleep(Duration::from_millis(100)));
             let res = match select(recv, sleep).await {
@@ -330,8 +327,28 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
             };
             match res {
                 Some(chunk_res) => {
-                    if let Some((pos, data)) = chunk_res? {
-                        tx.send((pos, data)).await.expect("receiver was dropped");
+                    if let Some((hash, size, cdata)) = chunk_res? {
+                        match decompress(&cdata, size) {
+                            Ok(data)
+                                if data.len() == size
+                                    && hash_matches_cooperative(&data, &hash).await =>
+                            {
+                                if let Some((_, _, pos)) = chunks_info.remove(&hash) {
+                                    tx.send((pos, data)).await.expect("receiver was dropped");
+                                }
+                            }
+                            Ok(data) => {
+                                log::warn!(
+                                    "Decompressed chunk {hash:02x?} size/hash mismatch (got {} bytes, expected {size}); re-fetching",
+                                    data.len()
+                                );
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to decompress chunk {hash:02x?}: {e}; re-fetching"
+                                );
+                            }
+                        }
                     }
 
                     assert_eq!(last_seen.len(), received.len());

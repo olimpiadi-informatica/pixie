@@ -6,7 +6,7 @@ use crate::hal::{DmaBuffer, Hal, PAGE_SIZE, alloc_dma_buffers};
 use crate::net::resolve_mac;
 use crate::pci::PciDevice;
 
-pub const NUM_RX_DESC: usize = 256;
+pub const NUM_RX_DESC: usize = 1024;
 pub const NUM_TX_DESC: usize = 128;
 pub const BUFFER_SIZE: usize = 2048;
 
@@ -27,13 +27,20 @@ const REG_PHY_STATUS: u64 = 0x6C;
 const REG_TPPOLL_8125: u64 = 0x90;
 const REG_RMS: u64 = 0xDA;
 const REG_CPCR: u64 = 0xE0;
+const REG_INTR_MITIGATE: u64 = 0xE2;
 const REG_RX_DESC_LOW: u64 = 0xE4;
 const REG_RX_DESC_HIGH: u64 = 0xE8;
 const REG_MTPS: u64 = 0xEC;
+const REG_MISC: u64 = 0xF0;
 
 const CR_RST: u8 = 1 << 4;
 const CR_RE: u8 = 1 << 3;
 const CR_TE: u8 = 1 << 2;
+
+const TXCFG_AUTO_FIFO: u32 = 1 << 7;
+const MISC_RXDV_GATED_EN: u32 = 1 << 19;
+const ISR_TX_OK: u32 = 0x0004;
+const ISR_TX_DESC_UNAVAIL: u32 = 0x0080;
 
 const DESC_OWN: u32 = 1 << 31;
 const DESC_EOR: u32 = 1 << 30;
@@ -103,11 +110,27 @@ impl<H: Hal> RtlDevice<H> {
         }
     }
 
+    fn reg_read16(hal: &H, base: u64, is_io: bool, offset: u64) -> u16 {
+        if is_io {
+            hal.io_read16((base + offset) as u16)
+        } else {
+            hal.mmio_read16(base + offset)
+        }
+    }
+
     fn reg_write16(hal: &H, base: u64, is_io: bool, offset: u64, val: u16) {
         if is_io {
             hal.io_write16((base + offset) as u16, val);
         } else {
             hal.mmio_write16(base + offset, val);
+        }
+    }
+
+    fn reg_read32(hal: &H, base: u64, is_io: bool, offset: u64) -> u32 {
+        if is_io {
+            hal.io_read32((base + offset) as u16)
+        } else {
+            hal.mmio_read32(base + offset)
         }
     }
 
@@ -209,17 +232,23 @@ impl<H: Hal> RtlDevice<H> {
             None => return Err(Error::msg("Realtek NIC detached during reset")),
         }
 
-        // 3. Unlock config registers (9346CR = 0xC0) and restore MAC via 32-bit IDR0/IDR4 writes
+        // 3. Unlock config registers (9346CR = 0xC0), clear Linux r8169 RXDV_GATED_EN, and restore MAC
         Self::reg_write8(&hal, reg_base, is_io, REG_9346CR, 0xC0);
+        let misc = Self::reg_read32(&hal, reg_base, is_io, REG_MISC);
+        if misc != 0xFFFF_FFFF && (misc & MISC_RXDV_GATED_EN) != 0 {
+            Self::reg_write32(&hal, reg_base, is_io, REG_MISC, misc & !MISC_RXDV_GATED_EN);
+        }
         let idr0 = u32::from_le_bytes([mac[0], mac[1], mac[2], mac[3]]);
         let idr4 = u32::from_le_bytes([mac[4], mac[5], 0, 0]);
         Self::reg_write32(&hal, reg_base, is_io, REG_IDR4, idr4);
         Self::reg_write32(&hal, reg_base, is_io, REG_MAC0, idr0);
 
-        // 4. Configure RMS = 2048, MTPS = 0x3B, and CPCR (RxChkSum | MulRW, NO PCIDAC)
+        // 4. Configure RMS = 2048, MTPS = 0x27, IntrMitigate = 0, and CPCR (preserving Normal_mode | INTT_MASK)
         Self::reg_write16(&hal, reg_base, is_io, REG_RMS, BUFFER_SIZE as u16);
-        Self::reg_write8(&hal, reg_base, is_io, REG_MTPS, 0x3B);
-        Self::reg_write16(&hal, reg_base, is_io, REG_CPCR, (1 << 5) | (1 << 3));
+        Self::reg_write8(&hal, reg_base, is_io, REG_MTPS, 0x27);
+        Self::reg_write16(&hal, reg_base, is_io, REG_INTR_MITIGATE, 0x0000);
+        let cpcr = Self::reg_read16(&hal, reg_base, is_io, REG_CPCR);
+        Self::reg_write16(&hal, reg_base, is_io, REG_CPCR, (cpcr & 0x2003) | (1 << 5));
 
         // 5. Allocate and program RX and TX descriptor rings + buffers
         let rx_ring_pages = (NUM_RX_DESC * core::mem::size_of::<RtlDesc>()).div_ceil(PAGE_SIZE);
@@ -272,13 +301,22 @@ impl<H: Hal> RtlDevice<H> {
         );
         Self::reg_write32(&hal, reg_base, is_io, REG_TX_DESC_LOW, tx_ring.phys as u32);
 
+        // Lock 9346CR and commit via readback BEFORE enabling CR_TE | CR_RE
+        Self::reg_write8(&hal, reg_base, is_io, REG_9346CR, 0x00);
+        let _ = Self::reg_read8(&hal, reg_base, is_io, REG_9346CR);
+
         // 6. CRITICAL QUIRK FIX: Enable CR = CR_TE | CR_RE BEFORE writing TCR and RCR
         Self::reg_write8(&hal, reg_base, is_io, REG_CR, CR_TE | CR_RE);
 
-        // 7. Program TCR and RCR, then lock 9346CR and mask interrupts
-        Self::reg_write32(&hal, reg_base, is_io, REG_TCR, (3 << 24) | (7 << 8));
-        Self::reg_write32(&hal, reg_base, is_io, REG_RCR, (7 << 13) | (7 << 8) | 0x0F);
-        Self::reg_write8(&hal, reg_base, is_io, REG_9346CR, 0x00);
+        // 7. Program TCR and RCR, then mask/clear interrupts
+        Self::reg_write32(
+            &hal,
+            reg_base,
+            is_io,
+            REG_TCR,
+            (3 << 24) | (7 << 8) | TXCFG_AUTO_FIFO,
+        );
+        Self::reg_write32(&hal, reg_base, is_io, REG_RCR, (1 << 11) | (7 << 8) | 0x0F);
         Self::mask_and_clear_interrupts(&hal, reg_base, is_io, variant);
 
         Ok(Self {
@@ -314,9 +352,51 @@ impl<H: Hal> RtlDevice<H> {
         phy != 0xFF && (phy & 0x02) != 0
     }
 
+    fn ack_interrupts(&self) -> u32 {
+        match self.variant {
+            RtlVariant::Rtl8169 => {
+                let isr = Self::reg_read16(&self.hal, self.reg_base, self.is_io, REG_ISR_8169);
+                if isr != 0 {
+                    Self::reg_write16(&self.hal, self.reg_base, self.is_io, REG_ISR_8169, isr);
+                }
+                isr as u32
+            }
+            RtlVariant::Rtl8125 => {
+                let isr = Self::reg_read32(&self.hal, self.reg_base, self.is_io, REG_ISR_8125);
+                if isr != 0 {
+                    Self::reg_write32(&self.hal, self.reg_base, self.is_io, REG_ISR_8125, isr);
+                }
+                isr
+            }
+        }
+    }
+
+    fn ring_tx_doorbell(&self) {
+        match self.variant {
+            RtlVariant::Rtl8169 => {
+                Self::reg_write8(&self.hal, self.reg_base, self.is_io, REG_TPPOLL_8169, 0x40);
+            }
+            RtlVariant::Rtl8125 => {
+                Self::reg_write16(
+                    &self.hal,
+                    self.reg_base,
+                    self.is_io,
+                    REG_TPPOLL_8125,
+                    0x0001,
+                );
+            }
+        }
+    }
+
     pub fn can_transmit(&mut self) -> bool {
         let tx_descs = self.tx_ring.virt as *const RtlDesc;
-        let opts1 = unsafe { ptr::read_volatile(&raw const (*tx_descs.add(self.tx_cur)).opts1) };
+        let mut opts1 =
+            unsafe { ptr::read_volatile(&raw const (*tx_descs.add(self.tx_cur)).opts1) };
+        if (opts1 & DESC_OWN) != 0 {
+            let _ = self.ack_interrupts();
+            self.ring_tx_doorbell();
+            opts1 = unsafe { ptr::read_volatile(&raw const (*tx_descs.add(self.tx_cur)).opts1) };
+        }
         (opts1 & DESC_OWN) == 0
     }
 
@@ -346,20 +426,7 @@ impl<H: Hal> RtlDevice<H> {
         }
         fence(Ordering::SeqCst);
 
-        match self.variant {
-            RtlVariant::Rtl8169 => {
-                Self::reg_write8(&self.hal, self.reg_base, self.is_io, REG_TPPOLL_8169, 0x40);
-            }
-            RtlVariant::Rtl8125 => {
-                Self::reg_write16(
-                    &self.hal,
-                    self.reg_base,
-                    self.is_io,
-                    REG_TPPOLL_8125,
-                    0x0001,
-                );
-            }
-        }
+        self.ring_tx_doorbell();
 
         self.tx_cur = (idx + 1) % NUM_TX_DESC;
         Ok(())
@@ -380,6 +447,16 @@ impl<H: Hal> RtlDevice<H> {
             let desc_ptr = unsafe { rx_descs.add(idx) };
             let opts1 = unsafe { ptr::read_volatile(&raw const (*desc_ptr).opts1) };
             if (opts1 & DESC_OWN) != 0 {
+                let isr = self.ack_interrupts();
+                if (isr & (ISR_TX_DESC_UNAVAIL | ISR_TX_OK)) != 0 {
+                    let prev_tx = (self.tx_cur + NUM_TX_DESC - 1) % NUM_TX_DESC;
+                    let tx_descs = self.tx_ring.virt as *const RtlDesc;
+                    let prev_opts1 =
+                        unsafe { ptr::read_volatile(&raw const (*tx_descs.add(prev_tx)).opts1) };
+                    if (prev_opts1 & DESC_OWN) != 0 {
+                        self.ring_tx_doorbell();
+                    }
+                }
                 return None;
             }
 

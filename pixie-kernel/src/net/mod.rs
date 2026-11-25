@@ -145,6 +145,7 @@ pub(super) fn with_net<T, F: FnOnce(&mut NetStack) -> T>(f: F) -> T {
 pub fn init() {
     use crate::hal::NativeHal;
     use pixie_drivers::net::e1000::{self, E1000Device};
+    use pixie_drivers::net::igb::{self, IgbDevice};
     use pixie_drivers::net::igc::{self, IgcDevice};
     use pixie_drivers::net::rtl::{self, RtlDevice};
     use pixie_drivers::net::usb_net::UsbEthernetDevice;
@@ -175,6 +176,22 @@ pub fn init() {
                     crate::arch::paging::map_mmio(base, size.max(0x20000));
                     if let Ok(dev) = E1000Device::new(pci, base, fallback_mac, NativeHal) {
                         candidate = Some(KernelNic::E1000(dev));
+                        break;
+                    }
+                }
+            }
+            if let Some(cand) = candidate
+                && accept_pci_candidate(cand)
+            {
+                break;
+            }
+        } else if igb::probe(&pci) {
+            let mut candidate = None;
+            for bar_idx in 0..6 {
+                if let Some(Bar::Memory { base, size, .. }) = pci.read_bar(&NativeHal, bar_idx) {
+                    crate::arch::paging::map_mmio(base, size.max(0x20000));
+                    if let Ok(dev) = IgbDevice::new(pci, base, fallback_mac, NativeHal) {
+                        candidate = Some(KernelNic::Igb(dev));
                         break;
                     }
                 }

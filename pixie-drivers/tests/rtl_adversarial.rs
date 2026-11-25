@@ -34,10 +34,17 @@ struct RtlSimState {
     rcr: u32,
     tnpds: u64,
     rdsar: u64,
+    misc: u32,
+    misc_writes: usize,
+    isr32: u32,
+    is_8125: bool,
+    c9346: u8,
+    c9346_locked_before_cr_enable: bool,
 
     // Ring tracking
     tx_hw_idx: usize,
     rx_hw_idx: usize,
+    drop_tx_doorbell_count: usize,
 
     // Quirk tracking
     tcr_ignored_before_cr_enable: usize,
@@ -53,6 +60,12 @@ impl RtlSimState {
         let mut regs = [0u8; 256];
         regs[0..6].copy_from_slice(&mac);
         regs[0x6C] = 0x02; // PHYSTATUS: Link Up (bit 1)
+        // Simulate leftover firmware/Linux r8169 state:
+        // CPCR = 0x200B (Normal_mode=1 | bits 0..1=3 | bit 3=1), IntrMitigate = 0xFFFF
+        regs[0xE0] = 0x0B;
+        regs[0xE1] = 0x20;
+        regs[0xE2] = 0xFF;
+        regs[0xE3] = 0xFF;
         Self {
             dma: DmaPool::new(DMA_PHYS_BASE, DMA_POOL_PAGES),
             reg_base,
@@ -62,8 +75,15 @@ impl RtlSimState {
             rcr: 0,
             tnpds: 0,
             rdsar: 0,
+            misc: (1 << 19) | 0x0000_1234, // Leftover Linux r8169 MISC_RXDV_GATED_EN
+            misc_writes: 0,
+            isr32: 0,
+            is_8125: false,
+            c9346: 0,
+            c9346_locked_before_cr_enable: false,
             tx_hw_idx: 0,
             rx_hw_idx: 0,
+            drop_tx_doorbell_count: 0,
             tcr_ignored_before_cr_enable: 0,
             rcr_ignored_before_cr_enable: 0,
             doorbell_38_writes: Vec::new(),
@@ -91,6 +111,10 @@ impl RtlSimState {
     }
 
     fn process_tx_doorbell(&mut self) {
+        if self.drop_tx_doorbell_count > 0 {
+            self.drop_tx_doorbell_count -= 1;
+            return;
+        }
         assert_ne!(self.tnpds, 0, "TNPDS not programmed before TX doorbell");
         assert_eq!(
             self.tnpds & 0xFF,
@@ -176,6 +200,7 @@ impl RtlSimState {
     fn reg_read8(&self, off: usize) -> u8 {
         match off {
             0x37 => self.cr,
+            0x50 => self.c9346,
             o if o < self.regs.len() => self.regs[o],
             _ => 0,
         }
@@ -188,11 +213,14 @@ impl RtlSimState {
         match off {
             0x37 => {
                 if (val & CR_RST) != 0 {
-                    // Software reset clears CR_RST, CR_TE, CR_RE, TCR, and RCR
+                    // Software reset clears CR_RST, CR_TE, CR_RE, TCR, and RCR (MISC.RXDV_GATED_EN survives!)
                     self.cr = 0;
                     self.tcr = 0;
                     self.rcr = 0;
                 } else {
+                    if (val & (CR_TE | CR_RE)) == (CR_TE | CR_RE) && self.c9346 == 0x00 {
+                        self.c9346_locked_before_cr_enable = true;
+                    }
                     self.cr = val;
                 }
             }
@@ -203,6 +231,7 @@ impl RtlSimState {
                     self.process_tx_doorbell();
                 }
             }
+            0x50 => self.c9346 = val,
             0x90 => {
                 // RTL8125 TPPOLL doorbell (8-bit write)
                 self.doorbell_90_writes.push(val as u16);
@@ -215,10 +244,18 @@ impl RtlSimState {
     }
 
     fn reg_read16(&self, off: usize) -> u16 {
-        (self.reg_read8(off) as u16) | ((self.reg_read8(off + 1) as u16) << 8)
+        match off {
+            0x3E if !self.is_8125 => (self.isr32 & 0xFFFF) as u16,
+            _ => (self.reg_read8(off) as u16) | ((self.reg_read8(off + 1) as u16) << 8),
+        }
     }
 
     fn reg_write16(&mut self, off: usize, val: u16) {
+        if off == 0x3E && !self.is_8125 {
+            // RW1C on RTL8169/8168 16-bit ISR
+            self.isr32 &= !(val as u32);
+            return;
+        }
         if off == 0x90 {
             self.doorbell_90_writes.push(val);
             if (val & 0x0001) != 0 {
@@ -234,10 +271,12 @@ impl RtlSimState {
         match off {
             0x20 => (self.tnpds & 0xFFFF_FFFF) as u32,
             0x24 => (self.tnpds >> 32) as u32,
+            0x3C if self.is_8125 => self.isr32,
             0x40 => self.tcr,
             0x44 => self.rcr,
             0xE4 => (self.rdsar & 0xFFFF_FFFF) as u32,
             0xE8 => (self.rdsar >> 32) as u32,
+            0xF0 => self.misc,
             _ => {
                 (self.reg_read8(off) as u32)
                     | ((self.reg_read8(off + 1) as u32) << 8)
@@ -251,6 +290,10 @@ impl RtlSimState {
         match off {
             0x20 => self.tnpds = (self.tnpds & 0xFFFF_FFFF_0000_0000) | (val as u64),
             0x24 => self.tnpds = (self.tnpds & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32),
+            0x3C if self.is_8125 => {
+                // RW1C on RTL8125 32-bit ISR
+                self.isr32 &= !val;
+            }
             0x40 => {
                 // Quirk 1: Realtek hardware ignores writes to TCR while CR_TE | CR_RE is not enabled!
                 if (self.cr & (CR_TE | CR_RE)) == (CR_TE | CR_RE) {
@@ -269,6 +312,10 @@ impl RtlSimState {
             }
             0xE4 => self.rdsar = (self.rdsar & 0xFFFF_FFFF_0000_0000) | (val as u64),
             0xE8 => self.rdsar = (self.rdsar & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32),
+            0xF0 => {
+                self.misc = val;
+                self.misc_writes += 1;
+            }
             _ => {
                 let bytes = val.to_le_bytes();
                 for (i, b) in bytes.iter().enumerate() {
@@ -463,14 +510,34 @@ fn test_rtl_quirk1_cr_enable_before_tcr_rcr_and_quirk2_doorbells() {
             st.rcr_ignored_before_cr_enable, 0,
             "Driver must enable CR_TE | CR_RE BEFORE writing REG_RCR (0x44)"
         );
-        assert_ne!(
-            st.tcr, 0,
-            "REG_TCR (0x40) must be configured after CR_TE | CR_RE"
+        assert_eq!(
+            st.tcr,
+            (3 << 24) | (7 << 8) | (1 << 7),
+            "REG_TCR (0x40) must enable TXCFG_AUTO_FIFO (bit 7)"
         );
-        assert_ne!(
-            st.rcr & 0x0F,
-            0,
-            "REG_RCR (0x44) must have packet accept bits configured after CR_TE | CR_RE"
+        assert_eq!(
+            st.rcr,
+            (1 << 11) | (7 << 8) | 0x0F,
+            "REG_RCR (0x44) must clear RX128_INT_EN (bit 15) and RX_MULTI_EN (bit 14)"
+        );
+        assert_eq!(
+            st.misc, 0x0000_1234,
+            "MISC.RXDV_GATED_EN (bit 19) must be cleared"
+        );
+        assert_eq!(st.regs[0xEC], 0x27, "REG_MTPS (0xEC) must be 0x27");
+        assert_eq!(
+            st.reg_read16(0xE2),
+            0x0000,
+            "IntrMitigate (0xE2) must be cleared"
+        );
+        assert_eq!(
+            st.reg_read16(0xE0),
+            0x2023,
+            "CPCR (0xE0) must preserve 0x2003 bits and set bit 5 without setting bit 3"
+        );
+        assert!(
+            st.c9346_locked_before_cr_enable,
+            "REG_9346CR must be locked (0x00) before CR_TE | CR_RE"
         );
     }
 
@@ -486,9 +553,71 @@ fn test_rtl_quirk1_cr_enable_before_tcr_rcr_and_quirk2_doorbells() {
         assert_eq!(st.transmitted_packets[0], b"rtl8168-test-frame");
     }
 
+    // Missed TX doorbell recovery in receive() (ISR & 0x0084) + can_transmit()
+    {
+        let mut st = hal_8168.state.lock().unwrap();
+        st.drop_tx_doorbell_count = 1;
+    }
+    dev_8168
+        .transmit(b"missed-doorbell-frame")
+        .expect("TX queues descriptor even if hardware missed doorbell");
+    {
+        let mut st = hal_8168.state.lock().unwrap();
+        assert_eq!(st.transmitted_packets.len(), 1);
+        st.isr32 = 0x0080; // TxDescUnavail
+    }
+    let mut dummy_rx = [0u8; 64];
+    assert!(dev_8168.receive(&mut dummy_rx).is_none());
+    {
+        let st = hal_8168.state.lock().unwrap();
+        assert_eq!(st.isr32, 0, "receive() must RW1C ack ISR");
+        assert_eq!(
+            st.transmitted_packets.len(),
+            2,
+            "receive() must re-ring missed TX doorbell"
+        );
+    }
+
+    // Missed TX doorbell recovery in can_transmit() when TX ring appears full
+    hal_8168.state.lock().unwrap().drop_tx_doorbell_count = NUM_TX_DESC;
+    dev_8168.transmit(b"queued-without-doorbell").unwrap();
+    {
+        let st = hal_8168.state.lock().unwrap();
+        assert_eq!(st.transmitted_packets.len(), 2);
+    }
+    for _ in 1..NUM_TX_DESC {
+        dev_8168.transmit(b"fill-slot").unwrap();
+    }
+    {
+        let mut st = hal_8168.state.lock().unwrap();
+        assert_eq!(st.transmitted_packets.len(), 2);
+        st.isr32 = 0x0004; // TxOK
+    }
+    // Next can_transmit() sees DESC_OWN on tx_cur, ACKs ISR, re-rings doorbell, drains all 128 descriptors, and returns true!
+    assert!(dev_8168.can_transmit());
+    {
+        let st = hal_8168.state.lock().unwrap();
+        assert_eq!(st.isr32, 0, "can_transmit() must RW1C ack ISR");
+        assert_eq!(st.transmitted_packets.len(), 2 + NUM_TX_DESC);
+    }
+
+    // Verify MISC == 0xFFFF_FFFF is not written back
+    let hal_unplugged_misc = MockRtlHal::new(REG_BASE_MMIO, mac_8168);
+    hal_unplugged_misc.state.lock().unwrap().misc = 0xFFFF_FFFF;
+    let _dev_misc = RtlDevice::new(
+        make_rtl_pci(0x8168),
+        REG_BASE_MMIO,
+        false,
+        None,
+        hal_unplugged_misc.clone(),
+    )
+    .expect("RtlDevice::new should ignore MISC=0xFFFF_FFFF");
+    assert_eq!(hal_unplugged_misc.state.lock().unwrap().misc_writes, 0);
+
     // Quirk 2: RTL8125 (also testing Port I/O mode is_io = true) must ring doorbell 0x90 (0x0001) and NOT 0x38
     let mac_8125 = [0x00, 0xE0, 0x4C, 0x25, 0x00, 0x02];
     let hal_8125 = MockRtlHal::new(REG_BASE_IO, mac_8125);
+    hal_8125.state.lock().unwrap().is_8125 = true;
     let mut dev_8125 = RtlDevice::new(
         make_rtl_pci(0x8125),
         REG_BASE_IO,
@@ -531,6 +660,7 @@ fn test_rtl_quirk1_cr_enable_before_tcr_rcr_and_quirk2_doorbells() {
 fn test_rtl_quirk3_fcs_stripping_and_ring_wraparound_desc_eor() {
     let mac = [0x00, 0xE0, 0x4C, 0x11, 0x22, 0x33];
     let hal = MockRtlHal::new(REG_BASE_MMIO, mac);
+    hal.state.lock().unwrap().is_8125 = true;
     let mut dev = RtlDevice::new(
         make_rtl_pci(0x8125),
         REG_BASE_MMIO,
@@ -540,7 +670,7 @@ fn test_rtl_quirk3_fcs_stripping_and_ring_wraparound_desc_eor() {
     )
     .expect("RtlDevice::new should succeed");
 
-    // Verify initial DESC_EOR on final RX (255) and TX (127) descriptors
+    // Verify initial DESC_EOR on final RX (1023) and TX (127) descriptors
     {
         let st = hal.state.lock().unwrap();
         let last_rx = st.read_desc(st.rdsar, NUM_RX_DESC - 1);
@@ -559,8 +689,9 @@ fn test_rtl_quirk3_fcs_stripping_and_ring_wraparound_desc_eor() {
         );
     }
 
-    // Quirk 3 + Ring Wrap-around: Transmit and receive 265 packets (> NUM_RX_DESC = 256 and > 2 * NUM_TX_DESC = 256)
-    let total_packets = 265usize;
+    // Quirk 3 + Ring Wrap-around: Transmit and receive 1035 packets (> NUM_RX_DESC = 1024 and > 8 * NUM_TX_DESC)
+    assert_eq!(NUM_RX_DESC, 1024);
+    let total_packets = 1035usize;
     for i in 0..total_packets {
         let mut frame = vec![0u8; 64];
         frame[0..6].copy_from_slice(&[0xFF; 6]);

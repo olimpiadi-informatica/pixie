@@ -28,6 +28,7 @@ struct IgcSimState {
     ctrl: u32,
     ctrl_ext: u32,
     status: u32,
+    ims: u32,
     imc: u32,
     eimc: u32,
     rctl: u32,
@@ -66,6 +67,7 @@ impl IgcSimState {
             ctrl: 1 << 6, // SLU
             ctrl_ext: 0,
             status: 1 << 1, // LU
+            ims: 0,
             imc: 0,
             eimc: 0,
             rctl: 0,
@@ -144,7 +146,8 @@ impl IgcSimState {
             0x0018 => self.ctrl_ext,
             0x0100 => self.rctl,
             0x0400 => self.tctl,
-            0x1508 => self.imc,
+            0x1508 => self.ims,
+            0x150C => self.imc,
             0x1528 => self.eimc,
             0x5008 => self.rfctl,
             0x5400 => self.ral0,
@@ -186,7 +189,8 @@ impl IgcSimState {
                 self.rctl = val;
             }
             0x0400 => self.tctl = val,
-            0x1508 => self.imc = val,
+            0x1508 => self.ims |= val,
+            0x150C => self.imc = val,
             0x1528 => self.eimc = val,
             0x5008 => self.rfctl = val,
             0x5400 => self.ral0 = val,
@@ -360,6 +364,12 @@ fn test_igc_foxville_queue0_init_rx_and_tx() {
         );
         assert_eq!(st.rfctl & (1 << 15), 0, "RFCTL.EXSTEN must be cleared");
         assert_eq!(st.mrqc, 0, "MRQC must be cleared");
+        assert_eq!(st.imc, 0xFFFF_FFFF, "IMC (0x150C) must mask all interrupts");
+        assert_eq!(st.ims, 0, "IMS (0x1508) must never be written by IgcDevice");
+        assert_eq!(
+            st.eimc, 0xFFFF_FFFF,
+            "EIMC (0x1528) must mask extended interrupts"
+        );
         assert_eq!(
             st.srrctl0 & 0x7F,
             2,
