@@ -36,41 +36,7 @@ struct Stats {
     requested: usize,
 }
 
-fn handle_packet(
-    buf: &[u8],
-    chunks_info: &mut BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
-    received: &mut BTreeMap<ChunkHash, Decoder>,
-    last_seen: &mut Vec<ChunkHash>,
-) -> Result<Option<(Vec<usize>, Vec<u8>)>> {
-    let hash: ChunkHash = buf[..32].try_into().unwrap();
-    let csize = match chunks_info.get(&hash) {
-        Some(&(_, csize, _)) => csize,
-        _ => return Ok(None),
-    };
-
-    let decoder = received.entry(hash).or_insert_with(|| Decoder::new(csize));
-    last_seen.retain(|x| x != &hash);
-    last_seen.push(hash);
-
-    if let Err(e) = decoder.add_packet(&buf[32..]) {
-        log::warn!("Received invalid packet for chunk {hash:02x?}: {e}");
-        return Ok(None);
-    }
-    let Some(cdata) = decoder.finish() else {
-        return Ok(None);
-    };
-
-    let (size, _, pos) = chunks_info.remove(&hash).unwrap();
-    received.remove(&hash).unwrap();
-    last_seen.retain(|x| x != &hash);
-
-    let data = decompress(&cdata, size)?;
-    assert_eq!(data.len(), size);
-
-    Ok(Some((pos, data)))
-}
-
-const BASE_OWD_WINDOWS: usize = 5;
+const BASE_OWD_WINDOWS: usize = 16;
 
 struct FeedbackState {
     received: u32,
@@ -164,6 +130,58 @@ async fn fetch_image(server_addr: SocketAddrV4, hash: ChunkHash, len: usize) -> 
     }
 }
 
+pub fn handle_packet(
+    buf: &[u8],
+    chunks_info: &mut BTreeMap<ChunkHash, (usize, usize, Vec<usize>)>,
+    received: &mut BTreeMap<ChunkHash, Decoder>,
+    last_seen: &mut Vec<ChunkHash>,
+) -> Result<Option<(Vec<usize>, Vec<u8>)>> {
+    if buf.len() < 34 {
+        return Ok(None);
+    }
+    let hash: ChunkHash = buf[..32].try_into().unwrap();
+    let &(size, csize, _) = match chunks_info.get(&hash) {
+        Some(info) => info,
+        None => return Ok(None),
+    };
+
+    let decoder = received.entry(hash).or_insert_with(|| Decoder::new(csize));
+    if last_seen.last() != Some(&hash) {
+        last_seen.retain(|x| x != &hash);
+        last_seen.push(hash);
+    }
+
+    if let Err(e) = decoder.add_packet(&buf[32..]) {
+        log::warn!("Received invalid packet for chunk {hash:02x?}: {e}");
+        return Ok(None);
+    }
+    let Some(cdata) = decoder.finish() else {
+        return Ok(None);
+    };
+
+    received.remove(&hash);
+    last_seen.retain(|x| x != &hash);
+
+    let data = match decompress(&cdata, size) {
+        Ok(d) if d.len() == size && blake3::hash(&d).as_bytes() == &hash => d,
+        Ok(d) => {
+            log::warn!(
+                "Decompressed chunk {hash:02x?} size/hash mismatch (got {} bytes, expected {size}); re-fetching",
+                d.len()
+            );
+            return Ok(None);
+        }
+        Err(e) => {
+            log::warn!("Failed to decompress chunk {hash:02x?}: {e}; re-fetching");
+            return Ok(None);
+        }
+    };
+
+    let (_, _, pos) = chunks_info.remove(&hash).unwrap();
+
+    Ok(Some((pos, data)))
+}
+
 pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let (image_hash, image_len) = RpcClient::new(*server_addr.ip())
         .await?
@@ -219,14 +237,20 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         Ok(())
     };
 
-    let mut disk = disk::Disk::largest();
+    let mut disk = disk::Disk::largest().await;
 
-    for (hash, (size, csize, pos)) in mem::take(&mut chunks_info) {
+    let mut scan_buf = vec![0u8; MAX_CHUNK_SIZE];
+    let mut last_draw_us = Timer::micros();
+    for (scanned, (hash, (size, csize, pos))) in mem::take(&mut chunks_info).into_iter().enumerate()
+    {
+        if size > scan_buf.len() {
+            scan_buf.resize(size, 0);
+        }
+        let buf = &mut scan_buf[..size];
         let mut found = None;
-        let mut buf = vec![0; size];
         for &offset in &pos {
-            disk.read(offset as u64, &mut buf).await.unwrap();
-            if blake3::hash(&buf).as_bytes() == &hash {
+            disk.read(offset as u64, buf).await?;
+            if blake3::hash(buf).as_bytes() == &hash {
                 found = Some(offset);
                 break;
             }
@@ -234,15 +258,21 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
         if let Some(found) = found {
             for &offset in &pos {
                 if offset != found {
-                    disk.write(offset as u64, &buf).await.unwrap();
+                    disk.write(offset as u64, buf).await?;
                 }
             }
         } else {
             chunks_info.insert(hash, (size, csize, pos));
             stats.borrow_mut().fetch = chunks_info.len();
         }
-        update_content(draw);
+        let now_us = Timer::micros();
+        if now_us.saturating_sub(last_draw_us) >= 100_000 || (scanned & 63) == 63 {
+            update_content(draw);
+            last_draw_us = now_us;
+        }
     }
+    drop(scan_buf);
+    update_content(draw);
 
     info!("Disk scanned; {} chunks to fetch", stats.borrow().fetch);
 
@@ -250,19 +280,23 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
 
     let mut received = BTreeMap::new();
 
-    let (tx, rx) = thingbuf::mpsc::channel(128);
+    let free_mem = memory::stats().free;
+    let channel_size =
+        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).clamp(32, 128);
+    let max_chunks =
+        (free_mem.saturating_sub(MIN_MEMORY) as usize / (2 * MAX_CHUNK_SIZE)).clamp(64, 128);
+    log::debug!(
+        "Free memory: {}. Channel size: {channel_size}, max chunks in memory: {max_chunks}",
+        BytesFmt(free_mem)
+    );
+
+    let (tx, rx) = thingbuf::mpsc::channel(channel_size);
 
     let task1 = async {
         let tx = tx;
         let mut last_seen = Vec::new();
         let mut last_seq = None::<u32>;
         let mut fb = FeedbackState::new();
-        let free_mem = memory::stats().free;
-        let max_chunks = (free_mem.saturating_sub(MIN_MEMORY) as usize / MAX_CHUNK_SIZE).max(128);
-        log::debug!(
-            "Free memory: {}. Max chunks in memory: {max_chunks}",
-            BytesFmt(free_mem)
-        );
 
         while !chunks_info.is_empty() {
             let recv = Box::pin(socket.recv_with(|pkt, _addr| {
@@ -317,11 +351,10 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
                 None => {
                     fb.send(&socket, server_addr).await?;
 
-                    // TODO(virv): compute the number of chunks to request
                     let chunks: Vec<_> =
                         chunks_info.iter().take(40).map(|(hash, _)| *hash).collect();
                     stats.borrow_mut().requested += chunks.len();
-                    let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks)).unwrap();
+                    let msg = postcard::to_allocvec(&UdpRequest::RequestChunks(chunks))?;
                     socket.send_to(server_addr, &msg).await?;
                 }
             }
@@ -349,20 +382,34 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
 
     let ((), (), ()) = futures::try_join!(task1, task2, draw_task)?;
 
+    disk.flush().await?;
+
     info!("Fetch complete, updating boot options");
 
-    let mut order = BootOptions::order();
-    let reboot_target = BootOptions::reboot_target();
-    if let Some(target) = reboot_target {
-        order = order
-            .into_iter()
-            .map(|x| if x != target { x } else { image.boot_option_id })
-            .collect();
-    } else {
-        order.push(image.boot_option_id);
-    };
-    BootOptions::set_order(&order);
     BootOptions::set(image.boot_option_id, &image.boot_entry);
+
+    let mut order = BootOptions::order();
+    if let Some(target) = BootOptions::reboot_target() {
+        let mut replaced = false;
+        for x in &mut order {
+            if *x == target {
+                *x = image.boot_option_id;
+                replaced = true;
+            }
+        }
+        if !replaced && !order.contains(&image.boot_option_id) {
+            order.push(image.boot_option_id);
+        }
+    } else if !order.contains(&image.boot_option_id) {
+        order.push(image.boot_option_id);
+    }
+    let mut deduped = Vec::with_capacity(order.len());
+    for id in order {
+        if !deduped.contains(&id) {
+            deduped.push(id);
+        }
+    }
+    BootOptions::set_order(&deduped);
 
     Ok(())
 }

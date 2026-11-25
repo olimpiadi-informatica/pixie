@@ -7,7 +7,7 @@ use log::info;
 use lz4_flex::compress;
 use pixie_shared::rpc::HAS_CHUNKS_BATCH_SIZE;
 use pixie_shared::util::BytesFmt;
-use pixie_shared::{Chunk, Image, MAX_CHUNK_SIZE, Offset, UdpRequest};
+use pixie_shared::{Chunk, ChunkHash, Image, MAX_CHUNK_SIZE, Offset, UdpRequest};
 
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
@@ -17,7 +17,7 @@ use crate::os::{disk, memory, ui};
 use crate::rpc::RpcClient;
 use crate::{MIN_MEMORY, parse_disk};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkInfo {
     pub start: Offset,
     pub size: usize,
@@ -25,9 +25,8 @@ pub struct ChunkInfo {
 
 struct PushingChunks {
     total: usize,
-    hashed: usize,
-    checked: usize,
-    pushed: usize,
+    read_chunks: usize,
+    pushed_chunks: usize,
     tsize: usize,
     tcsize: usize,
 }
@@ -57,15 +56,14 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             }
             State::PushingChunks(PushingChunks {
                 total,
-                hashed,
-                checked,
-                pushed,
+                read_chunks,
+                pushed_chunks,
                 tsize,
                 tcsize,
             }) => {
                 writeln!(
                     draw_area,
-                    "Pushed {pushed} / {checked} / {hashed} / {total} chunks"
+                    "Pushed {pushed_chunks} / {read_chunks} / {total} chunks"
                 )
                 .unwrap();
                 writeln!(draw_area, "total size {tsize}, compressed {tcsize}").unwrap();
@@ -75,10 +73,11 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     ui::update_content(draw);
 
-    let boid = BootOptions::reboot_target().expect("Could not find reboot target");
+    let boid =
+        BootOptions::reboot_target().ok_or_else(|| Error::msg("Could not find reboot target"))?;
     let bo_command = BootOptions::get(boid);
 
-    let mut disk = disk::Disk::largest();
+    let mut disk = disk::Disk::largest().await;
     let chunks = parse_disk::parse_disk(&mut disk).await?;
     info!(
         "Total size of chunks: {}",
@@ -95,7 +94,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     let free_mem = memory::stats().free;
     let channel_size =
-        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).max(32);
+        (free_mem.saturating_sub(MIN_MEMORY) as usize / (4 * MAX_CHUNK_SIZE)).clamp(32, 128);
     log::debug!(
         "Free memory: {}. Channel size: {channel_size}",
         BytesFmt(free_mem)
@@ -103,9 +102,8 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     stats.replace(State::PushingChunks(PushingChunks {
         total,
-        hashed: 0,
-        checked: 0,
-        pushed: 0,
+        read_chunks: 0,
+        pushed_chunks: 0,
         tsize: 0,
         tcsize: 0,
     }));
@@ -126,7 +124,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 size: chunk_info.size,
                 csize: cdata.len(),
             };
-            stats.borrow_mut().as_pushing_chunks_mut().hashed += 1;
+            stats.borrow_mut().as_pushing_chunks_mut().read_chunks += 1;
             ui::update_content(draw);
             tx.send((chunk, cdata)).await.expect("receiver dropped");
         }
@@ -135,8 +133,11 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     let task2 = async {
         let mut uploaded_chunks = Vec::new();
+        let mut batch = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
+        let mut uploaded_in_batch: Vec<ChunkHash> = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
+        let mut progress_buf = [0u8; 32];
         while let Some(first) = rx.recv().await {
-            let mut batch = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
+            batch.clear();
             batch.push(first);
             while batch.len() < HAS_CHUNKS_BATCH_SIZE {
                 let Ok(item) = rx.try_recv() else {
@@ -145,37 +146,33 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 batch.push(item);
             }
 
-            let hashes = batch.iter().map(|(c, _)| c.hash).collect();
+            let hashes: Vec<_> = batch.iter().map(|(c, _)| c.hash).collect();
             let present = rpc.has_chunks(hashes).await?;
-            {
-                let mut s = stats.borrow_mut();
-                s.as_pushing_chunks_mut().checked += batch.len();
-            }
-            ui::update_content(draw);
 
-            for ((chunk, cdata), has_chunk) in batch.into_iter().zip(present) {
-                if !has_chunk {
+            uploaded_in_batch.clear();
+            for ((chunk, cdata), has_chunk) in batch.drain(..).zip(present) {
+                if !has_chunk && !uploaded_in_batch.contains(&chunk.hash) {
                     rpc.upload_chunk(&cdata).await?;
+                    uploaded_in_batch.push(chunk.hash);
                 }
                 uploaded_chunks.push(chunk);
+
                 total_size += chunk.size;
                 total_csize += chunk.csize;
+
                 {
-                    let mut s = stats.borrow_mut();
-                    let pc = s.as_pushing_chunks_mut();
-                    pc.pushed += 1;
+                    let mut st = stats.borrow_mut();
+                    let pc = st.as_pushing_chunks_mut();
+                    pc.pushed_chunks += 1;
                     pc.tsize = total_size;
                     pc.tcsize = total_csize;
                 }
                 ui::update_content(draw);
-                udp.send_to(
-                    server_address,
-                    &postcard::to_allocvec(&UdpRequest::ActionProgress(
-                        uploaded_chunks.len(),
-                        total,
-                    ))?,
-                )
-                .await?;
+                let pkt = postcard::to_slice(
+                    &UdpRequest::ActionProgress(uploaded_chunks.len(), total),
+                    &mut progress_buf,
+                )?;
+                udp.send_to(server_address, pkt).await?;
             }
         }
         Ok::<_, Error>(uploaded_chunks)

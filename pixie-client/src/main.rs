@@ -1,46 +1,43 @@
-#![no_main]
-#![no_std]
+#![cfg_attr(target_os = "uefi", no_main)]
+#![cfg_attr(target_os = "uefi", no_std)]
 #![deny(unused_must_use)]
 
-#[macro_use]
 extern crate alloc;
 
 use alloc::boxed::Box;
 use core::net::{Ipv4Addr, SocketAddrV4};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::time::Duration;
 
 use futures::future::{self, Either};
 use pixie_shared::{ACTION_PORT, Action, PING_PORT, UdpRequest};
+#[cfg(target_os = "uefi")]
 use uefi::{Status, entry};
 
-use crate::flash::flash;
-use crate::os::error::{Error, Result};
-use crate::os::executor::Executor;
-use crate::os::net::{ETH_PACKET_SIZE, UdpSocket};
-use crate::os::ui::update_content;
-use crate::register::register;
-use crate::rpc::RpcClient;
-use crate::store::store;
+use pixie_client::flash::flash;
+use pixie_client::os::error::{Error, Result};
+use pixie_client::os::executor::Executor;
+use pixie_client::os::net::{ETH_PACKET_SIZE, UdpSocket};
+use pixie_client::os::ui::update_content;
+use pixie_client::register::register;
+use pixie_client::rpc::RpcClient;
+use pixie_client::store::store;
+use pixie_client::{os, power_control};
 
-mod flash;
-mod os;
-mod parse_disk;
-mod power_control;
-mod register;
-mod rpc;
-mod store;
+static PING_SPAWNED: AtomicBool = AtomicBool::new(false);
+static PING_SERVER_IP: AtomicU32 = AtomicU32::new(0);
 
-#[cfg(feature = "coverage")]
-mod export_cov;
-
-// Memory to keep free for non-chunk storage.
-const MIN_MEMORY: u64 = 32 << 20;
+#[cfg(target_os = "uefi")]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    pixie_client::os::panic::handle_panic(info)
+}
 
 async fn server_discover() -> Result<SocketAddrV4> {
     let socket = UdpSocket::bind(None).await?;
 
     let task1 = async {
-        let msg = postcard::to_allocvec(&UdpRequest::Discover).unwrap();
+        let msg = postcard::to_allocvec(&UdpRequest::Discover)?;
         #[allow(unreachable_code)]
         Ok::<_, Error>(loop {
             socket
@@ -52,9 +49,12 @@ async fn server_discover() -> Result<SocketAddrV4> {
 
     let task2 = async {
         let mut buf = [0; ETH_PACKET_SIZE];
-        let (data, server) = socket.recv_from(&mut buf).await;
-        assert_eq!(data.len(), 0);
-        Ok::<_, Error>(server)
+        loop {
+            let (data, server) = socket.recv_from(&mut buf).await;
+            if data.is_empty() && server.port() == ACTION_PORT {
+                break Ok::<_, Error>(server);
+            }
+        }
     };
 
     let x = future::try_select(Box::pin(task1), Box::pin(task2)).await;
@@ -70,7 +70,7 @@ async fn server_discover() -> Result<SocketAddrV4> {
 
 async fn shutdown() -> ! {
     #[cfg(feature = "coverage")]
-    export_cov::export().await;
+    pixie_client::export_cov::export().await;
 
     log::info!("Shutting down...");
     Executor::sleep(Duration::from_secs(1)).await;
@@ -83,16 +83,24 @@ async fn run() -> Result<()> {
 
     let mut last_was_wait = false;
 
-    Executor::spawn("ping", async move {
-        let udp_socket = UdpSocket::bind(None).await.unwrap();
-        loop {
-            udp_socket
-                .send_to(SocketAddrV4::new(*server.ip(), PING_PORT), b"pixie")
-                .await
-                .unwrap();
-            Executor::sleep(Duration::from_secs(10)).await;
-        }
-    });
+    PING_SERVER_IP.store(server.ip().to_bits(), Ordering::Relaxed);
+    if !PING_SPAWNED.swap(true, Ordering::Relaxed) {
+        Executor::spawn("ping", async {
+            let udp_socket = loop {
+                if let Ok(sock) = UdpSocket::bind(None).await {
+                    break sock;
+                }
+                Executor::sleep(Duration::from_secs(1)).await;
+            };
+            loop {
+                let ip = Ipv4Addr::from_bits(PING_SERVER_IP.load(Ordering::Relaxed));
+                let _ = udp_socket
+                    .send_to(SocketAddrV4::new(ip, PING_PORT), b"pixie")
+                    .await;
+                Executor::sleep(Duration::from_secs(10)).await;
+            }
+        });
+    }
 
     loop {
         update_content(|d| d.clear());
@@ -139,7 +147,13 @@ async fn run() -> Result<()> {
     }
 }
 
+#[cfg(target_os = "uefi")]
 #[entry]
 fn main() -> Status {
+    os::start(run)
+}
+
+#[cfg(not(target_os = "uefi"))]
+fn main() {
     os::start(run)
 }

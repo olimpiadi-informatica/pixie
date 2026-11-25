@@ -15,7 +15,7 @@ use std::{
 };
 use tokio::net::UdpSocket;
 
-pub const BOOTFILE_NAME: &str = "pixie-uefi.efi";
+pub const BOOTFILE_NAME: &str = "pixie-client.efi";
 const PXE_PORT: u16 = 4011;
 const DEFAULT_LEASE_SECS: u32 = 3600;
 
