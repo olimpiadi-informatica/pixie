@@ -3,7 +3,9 @@ use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::fmt::Write;
 use core::net::SocketAddrV4;
+use core::pin::pin;
 
+use futures::future::{Either, select};
 use log::info;
 use lz4_flex::compress;
 use pixie_shared::rpc::HAS_CHUNKS_BATCH_SIZE;
@@ -19,7 +21,8 @@ use crate::os::ui::DrawArea;
 use crate::os::{disk, memory, ui};
 use crate::rpc::RpcClient;
 use crate::{
-    MIN_MEMORY, build_contiguous_batches, hash_cooperative, is_all_zero, parse_disk, zero_hash,
+    MIN_MEMORY, PageAlignedBuf, build_contiguous_batches, hash_cooperative, is_all_zero,
+    parse_disk, zero_hash,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +94,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
 
     let udp = UdpSocket::bind(None).await?;
     let rpc = RpcClient::new(*server_address.ip()).await?;
+    let rpc_query = RpcClient::new(*server_address.ip()).await?;
 
     let total = chunks.len();
 
@@ -120,13 +124,14 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
     ui::update_content(draw);
 
     let batches = build_contiguous_batches(&chunks, READ_BATCH_BYTES, |c| (c.start, c.size));
-    let (free_tx, free_rx) = thingbuf::mpsc::channel::<Vec<u8>>(READ_QUEUE_DEPTH);
+    let (free_tx, free_rx) = thingbuf::mpsc::channel::<PageAlignedBuf>(READ_QUEUE_DEPTH);
     for _ in 0..READ_QUEUE_DEPTH {
         free_tx
-            .try_send(vec![0u8; READ_BATCH_BYTES])
+            .try_send(PageAlignedBuf::zeroed(READ_BATCH_BYTES))
             .expect("pre-seeding free read buffers");
     }
-    let (filled_tx, filled_rx) = thingbuf::mpsc::channel::<(usize, Vec<u8>)>(READ_QUEUE_DEPTH);
+    let (filled_tx, filled_rx) =
+        thingbuf::mpsc::channel::<(usize, PageAlignedBuf)>(READ_QUEUE_DEPTH);
 
     let (tx, rx) = thingbuf::mpsc::channel::<(Chunk, Option<Vec<u8>>)>(channel_size);
     let last_draw_us = Cell::new(Timer::micros());
@@ -145,9 +150,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             let Some(mut buf) = free_rx.recv().await else {
                 break;
             };
-            if b_len > buf.len() {
-                buf.resize(b_len, 0);
-            }
+            buf.ensure_len(b_len);
             disk.read(b_off, &mut buf[..b_len]).await?;
             if filled_tx.send((b_idx, buf)).await.is_err() {
                 break;
@@ -211,7 +214,20 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
         let mut batch = Vec::with_capacity(HAS_CHUNKS_BATCH_SIZE);
         let mut progress_buf = [0u8; 32];
         let mut last_progress_us = Timer::micros();
-        while let Some(first) = rx.recv().await {
+        let mut pipeline = rpc.blob_pipeline();
+        loop {
+            let first = loop {
+                if pipeline.is_empty() {
+                    break rx.recv().await;
+                }
+                match select(pin!(rx.recv()), pin!(pipeline.step())).await {
+                    Either::Left((item, _)) => break item,
+                    Either::Right((res, _)) => res?,
+                }
+            };
+            let Some(first) = first else {
+                break;
+            };
             batch.clear();
             batch.push(first);
             while batch.len() < HAS_CHUNKS_BATCH_SIZE {
@@ -228,7 +244,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
             let present = if hashes.is_empty() {
                 Vec::new()
             } else {
-                rpc.has_chunks(hashes).await?
+                rpc_query.has_chunks(hashes).await?
             };
 
             let mut present_iter = present.into_iter();
@@ -236,7 +252,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 if let Some(cdata) = cdata {
                     let has_chunk = present_iter.next().unwrap_or(false);
                     if !has_chunk {
-                        rpc.upload_chunk(&cdata).await?;
+                        pipeline.push(cdata).await?;
                     }
                 }
                 uploaded_chunks.push(chunk);
@@ -263,6 +279,7 @@ pub async fn store(server_address: SocketAddrV4) -> Result<()> {
                 }
             }
         }
+        pipeline.finish().await?;
         let pkt = postcard::to_slice(
             &UdpRequest::ActionProgress(uploaded_chunks.len(), total),
             &mut progress_buf,

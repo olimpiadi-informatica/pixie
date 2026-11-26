@@ -229,4 +229,181 @@ impl RpcClient {
         let bytes = postcard::to_allocvec(image)?;
         self.upload_blob(UploadKind::Image, &bytes).await
     }
+
+    pub fn blob_pipeline(&self) -> BlobPipeline<'_> {
+        BlobPipeline::new(self)
+    }
+}
+
+pub const MAX_IN_FLIGHT_BLOBS: usize = 4;
+const TOTAL_PIPELINE_WINDOW: usize = 80;
+
+struct ActiveBlob {
+    req_id: u32,
+    data: Vec<u8>,
+    sender: SackSender,
+    last_activity_us: i64,
+    last_poke_us: i64,
+}
+
+/// Pipelined chunk uploader allowing up to [`MAX_IN_FLIGHT_BLOBS`] concurrent
+/// SACK blob transfers over a single `RpcClient` UDP socket.
+pub struct BlobPipeline<'a> {
+    rpc: &'a RpcClient,
+    active: Vec<ActiveBlob>,
+    tx_buf: [u8; MAX_RPC_PACKET_LEN],
+    rx_buf: [u8; ETH_PACKET_SIZE],
+}
+
+impl<'a> BlobPipeline<'a> {
+    pub fn new(rpc: &'a RpcClient) -> Self {
+        Self {
+            rpc,
+            active: Vec::with_capacity(MAX_IN_FLIGHT_BLOBS),
+            tx_buf: [0u8; MAX_RPC_PACKET_LEN],
+            rx_buf: [0u8; ETH_PACKET_SIZE],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.active.is_empty()
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.active.len() >= MAX_IN_FLIGHT_BLOBS
+    }
+
+    fn total_in_flight_blocks(&self) -> usize {
+        self.active.iter().map(|b| b.sender.in_flight_count()).sum()
+    }
+
+    async fn pump_sends(&mut self) -> Result<()> {
+        let mut total_in_flight = self.total_in_flight_blocks();
+        // Prioritize oldest active blobs first so earlier chunks complete promptly.
+        for blob in &mut self.active {
+            let total_len = blob.data.len() as u32;
+            while total_in_flight < TOTAL_PIPELINE_WINDOW {
+                let now = Timer::micros();
+                let Some(block_idx) = blob.sender.next_block_to_send(now) else {
+                    break;
+                };
+                let range = blob.sender.block_range(block_idx);
+                self.rpc
+                    .send_block(
+                        blob.req_id,
+                        UploadKind::Chunk,
+                        total_len,
+                        block_idx,
+                        &blob.data[range],
+                        &mut self.tx_buf,
+                    )
+                    .await?;
+                total_in_flight += 1;
+            }
+            if total_in_flight >= TOTAL_PIPELINE_WINDOW {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn check_timeouts(&mut self) -> Result<()> {
+        let now = Timer::micros();
+        for blob in &mut self.active {
+            if blob.sender.in_flight_count() == 0 && !blob.sender.is_complete() {
+                blob.last_activity_us = now;
+                continue;
+            }
+            if now - blob.last_activity_us > 30_000_000 {
+                return Err(Error::msg("RPC blob upload timed out"));
+            }
+            if !blob.sender.is_complete() {
+                blob.sender.on_timeout(now, 25_000);
+            } else if now - blob.last_poke_us >= 250_000 {
+                let range = blob.sender.block_range(0);
+                self.rpc
+                    .send_block(
+                        blob.req_id,
+                        UploadKind::Chunk,
+                        blob.data.len() as u32,
+                        0,
+                        &blob.data[range],
+                        &mut self.tx_buf,
+                    )
+                    .await?;
+                blob.last_poke_us = now;
+            }
+        }
+        Ok(())
+    }
+
+    /// Advance active transfers by sending queued blocks, polling for one
+    /// ACK/Done packet, and handling per-blob timeouts or completion pokes.
+    pub async fn step(&mut self) -> Result<()> {
+        if self.active.is_empty() {
+            return Ok(());
+        }
+        self.pump_sends().await?;
+
+        if let Some(pkt) = self
+            .rpc
+            .recv_timeout(&mut self.rx_buf, Duration::from_millis(25))
+            .await
+        {
+            let now = Timer::micros();
+            match postcard::from_bytes::<RpcPacket>(pkt) {
+                Ok(RpcPacket::BlobAck {
+                    req_id,
+                    ack_base,
+                    sack_mask,
+                }) => {
+                    if let Some(blob) = self.active.iter_mut().find(|b| b.req_id == req_id) {
+                        blob.last_activity_us = now;
+                        blob.sender.on_ack(ack_base, sack_mask, now);
+                    }
+                }
+                Ok(RpcPacket::BlobDone { req_id, err }) => {
+                    if let Some(idx) = self.active.iter().position(|b| b.req_id == req_id) {
+                        self.active.remove(idx);
+                        if let Some(msg) = err {
+                            return Err(Error::msg(msg));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        self.check_timeouts().await?;
+        self.pump_sends().await?;
+        Ok(())
+    }
+
+    /// Queue a chunk for pipelined upload, stepping in-flight transfers if all
+    /// pipeline slots are busy.
+    pub async fn push(&mut self, data: Vec<u8>) -> Result<()> {
+        if data.is_empty() || data.len() > MAX_RPC_BLOB_LEN {
+            return Err(Error::msg("invalid blob length"));
+        }
+        while self.is_full() {
+            self.step().await?;
+        }
+        let now = Timer::micros();
+        self.active.push(ActiveBlob {
+            req_id: alloc_req_id(),
+            sender: SackSender::new(data.len()),
+            data,
+            last_activity_us: now,
+            last_poke_us: now,
+        });
+        self.pump_sends().await
+    }
+
+    /// Wait for all currently active chunk uploads to finish.
+    pub async fn finish(&mut self) -> Result<()> {
+        while !self.active.is_empty() {
+            self.step().await?;
+        }
+        Ok(())
+    }
 }

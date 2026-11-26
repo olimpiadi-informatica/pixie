@@ -164,6 +164,13 @@ impl SackSender {
         None
     }
 
+    /// Number of blocks currently sent and unacknowledged.
+    pub fn in_flight_count(&self) -> usize {
+        (self.ack_base..self.next_unsent)
+            .filter(|&i| !self.acked[i] && self.sent_at_us[i] > 0)
+            .count()
+    }
+
     pub fn on_ack(&mut self, ack_base: u16, sack_mask: u64, now_us: i64) {
         let ab = (ack_base as usize).min(self.num_blocks);
         if ab > self.ack_base {
@@ -457,5 +464,30 @@ mod tests {
             assert!(rx.is_complete(), "rx incomplete for size {size}");
             assert_eq!(rx.take_data().unwrap(), src);
         }
+    }
+
+    #[test]
+    fn test_sack_in_flight_count() {
+        let len = RPC_BLOCK_SIZE * 5;
+        let mut tx = SackSender::new(len);
+        let mut rx = SackReceiver::new(len).unwrap();
+        let blk = [0xABu8; RPC_BLOCK_SIZE];
+
+        assert_eq!(tx.in_flight_count(), 0);
+        assert_eq!(tx.next_block_to_send(100), Some(0));
+        assert_eq!(tx.next_block_to_send(100), Some(1));
+        assert_eq!(tx.next_block_to_send(100), Some(2));
+        assert_eq!(tx.in_flight_count(), 3);
+
+        // Deliver blocks 0 and 2 out of order; block 1 remains in flight.
+        let _ = rx.on_data(0, &blk).unwrap();
+        let _ = rx.on_data(2, &blk).unwrap();
+        tx.on_ack(rx.ack_base(), rx.sack_mask(), 200);
+        assert_eq!(tx.in_flight_count(), 1);
+
+        // Deliver block 1; all sent blocks are now acknowledged.
+        let _ = rx.on_data(1, &blk).unwrap();
+        tx.on_ack(rx.ack_base(), rx.sack_mask(), 300);
+        assert_eq!(tx.in_flight_count(), 0);
     }
 }

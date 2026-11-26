@@ -19,7 +19,6 @@ use pixie_shared::{
     CHUNK_PACKET_PREFIX_LEN, CHUNKS_PORT, ChunkHash, Image, MAX_CHUNK_SIZE, UdpRequest,
 };
 
-use crate::MIN_MEMORY;
 use crate::os::boot_options::BootOptions;
 use crate::os::error::{Error, Result};
 use crate::os::executor::Executor;
@@ -29,6 +28,7 @@ use crate::os::timer::Timer;
 use crate::os::ui::{DrawArea, update_content};
 use crate::os::{disk, memory};
 use crate::rpc::RpcClient;
+use crate::{MIN_MEMORY, PageAlignedBuf};
 use crate::{build_contiguous_batches, hash_cooperative, is_all_zero, zero_hash};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -502,14 +502,14 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
     let state = RefCell::new(initial_state);
     let batches = build_contiguous_batches(&occurrences, SCAN_BATCH_BYTES, |&(o, _, s)| (o, s));
 
-    let (scan_free_tx, scan_free_rx) = thingbuf::mpsc::channel::<Vec<u8>>(SCAN_QUEUE_DEPTH);
+    let (scan_free_tx, scan_free_rx) = thingbuf::mpsc::channel::<PageAlignedBuf>(SCAN_QUEUE_DEPTH);
     for _ in 0..SCAN_QUEUE_DEPTH {
         scan_free_tx
-            .try_send(vec![0u8; SCAN_BATCH_BYTES])
+            .try_send(PageAlignedBuf::zeroed(SCAN_BATCH_BYTES))
             .expect("pre-seeding scan read buffers");
     }
     let (scan_filled_tx, scan_filled_rx) =
-        thingbuf::mpsc::channel::<(usize, Vec<u8>)>(SCAN_QUEUE_DEPTH);
+        thingbuf::mpsc::channel::<(usize, PageAlignedBuf)>(SCAN_QUEUE_DEPTH);
     let (write_tx, write_rx) = thingbuf::mpsc::channel::<WriteJob>(channel_size);
     let write_tx_scan = write_tx.clone();
 
@@ -549,9 +549,7 @@ pub async fn flash(server_addr: SocketAddrV4) -> Result<()> {
             let Some(mut buf) = scan_free_rx.recv().await else {
                 break;
             };
-            if b_len > buf.len() {
-                buf.resize(b_len, 0);
-            }
+            buf.ensure_len(b_len);
             {
                 let mut disk = disk_lock.lock().await;
                 disk.read(b_off, &mut buf[..b_len]).await?;

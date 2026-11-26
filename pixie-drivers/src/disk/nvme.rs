@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::ptr;
 use core::sync::atomic::{Ordering, fence};
 
@@ -87,6 +88,58 @@ struct InFlightIo {
     cid: u16,
     buf_offset: usize,
     len: usize,
+    direct: bool,
+}
+
+const NVME_MAX_PRP_LIST_PAGES: usize = 1 + PAGE_SIZE / core::mem::size_of::<u64>();
+
+fn halt_controller<H: Hal>(hal: &H, bar0: u64, ready_timeout_us: i64) -> bool {
+    let csts = hal.mmio_read32(bar0 + NVME_REG_CSTS);
+    if csts == 0xFFFF_FFFF {
+        return true;
+    }
+    hal.mmio_write32(bar0 + NVME_REG_CC, 0);
+    let start = hal.micros();
+    let mut last = start;
+    let mut stalled = 0usize;
+    loop {
+        let c = hal.mmio_read32(bar0 + NVME_REG_CSTS);
+        if c == 0xFFFF_FFFF || (c & 0x01) == 0 {
+            return true;
+        }
+        let now = hal.micros();
+        if now.saturating_sub(start) >= ready_timeout_us {
+            return false;
+        }
+        if now == last {
+            stalled += 1;
+            if stalled >= STATIC_CLOCK_SPIN_CAP {
+                return false;
+            }
+        } else {
+            last = now;
+            stalled = 0;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+struct DirectDmaGuard<'a, H: Hal> {
+    hal: &'a H,
+    bar0: u64,
+    ready_timeout_us: i64,
+    poisoned: &'a Cell<bool>,
+    active_direct: usize,
+}
+
+impl<H: Hal> Drop for DirectDmaGuard<'_, H> {
+    fn drop(&mut self) {
+        if self.active_direct > 0 {
+            self.poisoned.set(true);
+            halt_controller(self.hal, self.bar0, self.ready_timeout_us);
+            fence(Ordering::SeqCst);
+        }
+    }
 }
 
 enum IoBuf<'a> {
@@ -122,7 +175,7 @@ pub struct NvmeDisk<H: Hal> {
     max_transfer_bytes: usize,
     doorbell_stride: u64,
     ready_timeout_us: i64,
-    poisoned: bool,
+    poisoned: Cell<bool>,
 }
 
 enum SubmitErr {
@@ -167,7 +220,7 @@ impl<H: Hal> NvmeDisk<H> {
             max_transfer_bytes: PAGE_SIZE,
             doorbell_stride: 4,
             ready_timeout_us: COMMAND_TIMEOUT_MICROS,
-            poisoned: false,
+            poisoned: Cell::new(false),
         };
         disk.initialize().await?;
         Ok(disk)
@@ -420,25 +473,33 @@ impl<H: Hal> NvmeDisk<H> {
         cid
     }
 
-    fn prepare_slot_prp(slot: &NvmeIoSlot, transfer_bytes: usize) -> (u64, u64) {
+    fn prepare_prp_for_phys(
+        data_phys: u64,
+        prp_list: &DmaBuffer,
+        transfer_bytes: usize,
+    ) -> (u64, u64) {
         let num_pages = transfer_bytes.div_ceil(PAGE_SIZE).max(1);
-        let prp1 = slot.data.phys;
+        let prp1 = data_phys;
         let prp2 = if num_pages == 1 {
             0
         } else if num_pages == 2 {
-            slot.data.phys + PAGE_SIZE as u64
+            data_phys + PAGE_SIZE as u64
         } else {
-            let prp_entries = slot.prp_list.virt as *mut u64;
+            let prp_entries = prp_list.virt as *mut u64;
             for i in 0..(num_pages - 1) {
-                let page_phys = slot.data.phys + ((i + 1) * PAGE_SIZE) as u64;
+                let page_phys = data_phys + ((i + 1) * PAGE_SIZE) as u64;
                 unsafe {
                     ptr::write_volatile(prp_entries.add(i), page_phys);
                 }
             }
             fence(Ordering::SeqCst);
-            slot.prp_list.phys
+            prp_list.phys
         };
         (prp1, prp2)
+    }
+
+    fn prepare_slot_prp(slot: &NvmeIoSlot, transfer_bytes: usize) -> (u64, u64) {
+        Self::prepare_prp_for_phys(slot.data.phys, &slot.prp_list, transfer_bytes)
     }
 
     async fn submit_queue(
@@ -498,7 +559,7 @@ impl<H: Hal> NvmeDisk<H> {
     }
 
     async fn submit_admin(&mut self, command: NvmeCommand) -> Result<()> {
-        if self.poisoned {
+        if self.poisoned.get() {
             return Err(Error::msg("NVMe controller poisoned after command timeout"));
         }
         match Self::submit_queue(
@@ -514,7 +575,7 @@ impl<H: Hal> NvmeDisk<H> {
             Ok(()) => Ok(()),
             Err(SubmitErr::Status) => Err(Error::msg("NVMe command completed with error status")),
             Err(SubmitErr::Timeout) => {
-                self.poisoned = true;
+                self.poisoned.set(true);
                 self.write32(NVME_REG_CC, 0);
                 Err(Error::msg("NVMe command timed out"))
             }
@@ -522,7 +583,7 @@ impl<H: Hal> NvmeDisk<H> {
     }
 
     async fn submit_io(&mut self, command: NvmeCommand) -> Result<()> {
-        if self.poisoned {
+        if self.poisoned.get() {
             return Err(Error::msg("NVMe controller poisoned after command timeout"));
         }
         match Self::submit_queue(
@@ -538,7 +599,7 @@ impl<H: Hal> NvmeDisk<H> {
             Ok(()) => Ok(()),
             Err(SubmitErr::Status) => Err(Error::msg("NVMe command completed with error status")),
             Err(SubmitErr::Timeout) => {
-                self.poisoned = true;
+                self.poisoned.set(true);
                 self.write32(NVME_REG_CC, 0);
                 Err(Error::msg("NVMe command timed out"))
             }
@@ -568,7 +629,7 @@ impl<H: Hal> NvmeDisk<H> {
     }
 
     async fn pipelined_io(&mut self, offset: u64, mut io_buf: IoBuf<'_>) -> Result<()> {
-        if self.poisoned {
+        if self.poisoned.get() {
             return Err(Error::msg("NVMe controller poisoned after command timeout"));
         }
         let num_slots = self.io_slots.len().min(NVME_IO_SLOTS);
@@ -580,6 +641,26 @@ impl<H: Hal> NvmeDisk<H> {
             self.bar0 + NVME_REG_DOORBELL + (2 * self.io_q.qid as u64) * self.doorbell_stride;
         let cq_db =
             self.bar0 + NVME_REG_DOORBELL + (2 * self.io_q.qid as u64 + 1) * self.doorbell_stride;
+
+        let direct_base_phys = if total_len > 0 {
+            let base_ptr = match &io_buf {
+                IoBuf::Read(dst) => dst.as_ptr(),
+                IoBuf::Write(src) => src.as_ptr(),
+            };
+            self.hal
+                .virt_to_phys(base_ptr, total_len)
+                .filter(|&p| (p as usize).is_multiple_of(PAGE_SIZE))
+        } else {
+            None
+        };
+
+        let mut guard = DirectDmaGuard {
+            hal: &self.hal,
+            bar0: self.bar0,
+            ready_timeout_us: self.ready_timeout_us,
+            poisoned: &self.poisoned,
+            active_direct: 0,
+        };
 
         let mut in_flight = [None::<InFlightIo>; NVME_IO_SLOTS];
         let mut active = 0usize;
@@ -599,13 +680,41 @@ impl<H: Hal> NvmeDisk<H> {
                     let chunk_len = (total_len - next_off).min(max_transfer);
                     let blocks = (chunk_len / bs) as u32;
                     let lba = start_lba + (next_off as u64) / self.block_size;
-                    if let IoBuf::Write(src) = io_buf {
-                        unsafe {
-                            self.io_slots[slot_idx].data.as_mut_slice()[..chunk_len]
-                                .copy_from_slice(&src[next_off..next_off + chunk_len]);
+                    let chunk_pages = chunk_len.div_ceil(PAGE_SIZE).max(1);
+                    let direct_phys = if next_off.is_multiple_of(PAGE_SIZE)
+                        && chunk_pages <= NVME_MAX_PRP_LIST_PAGES
+                    {
+                        direct_base_phys.map(|base| base + next_off as u64)
+                    } else {
+                        None
+                    };
+
+                    let ((prp1, prp2), direct) = if let Some(phys) = direct_phys {
+                        if io_buf.is_write() {
+                            fence(Ordering::SeqCst);
                         }
-                    }
-                    let (prp1, prp2) = Self::prepare_slot_prp(&self.io_slots[slot_idx], chunk_len);
+                        guard.active_direct += 1;
+                        (
+                            Self::prepare_prp_for_phys(
+                                phys,
+                                &self.io_slots[slot_idx].prp_list,
+                                chunk_len,
+                            ),
+                            true,
+                        )
+                    } else {
+                        if let IoBuf::Write(src) = io_buf {
+                            unsafe {
+                                self.io_slots[slot_idx].data.as_mut_slice()[..chunk_len]
+                                    .copy_from_slice(&src[next_off..next_off + chunk_len]);
+                            }
+                        }
+                        (
+                            Self::prepare_slot_prp(&self.io_slots[slot_idx], chunk_len),
+                            false,
+                        )
+                    };
+
                     let cid = Self::enqueue_sqe(
                         &mut self.io_q,
                         self.queue_entries,
@@ -624,6 +733,7 @@ impl<H: Hal> NvmeDisk<H> {
                         cid,
                         buf_offset: next_off,
                         len: chunk_len,
+                        direct,
                     });
                     active += 1;
                     next_off += chunk_len;
@@ -633,14 +743,14 @@ impl<H: Hal> NvmeDisk<H> {
 
             if submitted_any {
                 fence(Ordering::SeqCst);
-                self.hal.mmio_write32(sq_db, self.io_q.sq_tail as u32);
+                guard.hal.mmio_write32(sq_db, self.io_q.sq_tail as u32);
             }
 
             if active == 0 {
                 break;
             }
 
-            let start = self.hal.micros();
+            let start = guard.hal.micros();
             let mut completed_tracked = false;
             for _ in 0..MAX_POLL_YIELDS {
                 let mut drained_any = false;
@@ -668,10 +778,15 @@ impl<H: Hal> NvmeDisk<H> {
                     {
                         in_flight[slot_idx] = None;
                         active -= 1;
+                        if entry.direct {
+                            guard.active_direct -= 1;
+                        }
                         completed_tracked = true;
                         if (status & 0xFFFE) != 0 {
                             first_status_err = true;
-                        } else if let IoBuf::Read(ref mut dst) = io_buf {
+                        } else if !entry.direct
+                            && let IoBuf::Read(ref mut dst) = io_buf
+                        {
                             unsafe {
                                 dst[entry.buf_offset..entry.buf_offset + entry.len]
                                     .copy_from_slice(
@@ -682,25 +797,26 @@ impl<H: Hal> NvmeDisk<H> {
                     }
                 }
                 if drained_any {
-                    self.hal.mmio_write32(cq_db, self.io_q.cq_head as u32);
+                    guard.hal.mmio_write32(cq_db, self.io_q.cq_head as u32);
                 }
                 if completed_tracked || active == 0 {
                     break;
                 }
-                if self.hal.micros().saturating_sub(start) > COMMAND_TIMEOUT_MICROS {
-                    self.poisoned = true;
-                    self.write32(NVME_REG_CC, 0);
+                if guard.hal.micros().saturating_sub(start) > COMMAND_TIMEOUT_MICROS {
+                    guard.poisoned.set(true);
+                    guard.hal.mmio_write32(self.bar0 + NVME_REG_CC, 0);
                     return Err(Error::msg("NVMe command timed out"));
                 }
-                self.hal.yield_now().await;
+                guard.hal.yield_now().await;
             }
             if !completed_tracked && active > 0 {
-                self.poisoned = true;
-                self.write32(NVME_REG_CC, 0);
+                guard.poisoned.set(true);
+                guard.hal.mmio_write32(self.bar0 + NVME_REG_CC, 0);
                 return Err(Error::msg("NVMe command timed out"));
             }
         }
 
+        guard.active_direct = 0;
         if first_status_err {
             return Err(Error::msg("NVMe command completed with error status"));
         }
@@ -746,12 +862,18 @@ impl<H: Hal> NvmeDisk<H> {
         self.max_transfer_bytes
     }
 
-    fn can_use_pipelined_io(&self, offset: u64, len: usize) -> bool {
+    fn can_use_pipelined_io(&self, offset: u64, len: usize, buf_ptr: *const u8) -> bool {
         let bs = self.block_size as usize;
-        len > self.max_transfer_bytes
-            && self.io_slots.len() > 1
-            && offset.is_multiple_of(bs as u64)
-            && len.is_multiple_of(bs)
+        if self.io_slots.is_empty() || !offset.is_multiple_of(bs as u64) || !len.is_multiple_of(bs)
+        {
+            return false;
+        }
+        (len > self.max_transfer_bytes && self.io_slots.len() > 1)
+            || (len >= PAGE_SIZE
+                && self
+                    .hal
+                    .virt_to_phys(buf_ptr, len)
+                    .is_some_and(|p| (p as usize).is_multiple_of(PAGE_SIZE)))
     }
 
     /// Asynchronously reads `buf.len()` bytes starting at byte `offset` on the disk.
@@ -763,7 +885,7 @@ impl<H: Hal> NvmeDisk<H> {
             "NVMe read offset overflow",
             "NVMe read out of bounds",
         )?;
-        if self.can_use_pipelined_io(offset, buf.len()) {
+        if self.can_use_pipelined_io(offset, buf.len(), buf.as_ptr()) {
             return self.pipelined_io(offset, IoBuf::Read(buf)).await;
         }
         read_bytes(
@@ -785,7 +907,7 @@ impl<H: Hal> NvmeDisk<H> {
             "NVMe write offset overflow",
             "NVMe write out of bounds",
         )?;
-        if self.can_use_pipelined_io(offset, buf.len()) {
+        if self.can_use_pipelined_io(offset, buf.len(), buf.as_ptr()) {
             return self.pipelined_io(offset, IoBuf::Write(buf)).await;
         }
         write_bytes(
@@ -849,35 +971,7 @@ impl<H: Hal> BlockDeviceIo for NvmeDisk<H> {
 impl<H: Hal> Drop for NvmeDisk<H> {
     fn drop(&mut self) {
         // Clear CC.EN so the controller stops DMA into SQ/CQ pages before freeing them.
-        let csts = self.read32(NVME_REG_CSTS);
-        let stopped = if csts == 0xFFFF_FFFF {
-            true
-        } else {
-            self.write32(NVME_REG_CC, 0);
-            let start = self.hal.micros();
-            let mut last = start;
-            let mut stalled = 0usize;
-            loop {
-                let c = self.read32(NVME_REG_CSTS);
-                if c == 0xFFFF_FFFF || (c & 0x01) == 0 {
-                    break true;
-                }
-                let now = self.hal.micros();
-                if now.saturating_sub(start) >= self.ready_timeout_us {
-                    break false;
-                }
-                if now == last {
-                    stalled += 1;
-                    if stalled >= STATIC_CLOCK_SPIN_CAP {
-                        break false;
-                    }
-                } else {
-                    last = now;
-                    stalled = 0;
-                }
-                core::hint::spin_loop();
-            }
-        };
+        let stopped = halt_controller(&self.hal, self.bar0, self.ready_timeout_us);
         fence(Ordering::SeqCst);
         if stopped {
             self.hal.free_dma(self.admin_q.sq);

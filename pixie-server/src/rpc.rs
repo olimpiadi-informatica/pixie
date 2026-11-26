@@ -11,7 +11,7 @@ use pixie_shared::{
     rpc::{MAX_RPC_PACKET_LEN, RpcPacket, SackReceiver, SmallRpc, UploadKind, truncate_err},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
@@ -20,21 +20,133 @@ use tokio::{net::UdpSocket, sync::mpsc, time};
 
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(5);
+const MAX_CONCURRENT_UPLOADS: usize = 8;
+const MAX_RECENT_DONE: usize = 32;
 
 struct UploadSession {
-    nonce: u64,
-    req_id: u32,
     kind: UploadKind,
     peer: SocketAddr,
     receiver: SackReceiver,
     last_active: Instant,
 }
 
+struct CompletedBlob {
+    kind: UploadKind,
+    peer: SocketAddr,
+    data: Vec<u8>,
+}
+
+enum BlobAction {
+    ReplayCached,
+    Ignore,
+    Reject(&'static str),
+    Processed {
+        ack: Option<(u16, u64)>,
+        completed: Option<CompletedBlob>,
+    },
+}
+
+struct BlobPacket<'a> {
+    nonce: u64,
+    req_id: u32,
+    kind: UploadKind,
+    total_len: u32,
+    block_idx: u16,
+    data: &'a [u8],
+}
+
 #[derive(Default)]
 struct PeerState {
-    upload: Option<UploadSession>,
-    finalizing: Option<(u64, u32)>,
-    last_done: Option<(u64, u32, Vec<u8>)>,
+    uploads: HashMap<(u64, u32), UploadSession>,
+    finalizing: HashSet<(u64, u32)>,
+    recent_done: VecDeque<(u64, u32, Vec<u8>)>,
+}
+
+impl PeerState {
+    fn find_done(&self, nonce: u64, req_id: u32) -> Option<&[u8]> {
+        self.recent_done
+            .iter()
+            .rev()
+            .find(|(dn, dr, _)| *dn == nonce && *dr == req_id)
+            .map(|(_, _, pkt)| pkt.as_slice())
+    }
+
+    fn record_done(&mut self, nonce: u64, req_id: u32, packet: Vec<u8>) {
+        if let Some(pos) = self
+            .recent_done
+            .iter()
+            .position(|(dn, dr, _)| *dn == nonce && *dr == req_id)
+        {
+            self.recent_done.remove(pos);
+        } else if self.recent_done.len() >= MAX_RECENT_DONE {
+            self.recent_done.pop_front();
+        }
+        self.recent_done.push_back((nonce, req_id, packet));
+    }
+
+    fn finish_done(&mut self, nonce: u64, req_id: u32, packet: Vec<u8>) {
+        self.finalizing.remove(&(nonce, req_id));
+        self.record_done(nonce, req_id, packet);
+    }
+
+    fn cleanup_idle(&mut self, now: Instant) {
+        self.uploads
+            .retain(|_, ul| now.saturating_duration_since(ul.last_active) <= SESSION_IDLE_TIMEOUT);
+    }
+
+    fn on_blob_data(
+        &mut self,
+        pkt: BlobPacket<'_>,
+        peer_addr: SocketAddr,
+        now: Instant,
+    ) -> Result<BlobAction, &'static str> {
+        let key = (pkt.nonce, pkt.req_id);
+        if self.find_done(pkt.nonce, pkt.req_id).is_some() {
+            return Ok(BlobAction::ReplayCached);
+        }
+        if self.finalizing.contains(&key) {
+            return Ok(BlobAction::Ignore);
+        }
+
+        if !self.uploads.contains_key(&key) {
+            if self.uploads.len() >= MAX_CONCURRENT_UPLOADS {
+                return Ok(BlobAction::Ignore);
+            }
+            let receiver = match SackReceiver::new(pkt.total_len as usize) {
+                Ok(r) => r,
+                Err(msg) => return Ok(BlobAction::Reject(msg)),
+            };
+            self.uploads.insert(
+                key,
+                UploadSession {
+                    kind: pkt.kind,
+                    peer: peer_addr,
+                    receiver,
+                    last_active: now,
+                },
+            );
+        }
+
+        let ul = self.uploads.get_mut(&key).unwrap();
+        ul.peer = peer_addr;
+        ul.last_active = now;
+        let should_ack = ul.receiver.on_data(pkt.block_idx, pkt.data)?;
+        let ack = should_ack.then(|| (ul.receiver.ack_base(), ul.receiver.sack_mask()));
+        let completed = if ul.receiver.is_complete() {
+            let mut ul = self.uploads.remove(&key).unwrap();
+            let data = ul.receiver.take_data().unwrap();
+            self.finalizing.insert(key);
+            Some(CompletedBlob {
+                kind: ul.kind,
+                peer: ul.peer,
+                data,
+            })
+        } else {
+            None
+        };
+
+        Ok(BlobAction::Processed { ack, completed })
+    }
 }
 
 struct DoneMsg {
@@ -106,9 +218,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
 
                 match pkt {
                     RpcPacket::SmallReq { nonce, req_id, op } => {
-                        if let Some((dn, dr, cached)) = &peer.last_done
-                            && (*dn, *dr) == (nonce, req_id)
-                        {
+                        if let Some(cached) = peer.find_done(nonce, req_id) {
                             socket.send_to(cached, peer_addr).await?;
                             continue;
                         }
@@ -129,7 +239,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
                             }
                         };
                         socket.send_to(&resp, peer_addr).await?;
-                        peer.last_done = Some((nonce, req_id, resp));
+                        peer.record_done(nonce, req_id, resp);
                     }
                     RpcPacket::BlobData {
                         nonce,
@@ -139,71 +249,58 @@ pub async fn main(state: Arc<State>) -> Result<()> {
                         block_idx,
                         data,
                     } => {
-                        if let Some((dn, dr, cached)) = &peer.last_done
-                            && (*dn, *dr) == (nonce, req_id)
-                        {
-                            socket.send_to(cached, peer_addr).await?;
-                            continue;
-                        }
-                        if peer.finalizing == Some((nonce, req_id)) {
-                            continue;
-                        }
-
-                        if peer
-                            .upload
-                            .as_ref()
-                            .is_none_or(|ul| (ul.nonce, ul.req_id) != (nonce, req_id))
-                        {
-                            let receiver = match SackReceiver::new(total_len as usize) {
-                                Ok(r) => r,
-                                Err(msg) => {
-                                    log::warn!("Rejecting blob ({total_len} B) from {peer_addr}: {msg}");
-                                    let done = postcard::to_slice(
-                                        &RpcPacket::BlobDone { req_id, err: Some(msg) },
-                                        &mut tx_buf,
-                                    )?;
-                                    socket.send_to(done, peer_addr).await?;
-                                    continue;
-                                }
-                            };
-                            peer.upload = Some(UploadSession {
+                        match peer.on_blob_data(
+                            BlobPacket {
                                 nonce,
                                 req_id,
                                 kind,
-                                peer: peer_addr,
-                                receiver,
-                                last_active: now,
-                            });
-                        }
-
-                        let ul = peer.upload.as_mut().unwrap();
-                        ul.peer = peer_addr;
-                        ul.last_active = now;
-                        match ul.receiver.on_data(block_idx, data) {
-                            Ok(should_ack) => {
-                                if should_ack {
-                                    let ack = postcard::to_slice(
+                                total_len,
+                                block_idx,
+                                data,
+                            },
+                            peer_addr,
+                            now,
+                        ) {
+                            Ok(BlobAction::ReplayCached) => {
+                                if let Some(cached) = peer.find_done(nonce, req_id) {
+                                    socket.send_to(cached, peer_addr).await?;
+                                }
+                            }
+                            Ok(BlobAction::Ignore) => {}
+                            Ok(BlobAction::Reject(msg)) => {
+                                log::warn!("Rejecting blob ({total_len} B) from {peer_addr}: {msg}");
+                                let done = postcard::to_slice(
+                                    &RpcPacket::BlobDone {
+                                        req_id,
+                                        err: Some(msg),
+                                    },
+                                    &mut tx_buf,
+                                )?;
+                                socket.send_to(done, peer_addr).await?;
+                            }
+                            Ok(BlobAction::Processed { ack, completed }) => {
+                                if let Some((ack_base, sack_mask)) = ack {
+                                    let ack_pkt = postcard::to_slice(
                                         &RpcPacket::BlobAck {
                                             req_id,
-                                            ack_base: ul.receiver.ack_base(),
-                                            sack_mask: ul.receiver.sack_mask(),
+                                            ack_base,
+                                            sack_mask,
                                         },
                                         &mut tx_buf,
                                     )?;
-                                    socket.send_to(ack, peer_addr).await?;
+                                    socket.send_to(ack_pkt, peer_addr).await?;
                                 }
-                                if ul.receiver.is_complete() {
-                                    let mut ul = peer.upload.take().unwrap();
-                                    let blob = ul.receiver.take_data().unwrap();
-                                    peer.finalizing = Some((nonce, req_id));
+                                if let Some(blob) = completed {
                                     let state = state.clone();
                                     let done_tx = done_tx.clone();
                                     tokio::task::spawn_blocking(move || {
-                                        let res = match ul.kind {
-                                            UploadKind::Chunk => state.add_chunk(&blob),
+                                        let res = match blob.kind {
+                                            UploadKind::Chunk => state.add_chunk(&blob.data),
                                             UploadKind::Image => {
-                                                let image: Image = postcard::from_bytes(&blob)?;
-                                                let unit = state.get_unit(peer_mac).context("Unit not found")?;
+                                                let image: Image = postcard::from_bytes(&blob.data)?;
+                                                let unit = state
+                                                    .get_unit(peer_mac)
+                                                    .context("Unit not found")?;
                                                 state.add_image(unit.image, &image)
                                             }
                                         };
@@ -214,7 +311,10 @@ pub async fn main(state: Arc<State>) -> Result<()> {
                                             })?,
                                             Err(e) => {
                                                 let msg = e.to_string();
-                                                log::error!("Error finalizing blob from {}: {msg}", ul.peer);
+                                                log::error!(
+                                                    "Error finalizing blob from {}: {msg}",
+                                                    blob.peer
+                                                );
                                                 postcard::to_allocvec(&RpcPacket::BlobDone {
                                                     req_id,
                                                     err: Some(truncate_err(&msg)),
@@ -225,7 +325,7 @@ pub async fn main(state: Arc<State>) -> Result<()> {
                                             mac: peer_mac,
                                             nonce,
                                             req_id,
-                                            peer: ul.peer,
+                                            peer: blob.peer,
                                             packet,
                                         });
                                         Ok::<_, anyhow::Error>(())
@@ -244,22 +344,13 @@ pub async fn main(state: Arc<State>) -> Result<()> {
             }
             Some(msg) = done_rx.recv() => {
                 let peer = peers.entry(msg.mac).or_default();
-                if peer.finalizing == Some((msg.nonce, msg.req_id)) {
-                    peer.finalizing = None;
-                }
                 socket.send_to(&msg.packet, msg.peer).await?;
-                peer.last_done = Some((msg.nonce, msg.req_id, msg.packet));
+                peer.finish_done(msg.nonce, msg.req_id, msg.packet);
             }
             _ = cleanup_tick.tick() => {
                 let now = Instant::now();
                 for peer in peers.values_mut() {
-                    if peer
-                        .upload
-                        .as_ref()
-                        .is_some_and(|ul| now.saturating_duration_since(ul.last_active) > SESSION_IDLE_TIMEOUT)
-                    {
-                        peer.upload = None;
-                    }
+                    peer.cleanup_idle(now);
                 }
             }
             _ = state.cancel_token.cancelled() => break,
@@ -267,4 +358,193 @@ pub async fn main(state: Arc<State>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pixie_shared::rpc::RPC_BLOCK_SIZE;
+
+    fn test_addr() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 40000))
+    }
+
+    #[test]
+    fn concurrent_uploads_out_of_order_done_and_recent_replay() {
+        let mut peer = PeerState::default();
+        let addr = test_addr();
+        let now = Instant::now();
+        let len = (RPC_BLOCK_SIZE * 2) as u32;
+        let b0 = vec![0x11u8; RPC_BLOCK_SIZE];
+        let b1 = vec![0x22u8; RPC_BLOCK_SIZE];
+
+        let pkt = |nonce, req_id, block_idx, data| BlobPacket {
+            nonce,
+            req_id,
+            kind: UploadKind::Chunk,
+            total_len: len,
+            block_idx,
+            data,
+        };
+
+        // Start req 10 (block 0 only) and req 11 (block 0 + block 1, finishes first).
+        match peer.on_blob_data(pkt(1, 10, 0, &b0), addr, now).unwrap() {
+            BlobAction::Processed { ack, completed } => {
+                assert!(ack.is_none());
+                assert!(completed.is_none());
+            }
+            _ => panic!("expected Processed"),
+        }
+
+        peer.on_blob_data(pkt(1, 11, 0, &b0), addr, now).unwrap();
+        match peer.on_blob_data(pkt(1, 11, 1, &b1), addr, now).unwrap() {
+            BlobAction::Processed {
+                ack,
+                completed: Some(blob),
+            } => {
+                assert_eq!(ack, Some((2, 0)));
+                assert_eq!(blob.data, [b0.as_slice(), b1.as_slice()].concat());
+            }
+            _ => panic!("expected completed req 11"),
+        }
+        assert!(peer.uploads.contains_key(&(1, 10)));
+        assert!(!peer.uploads.contains_key(&(1, 11)));
+        assert!(peer.finalizing.contains(&(1, 11)));
+
+        // Complete req 10 second.
+        match peer.on_blob_data(pkt(1, 10, 1, &b1), addr, now).unwrap() {
+            BlobAction::Processed {
+                completed: Some(_), ..
+            } => {}
+            _ => panic!("expected completed req 10"),
+        }
+        assert!(peer.uploads.is_empty());
+
+        // Finalize req 11 and verify replay from recent_done.
+        peer.finish_done(1, 11, b"done11".to_vec());
+        assert!(!peer.finalizing.contains(&(1, 11)));
+        assert!(matches!(
+            peer.on_blob_data(pkt(1, 11, 0, &b0), addr, now).unwrap(),
+            BlobAction::ReplayCached
+        ));
+        assert_eq!(peer.find_done(1, 11), Some(b"done11".as_slice()));
+
+        // Verify FIFO eviction past MAX_RECENT_DONE.
+        for i in 0..MAX_RECENT_DONE {
+            peer.record_done(2, i as u32, vec![i as u8]);
+        }
+        assert_eq!(peer.recent_done.len(), MAX_RECENT_DONE);
+        assert!(peer.find_done(1, 11).is_none());
+        assert_eq!(peer.find_done(2, 0), Some([0u8].as_slice()));
+    }
+
+    #[test]
+    fn concurrent_upload_cap_and_idle_cleanup() {
+        let mut peer = PeerState::default();
+        let addr = test_addr();
+        let t0 = Instant::now();
+        let len = (RPC_BLOCK_SIZE * 2) as u32;
+        let blk = [0x33u8; RPC_BLOCK_SIZE];
+        let pkt = |req_id| BlobPacket {
+            nonce: 1,
+            req_id,
+            kind: UploadKind::Chunk,
+            total_len: len,
+            block_idx: 0,
+            data: &blk,
+        };
+
+        for req_id in 0..MAX_CONCURRENT_UPLOADS as u32 {
+            assert!(matches!(
+                peer.on_blob_data(pkt(req_id), addr, t0).unwrap(),
+                BlobAction::Processed {
+                    completed: None,
+                    ..
+                }
+            ));
+        }
+
+        // Beyond MAX_CONCURRENT_UPLOADS is ignored without failing existing uploads.
+        assert!(matches!(
+            peer.on_blob_data(pkt(99), addr, t0).unwrap(),
+            BlobAction::Ignore
+        ));
+        assert_eq!(peer.uploads.len(), MAX_CONCURRENT_UPLOADS);
+
+        // Refresh req 0 at t0 + 10s; clean up at t0 + 16s expires the rest.
+        let t1 = t0 + Duration::from_secs(10);
+        peer.on_blob_data(pkt(0), addr, t1).unwrap();
+        let t2 = t0 + SESSION_IDLE_TIMEOUT + Duration::from_secs(1);
+        peer.cleanup_idle(t2);
+        assert_eq!(peer.uploads.len(), 1);
+        assert!(peer.uploads.contains_key(&(1, 0)));
+
+        // A new upload is accepted again once a slot freed.
+        assert!(matches!(
+            peer.on_blob_data(pkt(99), addr, t2).unwrap(),
+            BlobAction::Processed { .. }
+        ));
+    }
+
+    #[test]
+    fn finalizing_ignores_duplicate_poke() {
+        let mut peer = PeerState::default();
+        let addr = test_addr();
+        let now = Instant::now();
+        let len = RPC_BLOCK_SIZE as u32;
+        let blk = [0x44u8; RPC_BLOCK_SIZE];
+        let pkt = BlobPacket {
+            nonce: 1,
+            req_id: 20,
+            kind: UploadKind::Chunk,
+            total_len: len,
+            block_idx: 0,
+            data: &blk,
+        };
+
+        assert!(matches!(
+            peer.on_blob_data(pkt, addr, now).unwrap(),
+            BlobAction::Processed {
+                completed: Some(_),
+                ..
+            }
+        ));
+        // Poke while finalizing is ignored (does not restart upload or spawn duplicate work).
+        assert!(matches!(
+            peer.on_blob_data(
+                BlobPacket {
+                    nonce: 1,
+                    req_id: 20,
+                    kind: UploadKind::Chunk,
+                    total_len: len,
+                    block_idx: 0,
+                    data: &blk,
+                },
+                addr,
+                now,
+            )
+            .unwrap(),
+            BlobAction::Ignore
+        ));
+
+        // Once finalized, poke replays cached BlobDone.
+        peer.finish_done(1, 20, b"done20".to_vec());
+        assert!(matches!(
+            peer.on_blob_data(
+                BlobPacket {
+                    nonce: 1,
+                    req_id: 20,
+                    kind: UploadKind::Chunk,
+                    total_len: len,
+                    block_idx: 0,
+                    data: &blk,
+                },
+                addr,
+                now,
+            )
+            .unwrap(),
+            BlobAction::ReplayCached
+        ));
+        assert_eq!(peer.find_done(1, 20), Some(b"done20".as_slice()));
+    }
 }

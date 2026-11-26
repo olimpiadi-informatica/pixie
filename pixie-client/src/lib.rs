@@ -18,6 +18,62 @@ pub mod store;
 // Memory to keep free for non-chunk storage.
 pub const MIN_MEMORY: u64 = 32 << 20;
 
+#[repr(C, align(4096))]
+#[derive(Clone, Copy)]
+struct AlignedPage([u8; 4096]);
+
+/// 4 KiB-aligned byte buffer backed by contiguous 4 KiB pages so NVMe
+/// transfers on identity-mapped targets can use direct PRPs without bouncing.
+#[derive(Clone, Default)]
+pub struct PageAlignedBuf {
+    pages: alloc::vec::Vec<AlignedPage>,
+    len: usize,
+}
+
+impl PageAlignedBuf {
+    pub fn zeroed(len: usize) -> Self {
+        let num_pages = len.div_ceil(4096);
+        Self {
+            pages: vec![AlignedPage([0; 4096]); num_pages],
+            len,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn ensure_len(&mut self, len: usize) {
+        let num_pages = len.div_ceil(4096);
+        if num_pages > self.pages.len() {
+            self.pages.resize(num_pages, AlignedPage([0; 4096]));
+        }
+        self.len = len;
+    }
+}
+
+impl core::ops::Deref for PageAlignedBuf {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        let ptr = self.pages.as_ptr() as *const u8;
+        // SAFETY: `pages` holds `len.div_ceil(4096)` initialized 4 KiB elements (`>= self.len`).
+        unsafe { core::slice::from_raw_parts(ptr, self.len) }
+    }
+}
+
+impl core::ops::DerefMut for PageAlignedBuf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        let ptr = self.pages.as_mut_ptr() as *mut u8;
+        // SAFETY: `pages` holds `len.div_ceil(4096)` initialized 4 KiB elements (`>= self.len`).
+        unsafe { core::slice::from_raw_parts_mut(ptr, self.len) }
+    }
+}
+
 /// Returns `true` iff every byte in `buf` is zero using SSE4.1 `por`+`ptest`.
 pub(crate) fn is_all_zero(buf: &[u8]) -> bool {
     // SAFETY: All supported build/runtime x86_64 targets in pixie have SSE4.1 enabled.
@@ -166,5 +222,29 @@ mod tests {
                 (32768, 4096, 5..6),
             ]
         );
+    }
+
+    #[test]
+    fn test_page_aligned_buf() {
+        let empty = PageAlignedBuf::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let mut buf = PageAlignedBuf::zeroed(8192);
+        assert_eq!(buf.len(), 8192);
+        assert!(!buf.is_empty());
+        assert_eq!((buf.as_ptr() as usize) % 4096, 0);
+        buf[0] = 0x5A;
+        buf[8191] = 0xA5;
+
+        buf.ensure_len(5000);
+        assert_eq!(buf.len(), 5000);
+        assert_eq!((buf.as_ptr() as usize) % 4096, 0);
+        assert_eq!(buf[0], 0x5A);
+
+        buf.ensure_len(16384);
+        assert_eq!(buf.len(), 16384);
+        assert_eq!((buf.as_ptr() as usize) % 4096, 0);
+        assert_eq!(buf[0], 0x5A);
     }
 }

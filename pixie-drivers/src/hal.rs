@@ -94,6 +94,12 @@ pub trait Hal {
         phys as *mut u8
     }
 
+    /// Returns the starting physical address if `[virt, virt + len)` is physically
+    /// contiguous and safe for direct device DMA without bouncing, or `None`.
+    fn virt_to_phys(&self, _virt: *const u8, _len: usize) -> Option<u64> {
+        None
+    }
+
     /// Ensures an MMIO physical region of `[phys, phys + size)` is mapped uncacheable.
     fn map_mmio(&self, _phys: u64, _size: usize) {}
 
@@ -161,6 +167,9 @@ macro_rules! impl_hal_deref {
                 }
                 fn phys_to_virt(&self, phys: u64) -> *mut u8 {
                     (**self).phys_to_virt(phys)
+                }
+                fn virt_to_phys(&self, virt: *const u8, len: usize) -> Option<u64> {
+                    (**self).virt_to_phys(virt, len)
                 }
                 fn map_mmio(&self, phys: u64, size: usize) {
                     (**self).map_mmio(phys, size)

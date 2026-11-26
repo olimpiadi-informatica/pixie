@@ -81,6 +81,7 @@ struct NvmeSimState {
     saw_two_page_direct_prp2: bool,
     saw_prp_list: bool,
     max_pages_per_cmd: usize,
+    io_prp1s: Vec<u64>,
     flush_count: usize,
     yield_count: usize,
     time_us: i64,
@@ -144,6 +145,7 @@ impl NvmeSimState {
             saw_two_page_direct_prp2: false,
             saw_prp_list: false,
             max_pages_per_cmd: 0,
+            io_prp1s: Vec::new(),
             flush_count: 0,
             yield_count: 0,
             time_us: 1_000,
@@ -479,6 +481,9 @@ impl NvmeSimState {
                 "I/O command sent to unexpected NSID"
             );
             let mut status = 0u16;
+            if opcode == 0x01 || opcode == 0x02 {
+                self.io_prp1s.push(prp1);
+            }
 
             match opcode {
                 // Flush (0x00)
@@ -1014,4 +1019,165 @@ fn test_nvme_pipelined_multislot_read_write_out_of_order_cqe() {
         assert_eq!(st.max_pages_per_cmd, 256);
         assert_eq!(st.max_in_flight_io_cmds, 4);
     }
+}
+
+#[derive(Clone)]
+struct DirectMockHal {
+    inner: MockNvmeHal,
+    direct_virt: usize,
+    direct_phys: u64,
+    direct_len: usize,
+}
+
+impl Hal for DirectMockHal {
+    fn mmio_read8(&self, addr: u64) -> u8 {
+        self.inner.mmio_read8(addr)
+    }
+    fn mmio_write8(&self, addr: u64, val: u8) {
+        self.inner.mmio_write8(addr, val);
+    }
+    fn mmio_read16(&self, addr: u64) -> u16 {
+        self.inner.mmio_read16(addr)
+    }
+    fn mmio_write16(&self, addr: u64, val: u16) {
+        self.inner.mmio_write16(addr, val);
+    }
+    fn mmio_read32(&self, addr: u64) -> u32 {
+        self.inner.mmio_read32(addr)
+    }
+    fn mmio_write32(&self, addr: u64, val: u32) {
+        self.inner.mmio_write32(addr, val);
+    }
+    fn mmio_read64(&self, addr: u64) -> u64 {
+        self.inner.mmio_read64(addr)
+    }
+    fn mmio_write64(&self, addr: u64, val: u64) {
+        self.inner.mmio_write64(addr, val);
+    }
+    fn io_read8(&self, port: u16) -> u8 {
+        self.inner.io_read8(port)
+    }
+    fn io_write8(&self, port: u16, val: u8) {
+        self.inner.io_write8(port, val);
+    }
+    fn io_read16(&self, port: u16) -> u16 {
+        self.inner.io_read16(port)
+    }
+    fn io_write16(&self, port: u16, val: u16) {
+        self.inner.io_write16(port, val);
+    }
+    fn io_read32(&self, port: u16) -> u32 {
+        self.inner.io_read32(port)
+    }
+    fn io_write32(&self, port: u16, val: u32) {
+        self.inner.io_write32(port, val);
+    }
+    fn alloc_dma(&self, pages: usize) -> Option<DmaBuffer> {
+        self.inner.alloc_dma(pages)
+    }
+    fn free_dma(&self, buf: DmaBuffer) {
+        self.inner.free_dma(buf);
+    }
+    fn phys_to_virt(&self, phys: u64) -> *mut u8 {
+        self.inner.phys_to_virt(phys)
+    }
+    fn virt_to_phys(&self, virt: *const u8, len: usize) -> Option<u64> {
+        let start = virt as usize;
+        let end = start.checked_add(len)?;
+        if len > 0 && start >= self.direct_virt && end <= self.direct_virt + self.direct_len {
+            Some(self.direct_phys + (start - self.direct_virt) as u64)
+        } else {
+            None
+        }
+    }
+    fn micros(&self) -> i64 {
+        self.inner.micros()
+    }
+    async fn yield_now(&self) {
+        self.inner.yield_now().await;
+    }
+    async fn sleep(&self, duration: Duration) {
+        self.inner.sleep(duration).await;
+    }
+}
+
+#[test]
+fn test_nvme_direct_prp_zero_copy_read_write() {
+    let base_hal = MockNvmeHal::new(16384, 0, Cns2Behavior::Normal, 1);
+    let direct_buf = base_hal
+        .alloc_dma(768)
+        .expect("3 MiB direct DMA region should allocate");
+    let direct_hal = DirectMockHal {
+        inner: base_hal.clone(),
+        direct_virt: direct_buf.virt as usize,
+        direct_phys: direct_buf.phys,
+        direct_len: direct_buf.size,
+    };
+
+    let mut disk = block_on(NvmeDisk::open(dummy_nvme_pci(), BAR0, direct_hal.clone()))
+        .expect("NvmeDisk::open should succeed");
+    assert_eq!(disk.max_transfer_bytes(), 256 * 1024);
+
+    let len = direct_buf.size;
+    let pattern: Vec<u8> = (0..len)
+        .map(|i| ((i.wrapping_mul(31) ^ (i >> 8) ^ 0x55) & 0xFF) as u8)
+        .collect();
+    let direct_slice = unsafe { core::slice::from_raw_parts_mut(direct_buf.virt, len) };
+    direct_slice.copy_from_slice(&pattern);
+
+    // Multi-slot direct-PRP write.
+    base_hal.state.lock().unwrap().io_prp1s.clear();
+    block_on(disk.write(1024 * 1024, direct_slice)).expect("Direct PRP write should succeed");
+    {
+        let st = base_hal.state.lock().unwrap();
+        let expected_prp1s: Vec<u64> = (0..(len / (256 * 1024)))
+            .map(|i| direct_buf.phys + (i * 256 * 1024) as u64)
+            .collect();
+        assert_eq!(st.io_prp1s, expected_prp1s);
+    }
+
+    // Clear caller memory and verify direct-PRP read populates it without bouncing.
+    direct_slice.fill(0);
+    base_hal.state.lock().unwrap().io_prp1s.clear();
+    block_on(disk.read(1024 * 1024, direct_slice)).expect("Direct PRP read should succeed");
+    assert_eq!(direct_slice, pattern.as_slice());
+    {
+        let st = base_hal.state.lock().unwrap();
+        let expected_prp1s: Vec<u64> = (0..(len / (256 * 1024)))
+            .map(|i| direct_buf.phys + (i * 256 * 1024) as u64)
+            .collect();
+        assert_eq!(st.io_prp1s, expected_prp1s);
+    }
+
+    // Single-command aligned read (< max_transfer_bytes) also uses direct PRP.
+    direct_slice[..16 * 1024].fill(0);
+    base_hal.state.lock().unwrap().io_prp1s.clear();
+    block_on(disk.read(1024 * 1024 + 256 * 1024, &mut direct_slice[..16 * 1024]))
+        .expect("Single-command direct PRP read should succeed");
+    assert_eq!(
+        &direct_slice[..16 * 1024],
+        &pattern[256 * 1024..256 * 1024 + 16 * 1024]
+    );
+    assert_eq!(
+        base_hal.state.lock().unwrap().io_prp1s,
+        vec![direct_buf.phys]
+    );
+
+    // Non-direct heap buffer falls back to bounce io_slots and still matches.
+    let mut heap_buf = vec![0u8; 512 * 1024];
+    base_hal.state.lock().unwrap().io_prp1s.clear();
+    block_on(disk.read(1024 * 1024, &mut heap_buf)).expect("Bounce fallback read should succeed");
+    assert_eq!(heap_buf, pattern[..512 * 1024]);
+    {
+        let st = base_hal.state.lock().unwrap();
+        let direct_range = direct_buf.phys..(direct_buf.phys + direct_buf.size as u64);
+        assert!(
+            st.io_prp1s.iter().all(|p| !direct_range.contains(p)),
+            "Expected bounce PRPs outside direct region, got {:?}",
+            st.io_prp1s
+        );
+    }
+
+    drop(disk);
+    base_hal.free_dma(direct_buf);
 }

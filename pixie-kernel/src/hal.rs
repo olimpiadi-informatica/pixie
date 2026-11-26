@@ -66,6 +66,16 @@ impl Hal for NativeHal {
         crate::memory::free_contiguous(buf.phys, pages);
     }
 
+    fn virt_to_phys(&self, virt: *const u8, len: usize) -> Option<u64> {
+        if virt.is_null() || len == 0 {
+            return None;
+        }
+        let start = virt as u64;
+        let end = start.checked_add(len as u64)?;
+        // UEFI maps all physical RAM 1:1 with virtual addresses, and allocators issue contiguous runs.
+        (end <= crate::memory::max_phys_addr()).then_some(start)
+    }
+
     fn map_mmio(&self, phys: u64, size: usize) {
         crate::arch::paging::map_mmio(phys, size);
     }
